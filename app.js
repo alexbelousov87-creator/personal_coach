@@ -960,10 +960,17 @@ function currentPlanStatusText(planState) {
 }
 
 function cleanPlanSummaryForStatus(summary) {
-  return String(summary || "")
+  let text = String(summary || "")
     .replace(/(?:\s*Локальная корректировка оставшихся дней выполнена по импортированным тренировкам\.)+/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const raceGoal = raceGoalSummaryText();
+  if (raceGoal) {
+    text = text.replace(/Цель:\s*Подготовка к старту\b/gi, raceGoal);
+  }
+
+  return text;
 }
 
 function updatePlanSourceButtons(source) {
@@ -2153,12 +2160,18 @@ function planGoalSummaryText(goal) {
   const text = String(goal || "").trim();
   if (!text) return "";
 
-  const race = getRaceSummary();
-  if (race && text.toLowerCase() === "подготовка к старту") {
-    return `Цель: подготовка к старту ${race.name}, ${race.distanceLabel}, ${race.dateLabel}`;
+  const raceGoal = raceGoalSummaryText();
+  if (raceGoal && text.toLowerCase() === "подготовка к старту") {
+    return raceGoal;
   }
 
   return `Цель: ${text}`;
+}
+
+function raceGoalSummaryText() {
+  const race = getRaceSummary();
+  if (!race) return "";
+  return `Цель: подготовка к старту ${race.name}, ${race.distanceLabel}, ${race.dateLabel}`;
 }
 
 function setAiStatus(message, level) {
