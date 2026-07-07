@@ -962,7 +962,6 @@ function currentPlanStatusText(planState) {
 function cleanPlanSummaryForStatus(summary) {
   return String(summary || "")
     .replace(/(?:\s*Локальная корректировка оставшихся дней выполнена по импортированным тренировкам\.)+/gi, "")
-    .replace(/\s*Цель:\s*Подготовка к старту\.?/gi, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -2143,17 +2142,11 @@ function planSummaryText(summary) {
   return [
     summary.mainDecision,
     summary.loadComment,
-    meaningfulSummaryGoal(summary.goal),
+    summary.goal ? `Цель: ${summary.goal}` : "",
     summary.week ? `Неделя: ${summary.week}` : "",
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-function meaningfulSummaryGoal(goal) {
-  const text = String(goal || "").trim();
-  if (!text || text.toLowerCase() === "подготовка к старту") return "";
-  return `Цель: ${text}`;
 }
 
 function setAiStatus(message, level) {
