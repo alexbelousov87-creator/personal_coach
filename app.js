@@ -2142,11 +2142,23 @@ function planSummaryText(summary) {
   return [
     summary.mainDecision,
     summary.loadComment,
-    summary.goal ? `Цель: ${summary.goal}` : "",
+    planGoalSummaryText(summary.goal),
     summary.week ? `Неделя: ${summary.week}` : "",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function planGoalSummaryText(goal) {
+  const text = String(goal || "").trim();
+  if (!text) return "";
+
+  const race = getRaceSummary();
+  if (race && text.toLowerCase() === "подготовка к старту") {
+    return `Цель: подготовка к старту ${race.name}, ${race.distanceLabel}, ${race.dateLabel}`;
+  }
+
+  return `Цель: ${text}`;
 }
 
 function setAiStatus(message, level) {
