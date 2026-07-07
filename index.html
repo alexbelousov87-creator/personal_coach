@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Training Coach</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">T</div>
+          <div>
+            <strong>Training Coach</strong>
+            <span>планировщик тренировок</span>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-item active" data-view="dashboard" type="button">Обзор</button>
+          <button class="nav-item" data-view="import" type="button">Импорт</button>
+          <button class="nav-item" data-view="manual" type="button">Добавить</button>
+          <button class="nav-item" data-view="plan" type="button">План</button>
+          <button class="nav-item" data-view="settings" type="button">Профиль</button>
+        </nav>
+
+        <div class="side-note">
+          <span>Хранилище</span>
+          <strong id="storageCount">0 тренировок</strong>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="view active" id="dashboard">
+          <div class="page-head">
+            <div>
+              <h1>Тренировочная картина</h1>
+              <p>Импортируйте выгрузки из спортивных сервисов, чтобы увидеть нагрузку и получить недельный план.</p>
+            </div>
+            <button class="primary-btn" id="openImport" type="button">Импортировать</button>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric">
+              <span>За 7 дней</span>
+              <strong id="weekLoad">0</strong>
+              <small id="weekDetails">нет тренировок</small>
+            </article>
+            <article class="metric">
+              <span>За 28 дней · 4 недели</span>
+              <strong id="monthLoad">0</strong>
+              <small id="monthDetails">нет тренировок</small>
+            </article>
+            <article class="metric">
+              <span>Последняя тренировка</span>
+              <strong id="lastWorkout">нет данных</strong>
+              <small id="lastWorkoutType">добавьте файл или запись</small>
+            </article>
+            <article class="metric readiness" id="readinessCard">
+              <span>Готовность</span>
+              <strong id="readiness">низкая</strong>
+              <small id="readinessReason">нужно больше данных</small>
+            </article>
+          </div>
+
+          <div class="content-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <h2>История</h2>
+                <button class="ghost-btn" id="clearData" type="button">Очистить</button>
+              </div>
+              <div class="workout-list" id="workoutList"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Нагрузка</h2>
+                <span id="loadLabel">нет данных</span>
+              </div>
+              <div class="bars" id="loadBars"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="import">
+          <div class="page-head compact">
+            <div>
+              <h1>Импорт файлов</h1>
+              <p>Поддерживаются TCX, GPX, CSV и JSON. Несколько файлов можно загрузить за один раз.</p>
+            </div>
+          </div>
+
+          <label class="dropzone" for="fileInput" id="dropzone">
+            <input id="fileInput" type="file" multiple accept=".tcx,.gpx,.csv,.json,.xml">
+            <span>Выберите файлы тренировок</span>
+            <strong>или перетащите их сюда</strong>
+          </label>
+
+          <div class="import-log" id="importLog"></div>
+        </section>
+
+        <section class="view" id="manual">
+          <div class="page-head compact">
+            <div>
+              <h1>Ручная тренировка</h1>
+              <p>Подходит для быстрых записей, если экспорт из спортивного сервиса пока не под рукой.</p>
+            </div>
+          </div>
+
+          <form class="form-grid panel" id="manualForm">
+            <label>
+              Дата
+              <input name="date" type="date" required>
+            </label>
+            <label>
+              Вид
+              <select name="sport">
+                <option>Бег</option>
+                <option>Велосипед</option>
+                <option>Силовая</option>
+                <option>Лыжи</option>
+                <option>Плавание</option>
+                <option>Другое</option>
+              </select>
+            </label>
+            <label>
+              Длительность, мин
+              <input name="duration" type="number" min="1" step="1" required>
+            </label>
+            <label>
+              Дистанция, км
+              <input name="distance" type="number" min="0" step="0.01">
+            </label>
+            <label>
+              Средний пульс
+              <input name="avgHr" type="number" min="0" step="1">
+            </label>
+            <label>
+              RPE 1-10
+              <input name="rpe" type="number" min="1" max="10" step="1">
+            </label>
+            <label class="wide">
+              Заметки
+              <textarea name="notes" rows="4" placeholder="Например: интервалы 5 x 1000, темпо 2 x 15, длительная, восстановительный бег"></textarea>
+            </label>
+            <button class="primary-btn wide" type="submit">Сохранить тренировку</button>
+          </form>
+        </section>
+
+        <section class="view" id="plan">
+          <div class="page-head">
+            <div>
+              <h1>План на неделю</h1>
+              <p>План всегда строится на календарную неделю с понедельника по воскресенье.</p>
+            </div>
+            <div class="button-row">
+              <button class="ghost-btn" id="generatePlan" type="button">Локальный</button>
+              <button class="ghost-btn" id="adjustPlan" type="button">Скорректировать</button>
+              <button class="ghost-btn" id="loadPlanJson" type="button">План из JSON</button>
+              <input id="planJsonInput" type="file" accept=".json,application/json" hidden>
+              <button class="primary-btn" id="generateAiPlan" type="button">План от ИИ</button>
+            </div>
+          </div>
+
+          <div class="week-switcher">
+            <button class="ghost-btn" id="previousWeek" type="button">←</button>
+            <strong id="planWeekLabel">Неделя</strong>
+            <button class="ghost-btn" id="nextWeek" type="button">→</button>
+            <button class="ghost-btn" id="currentWeek" type="button">Текущая</button>
+          </div>
+
+          <div class="ai-status" id="aiStatus">Сейчас показан локальный план.</div>
+
+          <section class="panel plan-analysis" id="planAnalysis"></section>
+
+          <div class="plan-grid" id="planGrid"></div>
+
+          <section class="panel prompt-panel">
+            <div class="panel-head">
+              <h2>Контекст для ИИ</h2>
+              <button class="ghost-btn" id="copyPrompt" type="button">Скопировать</button>
+            </div>
+            <textarea id="aiPrompt" readonly rows="9"></textarea>
+          </section>
+        </section>
+
+        <section class="view" id="settings">
+          <div class="page-head compact">
+            <div>
+              <h1>Профиль спортсмена</h1>
+              <p>Эти параметры помогают нормализовать нагрузку и рекомендации.</p>
+            </div>
+          </div>
+
+          <form class="form-grid panel" id="settingsForm">
+            <label>
+              Имя
+              <input name="name" type="text" placeholder="Алексей">
+            </label>
+            <label>
+              Цель
+              <select name="goal">
+                <option>Поддержание формы</option>
+                <option>База выносливости</option>
+                <option>Подготовка к старту</option>
+                <option>Снижение веса</option>
+              </select>
+            </label>
+            <label>
+              Целевая дистанция
+              <select name="targetDistance">
+                <option value="5k">5 км</option>
+                <option value="10k">10 км</option>
+                <option value="21k">21 км</option>
+                <option value="42k">42 км</option>
+              </select>
+            </label>
+            <label>
+              Этап подготовки
+              <select name="prepPhase">
+                <option value="auto">Авто по гонке</option>
+                <option value="base">Базовый период</option>
+                <option value="speed">Развитие скорости</option>
+                <option value="specific">Специфическая подготовка</option>
+                <option value="taper">Подводка</option>
+                <option value="recovery">Восстановительная неделя</option>
+              </select>
+            </label>
+            <label>
+              Максимальный пульс
+              <input name="maxHr" type="number" min="120" max="230" step="1" value="185">
+            </label>
+            <label>
+              Дата гонки
+              <input name="raceDate" type="date">
+            </label>
+            <label>
+              Дистанция гонки
+              <select name="raceDistance">
+                <option value="">Как целевая дистанция</option>
+                <option value="5k">5 км</option>
+                <option value="10k">10 км</option>
+                <option value="21k">21 км</option>
+                <option value="42k">42 км</option>
+              </select>
+            </label>
+            <label>
+              Название гонки
+              <input name="raceName" type="text" placeholder="Например: Екатеринбургский марафон">
+            </label>
+            <label>
+              Пульс покоя
+              <input name="restHr" type="number" min="30" max="100" step="1" value="50">
+            </label>
+            <label>
+              Тренировочных дней в неделю
+              <input name="daysPerWeek" type="number" min="2" max="7" step="1" value="4">
+            </label>
+            <label class="wide">
+              Ограничения и предпочтения
+              <textarea name="constraints" rows="4" placeholder="Например: без тяжелых тренировок по понедельникам"></textarea>
+            </label>
+            <button class="primary-btn wide" type="submit">Сохранить профиль</button>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

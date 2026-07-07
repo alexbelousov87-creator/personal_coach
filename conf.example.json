@@ -1,0 +1,27 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "storage": {
+    "databasePath": "data/training_coach.sqlite3"
+  },
+  "llm": {
+    "provider": "openrouter",
+    "apiKey": "",
+    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "model": "openai/gpt-oss-120b:free",
+    "fallbackModels": [
+      "qwen/qwen3-235b-a22b:free",
+      "deepseek/deepseek-chat-v3-0324:free",
+      "meta-llama/llama-3.3-70b-instruct:free"
+    ],
+    "chatCompletionsUrl": "https://openrouter.ai/api/v1/chat/completions",
+    "timeoutSeconds": 60,
+    "temperature": 0.2,
+    "maxTokens": 2500,
+    "jsonMode": true,
+    "siteUrl": "http://127.0.0.1:8765",
+    "appName": "Training Coach"
+  }
+}
