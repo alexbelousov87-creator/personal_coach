@@ -545,7 +545,7 @@ function adjustDisplayedPlan() {
   const adjustedDays = adjustRemainingPlanDays(current.days);
   const savedPlan = saveCurrentPlan({
     ...current,
-    summary: `${current.summary || "План"} Локальная корректировка оставшихся дней выполнена по импортированным тренировкам.`,
+    summary: current.summary || "План скорректирован по факту выполненных тренировок.",
     days: adjustedDays,
   });
   renderPlan(savedPlan?.days || adjustedDays);
@@ -948,14 +948,23 @@ function renderPlanWeekLabel() {
 }
 
 function currentPlanStatusText(planState) {
+  const summary = cleanPlanSummaryForStatus(planState.summary || "");
   if (planState.source === "ai") {
     const modelLabel = planState.modelUsed ? ` Модель: ${planState.modelUsed}.` : "";
-    return `Представлен ИИ-план.${modelLabel} ${planState.summary || ""}`.trim();
+    return `Представлен ИИ-план.${modelLabel} ${summary}`.trim();
   }
   if (planState.source === "json") {
-    return `Представлен план из JSON. ${planState.summary || ""}`.trim();
+    return `Представлен план из JSON. ${summary}`.trim();
   }
   return "Представлен локальный недельный план.";
+}
+
+function cleanPlanSummaryForStatus(summary) {
+  return String(summary || "")
+    .replace(/(?:\s*Локальная корректировка оставшихся дней выполнена по импортированным тренировкам\.)+/gi, "")
+    .replace(/\s*Цель:\s*Подготовка к старту\.?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function updatePlanSourceButtons(source) {
@@ -2134,11 +2143,17 @@ function planSummaryText(summary) {
   return [
     summary.mainDecision,
     summary.loadComment,
-    summary.goal ? `Цель: ${summary.goal}` : "",
+    meaningfulSummaryGoal(summary.goal),
     summary.week ? `Неделя: ${summary.week}` : "",
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function meaningfulSummaryGoal(goal) {
+  const text = String(goal || "").trim();
+  if (!text || text.toLowerCase() === "подготовка к старту") return "";
+  return `Цель: ${text}`;
 }
 
 function setAiStatus(message, level) {
