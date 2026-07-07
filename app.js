@@ -2981,13 +2981,7 @@ function classifyWorkout(workout) {
   const targetDistance = state.profile.targetDistance || "10k";
   const longMin = targetDistance === "42k" ? 100 : targetDistance === "21k" ? 85 : targetDistance === "10k" ? 70 : 60;
   const longKm = targetDistance === "21k" ? 16 : targetDistance === "10k" ? 12 : targetDistance === "5k" ? 10 : Infinity;
-  const hasStrongSampleIntervals =
-    intervalSignals?.hasIntervalPattern &&
-    intervalSignals.fastSegments >= 4 &&
-    intervalSignals.recoverySegments >= 3 &&
-    intervalSignals.speedRange >= 3 &&
-    intervalSignals.speedSurgeRatio >= 1.25 &&
-    duration <= Math.max(longMin, 100);
+  const hasStrongSampleIntervals = hasStrongSampleIntervalPattern(intervalSignals, duration, longMin);
 
   if (matchesAny(notes, ["интервал", "interval", "повтор", "repeat", "vo2", "400", "800", "1000", "фартлек", "fartlek"])) {
     return "interval";
@@ -3014,6 +3008,14 @@ function classifyWorkout(workout) {
   if (rpe >= 7 || hrRatio >= 0.83 || load >= duration * 2.2) return "tempo";
   if (duration <= 40 && (hrRatio && hrRatio < 0.72)) return "recovery";
   return "easy";
+}
+
+function hasStrongSampleIntervalPattern(intervalSignals, duration, longMin) {
+  if (!intervalSignals?.hasIntervalPattern) return false;
+  if (duration > Math.max(longMin, 100)) return false;
+  if (intervalSignals.fastSegments < 4 || intervalSignals.recoverySegments < 3) return false;
+  if (intervalSignals.speedRange < 2.8) return false;
+  return intervalSignals.speedSurgeRatio >= 1.18 || intervalSignals.hrRange >= 25;
 }
 
 function matchesAny(text, patterns) {
