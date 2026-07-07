@@ -967,7 +967,7 @@ function cleanPlanSummaryForStatus(summary) {
 
   const raceGoal = raceGoalSummaryText();
   if (raceGoal) {
-    text = text.replace(/Цель:\s*Подготовка к старту\b/gi, raceGoal);
+    text = text.replace(/Цель:\s*Подготовка к старту/gi, raceGoal);
   }
 
   return text;
