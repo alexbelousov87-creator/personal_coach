@@ -967,10 +967,22 @@ function cleanPlanSummaryForStatus(summary) {
 
   const raceGoal = raceGoalSummaryText();
   if (raceGoal) {
-    text = text.replace(/Цель:\s*Подготовка к старту/gi, raceGoal);
+    text = expandRaceGoalInSummary(text, raceGoal);
   }
 
   return text;
+}
+
+function expandRaceGoalInSummary(summary, raceGoal) {
+  const goalMatch = summary.match(/Цель:\s*Подготовка к старту/i);
+  if (!goalMatch) return summary;
+
+  const beforeGoal = summary.slice(0, goalMatch.index);
+  const afterGoalStart = goalMatch.index + goalMatch[0].length;
+  const afterGoal = summary.slice(afterGoalStart);
+  const weekMatch = afterGoal.match(/\s+Неделя:/i);
+  const afterGoalBlock = weekMatch ? afterGoal.slice(weekMatch.index) : "";
+  return `${beforeGoal}${raceGoal}${afterGoalBlock}`.replace(/\s+/g, " ").trim();
 }
 
 function updatePlanSourceButtons(source) {
