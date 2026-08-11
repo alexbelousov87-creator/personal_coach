@@ -68,6 +68,7 @@ function wireNavigation() {
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
   document.querySelector("#generateAiPlan").addEventListener("click", selectAiPlan);
   document.querySelector("#loadPlanJson").addEventListener("click", selectJsonPlan);
+  document.querySelector("#reloadPlanJson").addEventListener("click", reloadJsonPlan);
   document.querySelector("#previousWeek").addEventListener("click", () => changeSelectedWeek(-7));
   document.querySelector("#nextWeek").addEventListener("click", () => changeSelectedWeek(7));
   document.querySelector("#currentWeek").addEventListener("click", () => selectWeek(currentWeekKey()));
@@ -524,6 +525,10 @@ function selectJsonPlan() {
     showPlanState(savedPlan);
     return;
   }
+  planJsonInput.click();
+}
+
+function reloadJsonPlan() {
   planJsonInput.click();
 }
 
@@ -1424,6 +1429,7 @@ async function handlePlanJsonFile(event) {
     const rawPlan = parsePlanJsonText(await file.text());
     const plan = normalizeAiPlan(rawPlan.plan || rawPlan);
     const planWeekKey = weekKeyFromPlanDays(plan.days);
+    const replacingExistingPlan = Boolean(weekPlans(planWeekKey || selectedWeekKey()).sources?.json);
     if (planWeekKey && planWeekKey !== selectedWeekKey()) {
       state.selectedWeekStart = planWeekKey;
       saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
@@ -1437,7 +1443,8 @@ async function handlePlanJsonFile(event) {
     });
     renderPlan(savedPlan?.days || plan.days);
     updatePlanSourceButtons("json");
-    setAiStatus(`План из JSON загружен и сохранен: ${plan.summary}`, "ok");
+    const action = replacingExistingPlan ? "перезагружен и заменил сохраненный план" : "загружен и сохранен";
+    setAiStatus(`План из JSON ${action}: ${plan.summary}`, "ok");
   } catch (error) {
     setAiStatus(`Не удалось загрузить JSON плана: ${error.message}`, "error");
   } finally {
