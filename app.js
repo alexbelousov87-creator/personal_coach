@@ -66,9 +66,10 @@ function wireNavigation() {
   document.querySelector("#openImport").addEventListener("click", () => showView("import"));
   document.querySelector("#generatePlan").addEventListener("click", selectLocalPlan);
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
+  document.querySelector("#adjustLocalPlan").addEventListener("click", adjustPlanLocally);
+  document.querySelector("#adjustJsonPlan").addEventListener("click", reloadJsonPlan);
   document.querySelector("#generateAiPlan").addEventListener("click", selectAiPlan);
   document.querySelector("#loadPlanJson").addEventListener("click", selectJsonPlan);
-  document.querySelector("#reloadPlanJson").addEventListener("click", reloadJsonPlan);
   document.querySelector("#previousWeek").addEventListener("click", () => changeSelectedWeek(-7));
   document.querySelector("#nextWeek").addEventListener("click", () => changeSelectedWeek(7));
   document.querySelector("#currentWeek").addEventListener("click", () => selectWeek(currentWeekKey()));
@@ -148,6 +149,7 @@ function wireForms() {
 }
 
 function showView(viewId) {
+  hideAdjustChoice();
   views.forEach((view) => view.classList.toggle("active", view.id === viewId));
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.view === viewId));
 }
@@ -499,6 +501,7 @@ function renderBars() {
 }
 
 function generatePlan() {
+  hideAdjustChoice();
   const plan = buildPlan();
   const savedPlan = saveCurrentPlan({
     source: "local",
@@ -511,6 +514,7 @@ function generatePlan() {
 }
 
 function selectLocalPlan() {
+  hideAdjustChoice();
   const savedPlan = getCurrentWeekPlan("local");
   if (savedPlan) {
     showPlanState(savedPlan);
@@ -520,6 +524,7 @@ function selectLocalPlan() {
 }
 
 function selectJsonPlan() {
+  hideAdjustChoice();
   const savedPlan = getCurrentWeekPlan("json");
   if (savedPlan) {
     showPlanState(savedPlan);
@@ -529,10 +534,12 @@ function selectJsonPlan() {
 }
 
 function reloadJsonPlan() {
+  hideAdjustChoice();
   planJsonInput.click();
 }
 
 function selectAiPlan() {
+  hideAdjustChoice();
   const savedPlan = getCurrentWeekPlan("ai");
   if (savedPlan) {
     showPlanState(savedPlan);
@@ -542,6 +549,20 @@ function selectAiPlan() {
 }
 
 function adjustDisplayedPlan() {
+  const choice = document.querySelector("#adjustChoice");
+  const isOpen = choice.classList.toggle("open");
+  document.querySelector("#adjustPlan").classList.toggle("active", isOpen);
+}
+
+function hideAdjustChoice() {
+  const choice = document.querySelector("#adjustChoice");
+  if (!choice) return;
+  choice.classList.remove("open");
+  document.querySelector("#adjustPlan")?.classList.remove("active");
+}
+
+function adjustPlanLocally() {
+  hideAdjustChoice();
   const current = loadCurrentPlan() || {
     source: "local",
     summary: "Локальный план скорректирован по факту выполненных тренировок.",

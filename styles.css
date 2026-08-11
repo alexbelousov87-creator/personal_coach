@@ -198,6 +198,28 @@ p {
   gap: 10px;
 }
 
+.adjust-choice {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: -8px 0 18px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.adjust-choice.open {
+  display: flex;
+}
+
+.adjust-choice span {
+  margin-right: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .week-switcher {
   display: flex;
   align-items: center;
@@ -671,6 +693,11 @@ textarea {
 
   .page-head {
     display: grid;
+  }
+
+  .adjust-choice {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .metric-grid,

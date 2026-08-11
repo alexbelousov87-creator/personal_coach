@@ -159,10 +159,15 @@
               <button class="ghost-btn" id="generatePlan" type="button">Локальный</button>
               <button class="ghost-btn" id="adjustPlan" type="button">Скорректировать</button>
               <button class="ghost-btn" id="loadPlanJson" type="button">План из JSON</button>
-              <button class="ghost-btn" id="reloadPlanJson" type="button">Перезагрузить JSON</button>
               <input id="planJsonInput" type="file" accept=".json,application/json" hidden>
               <button class="primary-btn" id="generateAiPlan" type="button">План от ИИ</button>
             </div>
+          </div>
+
+          <div class="adjust-choice" id="adjustChoice">
+            <span>Способ корректировки</span>
+            <button class="ghost-btn" id="adjustLocalPlan" type="button">Локально</button>
+            <button class="ghost-btn" id="adjustJsonPlan" type="button">Из JSON</button>
           </div>
 
           <div class="week-switcher">
