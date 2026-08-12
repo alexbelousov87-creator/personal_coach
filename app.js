@@ -48,6 +48,7 @@ async function init() {
   showPlanLoading("Идет загрузка плана...");
   renderAll();
   await loadBackendState();
+  dedupeStoredWorkouts();
   setAiStatus("Идет проверка новых тренировок...", "");
   await syncWorkoutFolderChanges({ render: false });
   setAiStatus("Идет уточнение данных тренировок...", "");
@@ -56,6 +57,14 @@ async function init() {
   renderAll();
   restoreCurrentPlanOrGenerate();
   setInterval(() => syncWorkoutFolderChanges(), WORKOUT_SYNC_INTERVAL_MS);
+}
+
+function dedupeStoredWorkouts() {
+  const before = state.workouts.length;
+  state.workouts = dedupeWorkouts(state.workouts).sort((a, b) => new Date(b.date) - new Date(a.date));
+  if (state.workouts.length !== before) {
+    persistWorkouts();
+  }
 }
 
 function wireNavigation() {
@@ -325,24 +334,23 @@ function parseCsv(text, fileName) {
 }
 
 function addWorkouts(workouts, shouldPersist = true) {
-  const existingIds = new Set(state.workouts.map((workout) => workout.id));
   const validIncoming = workouts.filter((workout) => workout.date && workout.durationMin > 0);
-  const uniqueIncoming = [];
-  const seenIncomingIds = new Set();
+  const byIncomingKey = new Map();
 
   for (const workout of validIncoming) {
-    if (seenIncomingIds.has(workout.id)) continue;
-    seenIncomingIds.add(workout.id);
-    uniqueIncoming.push(workout);
+    const key = workoutDedupKey(workout);
+    const existing = byIncomingKey.get(key);
+    byIncomingKey.set(key, existing ? mergeDuplicateWorkouts(existing, workout) : workout);
   }
 
+  const uniqueIncoming = [...byIncomingKey.values()];
   const skipped = workouts.length - validIncoming.length;
   const duplicateRows = validIncoming.length - uniqueIncoming.length;
-  const duplicates = duplicateRows + uniqueIncoming.filter((workout) => existingIds.has(workout.id)).length;
-  const accepted = uniqueIncoming.filter((workout) => !existingIds.has(workout.id)).length;
+  const existingKeys = new Set(state.workouts.map(workoutDedupKey));
+  const duplicates = duplicateRows + uniqueIncoming.filter((workout) => existingKeys.has(workoutDedupKey(workout))).length;
+  const accepted = uniqueIncoming.filter((workout) => !existingKeys.has(workoutDedupKey(workout))).length;
   const merged = [...state.workouts, ...uniqueIncoming].filter((workout) => workout.date && workout.durationMin);
-  const byId = new Map(merged.map((workout) => [workout.id, workout]));
-  state.workouts = [...byId.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
+  state.workouts = dedupeWorkouts(merged).sort((a, b) => new Date(b.date) - new Date(a.date));
   if (shouldPersist) {
     persistWorkouts();
     autoAdjustActiveLocalPlanIfNeeded();
@@ -350,6 +358,61 @@ function addWorkouts(workouts, shouldPersist = true) {
     restoreCurrentPlanOrGenerate();
   }
   return { accepted, skipped, duplicates, parsed: workouts.length };
+}
+
+function dedupeWorkouts(workouts) {
+  const byKey = new Map();
+  for (const workout of workouts) {
+    const key = workoutDedupKey(workout);
+    const existing = byKey.get(key);
+    byKey.set(key, existing ? mergeDuplicateWorkouts(existing, workout) : workout);
+  }
+  return [...byKey.values()];
+}
+
+function workoutDedupKey(workout) {
+  const date = dateFromAny(workout?.date);
+  const dateKey = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 16) : "";
+  const sportKey = normalizedSportKey(workout?.sport);
+  const durationKey = Math.round(Number(workout?.durationMin) || 0);
+  const distanceKey = round(Number(workout?.distanceKm) || 0, 2).toFixed(2);
+  return `${dateKey}-${sportKey}-${durationKey}-${distanceKey}`;
+}
+
+function normalizedSportKey(sport) {
+  const value = String(sport || "").trim().toLowerCase();
+  if (value.includes("run") || value.includes("бег")) return "running";
+  return value || "unknown";
+}
+
+function mergeDuplicateWorkouts(a, b) {
+  const useB = workoutRichnessScore(b) > workoutRichnessScore(a);
+  const base = { ...(useB ? b : a) };
+  const other = useB ? a : b;
+  for (const key of ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "hrMax", "hrRest"]) {
+    if (!base[key] && other[key]) base[key] = other[key];
+  }
+  if (!base.paceSource && other.paceSource) {
+    base.paceMinPerKm = other.paceMinPerKm;
+    base.pace = other.pace;
+    base.paceSource = other.paceSource;
+  }
+  if ((!base.loadSource || base.loadSource === "duration") && other.loadSource && other.loadSource !== "duration") {
+    base.load = other.load;
+    base.loadSource = other.loadSource;
+  }
+  base.workoutType = classifyWorkout(base);
+  return base;
+}
+
+function workoutRichnessScore(workout) {
+  return [
+    String(workout?.source || "").toLowerCase().endsWith(".csv") ? 4 : 0,
+    workout?.intervalSignals ? 3 : 0,
+    workout?.lapSignals ? 2 : 0,
+    workout?.paceSource ? 1 : 0,
+    workout?.loadSource === "imported" ? 2 : 0,
+  ].reduce((sum, value) => sum + value, 0);
 }
 
 function normalizeWorkout(input) {
@@ -373,7 +436,7 @@ function normalizeWorkout(input) {
   const isoDate = date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
   const sport = String(input.sport || "Другое").trim();
   return {
-    id: `${isoDate.slice(0, 16)}-${sport}-${durationMin}-${distanceKm}`,
+    id: `${isoDate.slice(0, 16)}-${normalizedSportKey(sport)}-${durationMin}-${distanceKm}`,
     source: input.source || "manual",
     date: isoDate,
     sport,
@@ -1069,10 +1132,10 @@ function buildWeekExecutionSummary(plan) {
   const days = Array.isArray(plan) ? plan : [];
   const weekStart = selectedWeekStartDate();
   const range = weekRange(weekStart);
-  const actualWeekWorkouts = state.workouts.filter((workout) => {
+  const actualWeekWorkouts = dedupeWorkouts(state.workouts.filter((workout) => {
     const date = new Date(workout.date);
     return date >= range.start && date < range.end;
-  });
+  }));
   const evaluations = days.map(evaluatePlanDayExecution);
   const plannedTrainingDays = days.filter((day) => plannedTypeForDay(day) !== "rest").length || days.length;
   const completedDays = evaluations.filter((item) => item.completed).length;
@@ -2329,9 +2392,11 @@ async function loadBackendState() {
     const hasBackendPlansByWeek = payload.plansByWeek && typeof payload.plansByWeek === "object" && Object.keys(payload.plansByWeek).length > 0;
     const hasBackendActivePlanSource = typeof payload.activePlanSource === "string" && payload.activePlanSource;
     const hasBackendSelectedWeekStart = typeof payload.selectedWeekStart === "string" && payload.selectedWeekStart;
+    let backendStateChanged = false;
 
     if (hasBackendWorkouts) {
-      state.workouts = payload.workouts.sort((a, b) => new Date(b.date) - new Date(a.date));
+      state.workouts = dedupeWorkouts(payload.workouts).sort((a, b) => new Date(b.date) - new Date(a.date));
+      backendStateChanged = state.workouts.length !== payload.workouts.length;
       saveJson(STORAGE_KEY, state.workouts);
     }
     if (hasBackendProfile) {
@@ -2361,7 +2426,8 @@ async function loadBackendState() {
       (!hasBackendPlans && Object.keys(state.plans || {}).length) ||
       (!hasBackendPlansByWeek && Object.keys(state.plansByWeek || {}).length) ||
       (!hasBackendActivePlanSource && state.activePlanSource) ||
-      (!hasBackendSelectedWeekStart && state.selectedWeekStart)
+      (!hasBackendSelectedWeekStart && state.selectedWeekStart) ||
+      backendStateChanged
     ) {
       saveBackendState();
     }
@@ -3114,9 +3180,9 @@ function isPlanDayCompleted(day) {
 function actualWorkoutsForPlanDay(day) {
   const planDate = new Date(day.date);
   if (Number.isNaN(planDate.getTime())) return [];
-  return state.workouts
+  return dedupeWorkouts(state.workouts
     .filter((workout) => sameDay(new Date(workout.date), planDate))
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  ).sort((a, b) => new Date(a.date) - new Date(b.date));
 }
 
 function formatActualWorkout(workout) {
