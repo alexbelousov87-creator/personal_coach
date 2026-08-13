@@ -525,6 +525,24 @@ textarea {
   color: #52616a;
 }
 
+.plan-card.eval-matched {
+  border-color: rgba(36, 132, 90, 0.5);
+  background: #f1faf5;
+}
+
+.plan-card.eval-harder,
+.plan-card.eval-lighter {
+  border-color: rgba(190, 143, 39, 0.5);
+  background: #fff7df;
+}
+
+.plan-card.eval-overloaded,
+.plan-card.eval-mismatch,
+.plan-card.eval-missed {
+  border-color: rgba(185, 50, 50, 0.48);
+  background: #fff0f0;
+}
+
 .plan-card time,
 .plan-card span,
 .plan-card small {
@@ -610,12 +628,13 @@ textarea {
 }
 
 .plan-execution.lighter,
+.plan-execution.harder,
 .plan-execution.pending {
   border-color: rgba(190, 143, 39, 0.32);
   background: #fff8e8;
 }
 
-.plan-execution.harder,
+.plan-execution.overloaded,
 .plan-execution.mismatch,
 .plan-execution.missed {
   border-color: rgba(185, 50, 50, 0.28);

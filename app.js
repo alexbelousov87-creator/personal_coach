@@ -735,8 +735,9 @@ function renderPlan(plan) {
   planGrid.innerHTML = plan
     .map((day) => {
       const status = getPlanDayStatus(day);
+      const execution = evaluatePlanDayExecution(day);
       return `
-        <article class="plan-card ${status.className}">
+        <article class="plan-card ${status.className} eval-${execution.level}">
           <time>${day.dateLabel}</time>
           <div class="plan-status">${status.label}</div>
           <span>${day.focus}</span>
@@ -1158,7 +1159,7 @@ function buildWeekExecutionSummary(plan) {
   const elapsedCompletedDays = elapsedEvaluations.filter((item) => item.completed).length;
   const missedPastDays = elapsedEvaluations.filter((item) => item.level === "missed").length;
   const mismatchDays = elapsedEvaluations.filter((item) => item.level === "mismatch").length;
-  const heavyDays = elapsedEvaluations.filter((item) => item.level === "harder").length;
+  const heavyDays = elapsedEvaluations.filter((item) => ["harder", "overloaded"].includes(item.level)).length;
   const phase = getPreparationPhase(weekStart);
 
   let adjustmentLevel = "наблюдать";
@@ -1252,6 +1253,17 @@ function evaluatePlanDayExecution(day) {
       level: "mismatch",
       label: "другой тип",
       comment: `по плану ${plannedTypeLabel(plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`,
+    };
+  }
+
+  if (plannedLoad && actualLoad > plannedLoad * 1.7) {
+    return {
+      show: true,
+      completed: true,
+      keyCompleted,
+      level: "overloaded",
+      label: "сильно тяжелее плана",
+      comment: `факт ${actualLoad} TRIMP против ориентира около ${plannedLoad}`,
     };
   }
 
