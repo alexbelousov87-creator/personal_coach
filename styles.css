@@ -9,6 +9,7 @@
   --accent: #ce2d4f;
   --accent-2: #116a7b;
   --good: #24845a;
+  --easy: #2d6f9f;
   --warn: #aa6a16;
   --bad: #b93232;
   --shadow: 0 16px 40px rgba(23, 33, 38, 0.08);
@@ -530,8 +531,12 @@ textarea {
   background: #f1faf5;
 }
 
-.plan-card.eval-harder,
 .plan-card.eval-lighter {
+  border-color: rgba(45, 111, 159, 0.46);
+  background: #eef7fc;
+}
+
+.plan-card.eval-harder {
   border-color: rgba(190, 143, 39, 0.5);
   background: #fff7df;
 }
@@ -627,11 +632,27 @@ textarea {
   background: #f3faf6;
 }
 
-.plan-execution.lighter,
+.plan-execution.matched .section-label {
+  color: var(--good);
+}
+
 .plan-execution.harder,
 .plan-execution.pending {
   border-color: rgba(190, 143, 39, 0.32);
   background: #fff8e8;
+}
+
+.plan-execution.harder .section-label {
+  color: var(--warn);
+}
+
+.plan-execution.lighter {
+  border-color: rgba(45, 111, 159, 0.3);
+  background: #f0f8fd;
+}
+
+.plan-execution.lighter .section-label {
+  color: var(--easy);
 }
 
 .plan-execution.overloaded,
@@ -639,6 +660,12 @@ textarea {
 .plan-execution.missed {
   border-color: rgba(185, 50, 50, 0.28);
   background: #fff3f3;
+}
+
+.plan-execution.overloaded .section-label,
+.plan-execution.mismatch .section-label,
+.plan-execution.missed .section-label {
+  color: var(--bad);
 }
 
 .plan-execution p strong {
