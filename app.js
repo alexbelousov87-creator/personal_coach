@@ -42,6 +42,7 @@ const settingsForm = document.querySelector("#settingsForm");
 const planJsonInput = document.querySelector("#planJsonInput");
 const profilePhotoInput = document.querySelector("#profilePhotoInput");
 const profilePhotoPreview = document.querySelector("#profilePhotoPreview");
+const sidebarProfilePhoto = document.querySelector("#sidebarProfilePhoto");
 const selectProfilePhotoButton = document.querySelector("#selectProfilePhoto");
 const removeProfilePhotoButton = document.querySelector("#removeProfilePhoto");
 const polarStatus = document.querySelector("#polarStatus");
@@ -2503,6 +2504,16 @@ function renderProfilePhoto() {
     ? `<img src="${photo}" alt="Фото профиля">`
     : "<span>Фото</span>";
   removeProfilePhotoButton.disabled = !photo;
+  renderSidebarProfilePhoto();
+}
+
+function renderSidebarProfilePhoto() {
+  const photo = state.profile.photoDataUrl || "";
+  if (!sidebarProfilePhoto) return;
+  sidebarProfilePhoto.hidden = !photo;
+  sidebarProfilePhoto.innerHTML = photo
+    ? `<img src="${photo}" alt="Фото профиля">`
+    : "";
 }
 
 function persistWorkouts() {

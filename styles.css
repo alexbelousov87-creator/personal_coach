@@ -76,6 +76,23 @@ textarea {
   font-size: 13px;
 }
 
+.sidebar-profile-photo {
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  max-height: 280px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-profile-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .nav {
   display: grid;
   gap: 8px;
