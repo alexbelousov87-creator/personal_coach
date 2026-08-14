@@ -565,20 +565,20 @@ function renderBars() {
       label: day.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
       load: workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0),
       distanceKm: workouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0),
-      hours: workouts.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0) / 60,
+      minutes: workouts.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0),
     };
   });
   const maxLoad = Math.max(...daily.map((item) => item.load), 0);
   const maxDistance = Math.max(...daily.map((item) => item.distanceKm), 0);
-  const maxHours = Math.max(...daily.map((item) => item.hours), 0);
+  const maxMinutes = Math.max(...daily.map((item) => item.minutes), 0);
 
   document.querySelector("#loadLabel").textContent = state.workouts.length
-    ? `пики: ${maxLoad} TRIMP · ${round(maxDistance, 1)} км · ${round(maxHours, 1)} ч`
+    ? `пики: ${maxLoad} TRIMP · ${round(maxDistance, 1)} км · ${Math.round(maxMinutes)} мин`
     : "нет данных";
   bars.innerHTML = [
     renderMetricChart("Нагрузка", "TRIMP", daily, "load", maxLoad, (value) => Math.round(value), "load"),
     renderMetricChart("Километраж", "км", daily, "distanceKm", maxDistance, (value) => round(value, 1), "distance"),
-    renderMetricChart("Время", "часы", daily, "hours", maxHours, (value) => round(value, 1), "hours"),
+    renderMetricChart("Время", "мин", daily, "minutes", maxMinutes, (value) => Math.round(value), "hours"),
   ].join("");
 }
 
