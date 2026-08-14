@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib import request, error
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 import base64
+from datetime import date, datetime, time as datetime_time, timedelta
 import gzip
 import json
 import mimetypes
@@ -10,6 +11,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
 
 
@@ -49,6 +51,17 @@ DEFAULT_CONFIG = {
         "downloadTcx": True,
         "timeoutSeconds": 45,
     },
+    "notifications": {
+        "telegram": {
+            "enabled": False,
+            "botToken": "",
+            "botTokenEnv": "TELEGRAM_BOT_TOKEN",
+            "chatId": "",
+            "chatIdEnv": "TELEGRAM_CHAT_ID",
+            "dailyTime": "08:00",
+            "sendOnRestDays": True,
+        },
+    },
 }
 
 
@@ -74,6 +87,7 @@ SERVER_CONFIG = CONFIG["server"]
 STORAGE_CONFIG = CONFIG.get("storage", DEFAULT_CONFIG["storage"])
 LLM_CONFIG = CONFIG.get("llm", CONFIG.get("openai", DEFAULT_CONFIG["llm"]))
 POLAR_CONFIG = CONFIG.get("polar", DEFAULT_CONFIG["polar"])
+NOTIFICATIONS_CONFIG = CONFIG.get("notifications", DEFAULT_CONFIG["notifications"])
 HOST = SERVER_CONFIG["host"]
 PORT = int(SERVER_CONFIG["port"])
 DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite3")).resolve()
@@ -156,6 +170,9 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         if clean_path == "/api/polar/status":
             self.send_json(polar_status())
             return
+        if clean_path == "/api/notifications/status":
+            self.send_json(notification_status())
+            return
         if clean_path == "/api/polar/connect":
             try:
                 self.redirect(polar_authorization_url())
@@ -189,6 +206,16 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         if clean_path == "/api/polar/sync":
             try:
                 result = sync_polar_workouts()
+                self.send_json(result)
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/notifications/test":
+            try:
+                result = send_daily_assignment_notification(force=True)
                 self.send_json(result)
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
@@ -366,6 +393,173 @@ def save_state_value(key, value):
             """,
             (key, raw),
         )
+
+
+def notification_status():
+    telegram = telegram_notification_config()
+    plan_day = get_today_plan_day()
+    return {
+        "provider": "telegram",
+        "enabled": telegram["enabled"],
+        "configured": bool(telegram["bot_token"] and telegram["chat_id"]),
+        "dailyTime": telegram["daily_time"],
+        "lastSent": load_state_value("dailyNotificationLastSent", ""),
+        "hasTodayAssignment": bool(plan_day),
+    }
+
+
+def telegram_notification_config():
+    telegram = NOTIFICATIONS_CONFIG.get("telegram", {})
+    return {
+        "enabled": bool(telegram.get("enabled", False)),
+        "bot_token": telegram.get("botToken") or os.environ.get(telegram.get("botTokenEnv", "TELEGRAM_BOT_TOKEN"), ""),
+        "chat_id": telegram.get("chatId") or os.environ.get(telegram.get("chatIdEnv", "TELEGRAM_CHAT_ID"), ""),
+        "daily_time": telegram.get("dailyTime", "08:00"),
+        "send_on_rest_days": bool(telegram.get("sendOnRestDays", True)),
+    }
+
+
+def start_notification_worker():
+    telegram = telegram_notification_config()
+    if not telegram["enabled"]:
+        return
+    thread = threading.Thread(target=notification_worker_loop, name="daily-notifications", daemon=True)
+    thread.start()
+
+
+def notification_worker_loop():
+    while True:
+        try:
+            send_daily_assignment_notification()
+        except Exception as exc:
+            print(f"Daily notification error: {exc}")
+        time.sleep(60)
+
+
+def send_daily_assignment_notification(force=False):
+    telegram = telegram_notification_config()
+    if not force and not telegram["enabled"]:
+        return {"ok": False, "skipped": "notifications disabled"}
+    if not telegram["bot_token"] or not telegram["chat_id"]:
+        raise AppError("Telegram notifications are not configured. Add notifications.telegram.botToken and chatId to conf.json.", 500)
+    if not force and not notification_time_reached(telegram["daily_time"]):
+        return {"ok": False, "skipped": "not time yet"}
+
+    today_key = date.today().isoformat()
+    last_sent = load_state_value("dailyNotificationLastSent", "")
+    if not force and last_sent == today_key:
+        return {"ok": False, "skipped": "already sent today"}
+
+    plan_day = get_today_plan_day()
+    if not plan_day:
+        raise AppError("No saved plan assignment for today.", 404)
+    if not telegram["send_on_rest_days"] and is_rest_assignment(plan_day):
+        return {"ok": False, "skipped": "rest day"}
+
+    text = format_daily_assignment_message(plan_day)
+    send_telegram_message(telegram["bot_token"], telegram["chat_id"], text)
+    if not force:
+        save_state_value("dailyNotificationLastSent", today_key)
+    return {"ok": True, "message": text}
+
+
+def notification_time_reached(value):
+    try:
+        hour, minute = [int(part) for part in str(value).split(":", 1)]
+        target = datetime_time(hour=hour, minute=minute)
+    except (TypeError, ValueError):
+        target = datetime_time(hour=8, minute=0)
+    now = datetime.now().time()
+    return now >= target
+
+
+def get_today_plan_day():
+    today = date.today()
+    week_key = monday_of_week(today).isoformat()
+    plans_by_week = load_state_value("plansByWeek", {})
+    bucket = plans_by_week.get(week_key) if isinstance(plans_by_week, dict) else None
+    if not isinstance(bucket, dict):
+        return None
+
+    sources = bucket.get("sources") if isinstance(bucket.get("sources"), dict) else {}
+    active_source = bucket.get("activePlanSource") or load_state_value("activePlanSource", "")
+    ordered_sources = unique_items([active_source, "json", "ai", "local", *sources.keys()])
+    for source in ordered_sources:
+        plan = sources.get(source)
+        days = plan.get("days") if isinstance(plan, dict) else None
+        if not isinstance(days, list):
+            continue
+        for day in days:
+            if not isinstance(day, dict):
+                continue
+            day_date = parse_plan_day_date(day.get("date"))
+            if day_date == today:
+                return {**day, "source": source}
+    return None
+
+
+def monday_of_week(value):
+    return value - timedelta(days=value.weekday())
+
+
+def parse_plan_day_date(value):
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError:
+            return None
+
+
+def unique_items(items):
+    result = []
+    for item in items:
+        if item and item not in result:
+            result.append(item)
+    return result
+
+
+def is_rest_assignment(day):
+    text = " ".join(str(day.get(key, "")) for key in ["focus", "title", "details", "plannedWorkout"]).lower()
+    return "отдых" in text or "rest" in text
+
+
+def format_daily_assignment_message(day):
+    planned = day.get("plannedWorkout") or day.get("details") or "Задание не указано."
+    lines = [
+        "План на сегодня",
+        f"{day.get('dateLabel') or date.today().strftime('%d.%m.%Y')}",
+        "",
+        f"{day.get('focus') or 'Тренировка'}: {day.get('title') or 'Задание'}",
+        planned,
+    ]
+    if day.get("targetDistance"):
+        lines.append(f"Ориентир: {day.get('targetDistance')}")
+    if day.get("intensity"):
+        lines.append(f"Интенсивность: {day.get('intensity')}")
+    if day.get("load"):
+        lines.append(f"Нагрузка: {day.get('load')}")
+    if day.get("rationale"):
+        lines.extend(["", f"Почему так: {day.get('rationale')}"])
+    return "\n".join(lines)
+
+
+def send_telegram_message(bot_token, chat_id, text):
+    data = json.dumps(
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    http_json(url, method="POST", data=data, headers=headers)
 
 
 def polar_status():
@@ -891,6 +1085,7 @@ def load_api_key():
 
 def main():
     init_db()
+    start_notification_worker()
     print(f"Training Coach: http://{HOST}:{PORT}")
     print(f"Config: {CONF_FILE}")
     print(f"Database: {DB_PATH}")
