@@ -6,6 +6,7 @@ const ACTIVE_PLAN_SOURCE_KEY = "training-coach-active-plan-source";
 const SELECTED_WEEK_KEY = "training-coach-selected-week";
 const CURRENT_PLAN_KEY = "training-coach-current-plan";
 const WORKOUT_SYNC_INTERVAL_MS = 60000;
+const POLAR_SYNC_INTERVAL_MS = 10 * 60000;
 const API_BASE_URL = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
 
 const state = {
@@ -37,12 +38,17 @@ const importLog = document.querySelector("#importLog");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
 const planJsonInput = document.querySelector("#planJsonInput");
+const polarStatus = document.querySelector("#polarStatus");
+const polarHint = document.querySelector("#polarHint");
+const connectPolarButton = document.querySelector("#connectPolar");
+const syncPolarButton = document.querySelector("#syncPolar");
 
 init();
 
 async function init() {
   wireNavigation();
   wireImport();
+  wirePolar();
   wireForms();
   hydrateProfile();
   showPlanLoading("Идет загрузка плана...");
@@ -51,12 +57,15 @@ async function init() {
   dedupeStoredWorkouts();
   setAiStatus("Идет проверка новых тренировок...", "");
   await syncWorkoutFolderChanges({ render: false });
+  await refreshPolarStatus();
+  await syncPolarWorkouts({ automatic: true, render: false });
   setAiStatus("Идет уточнение данных тренировок...", "");
   await enrichKnownCsvWorkouts();
   hydrateProfile();
   renderAll();
   restoreCurrentPlanOrGenerate();
   setInterval(() => syncWorkoutFolderChanges(), WORKOUT_SYNC_INTERVAL_MS);
+  setInterval(() => syncPolarWorkouts({ automatic: true }), POLAR_SYNC_INTERVAL_MS);
 }
 
 function dedupeStoredWorkouts() {
@@ -107,6 +116,14 @@ function wireImport() {
   dropzone.addEventListener("drop", (event) => {
     handleFiles([...event.dataTransfer.files]);
   });
+}
+
+function wirePolar() {
+  if (!connectPolarButton || !syncPolarButton) return;
+  connectPolarButton.addEventListener("click", () => {
+    window.location.href = `${API_BASE_URL}/api/polar/connect`;
+  });
+  syncPolarButton.addEventListener("click", () => syncPolarWorkouts({ automatic: false }));
 }
 
 function wireForms() {
@@ -2459,6 +2476,89 @@ async function syncWorkoutFolderChanges(options = {}) {
     restoreCurrentPlanOrGenerate();
   }
   return accepted;
+}
+
+async function refreshPolarStatus() {
+  if (!polarStatus) return null;
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/polar/status`);
+    if (!response.ok) throw new Error("status failed");
+    const status = await response.json();
+    updatePolarUi(status);
+    return status;
+  } catch {
+    updatePolarUi({ configured: false, connected: false, unavailable: true });
+    return null;
+  }
+}
+
+function updatePolarUi(status) {
+  if (!polarStatus || !connectPolarButton || !syncPolarButton) return;
+  const configured = Boolean(status?.configured);
+  const connected = Boolean(status?.connected);
+  connectPolarButton.disabled = !configured;
+  syncPolarButton.disabled = !configured || !connected;
+
+  if (status?.unavailable) {
+    polarStatus.textContent = "Backend недоступен";
+    polarHint.textContent = "Запустите server.py, чтобы подключить Polar Flow.";
+    return;
+  }
+  if (!configured) {
+    polarStatus.textContent = "Не найдены client_id/client_secret";
+    polarHint.textContent = "Добавьте данные клиента Polar в cred_polar.txt или conf.json.";
+    return;
+  }
+  if (!connected) {
+    polarStatus.textContent = "Polar Flow не подключен";
+    polarHint.textContent = "Нажмите «Подключить Polar» и разрешите доступ к тренировкам.";
+    return;
+  }
+
+  const lastSync = status.lastSync ? new Date(Number(status.lastSync) * 1000).toLocaleString("ru-RU") : "еще не выполнялась";
+  polarStatus.textContent = `Polar Flow подключен · последняя синхронизация: ${lastSync}`;
+  polarHint.textContent = "Новые тренировки будут проверяться автоматически, пока приложение открыто.";
+}
+
+async function syncPolarWorkouts(options = {}) {
+  const status = await refreshPolarStatus();
+  if (!status?.connected) return 0;
+
+  if (!options.automatic && polarStatus) {
+    polarStatus.textContent = "Синхронизация Polar Flow...";
+  }
+  if (syncPolarButton) syncPolarButton.disabled = true;
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/polar/sync`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Polar sync failed");
+
+    const summary = addWorkouts(Array.isArray(payload.workouts) ? payload.workouts : [], false);
+    const folderAccepted = await autoImportKnownWorkoutFiles();
+    await enrichKnownCsvWorkouts();
+
+    if (summary.parsed || folderAccepted || payload.savedTcx?.length) {
+      persistWorkouts();
+      if (options.render !== false) {
+        autoAdjustActiveLocalPlanIfNeeded();
+        renderAll();
+        restoreCurrentPlanOrGenerate();
+      }
+    }
+
+    if (!options.automatic) {
+      showToast(`Polar Flow: получено ${payload.count || 0}, добавлено ${summary.accepted}, TCX ${payload.savedTcx?.length || 0}`);
+    }
+    return summary.accepted + folderAccepted;
+  } catch (error) {
+    if (!options.automatic) {
+      showToast(`Polar Flow: ${error.message}`);
+    }
+    return 0;
+  } finally {
+    await refreshPolarStatus();
+  }
 }
 
 async function autoImportKnownWorkoutFiles() {

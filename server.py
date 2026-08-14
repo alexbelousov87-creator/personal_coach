@@ -1,11 +1,16 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, error
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlencode, urlparse
+import base64
+import gzip
 import json
 import mimetypes
 import os
+import re
+import secrets
 import sqlite3
+import time
 
 
 ROOT = Path(__file__).resolve().parent
@@ -33,6 +38,18 @@ DEFAULT_CONFIG = {
         "siteUrl": "http://127.0.0.1:8765",
         "appName": "Training Coach",
     },
+    "polar": {
+        "enabled": True,
+        "credentialsFile": "cred_polar.txt",
+        "clientId": "",
+        "clientSecret": "",
+        "clientIdEnv": "POLAR_CLIENT_ID",
+        "clientSecretEnv": "POLAR_CLIENT_SECRET",
+        "redirectUri": "http://127.0.0.1:8765/api/polar/callback",
+        "scope": "accesslink.read_all",
+        "downloadTcx": True,
+        "timeoutSeconds": 45,
+    },
 }
 
 
@@ -57,6 +74,7 @@ CONFIG = load_config()
 SERVER_CONFIG = CONFIG["server"]
 STORAGE_CONFIG = CONFIG.get("storage", DEFAULT_CONFIG["storage"])
 LLM_CONFIG = CONFIG.get("llm", CONFIG.get("openai", DEFAULT_CONFIG["llm"]))
+POLAR_CONFIG = CONFIG.get("polar", DEFAULT_CONFIG["polar"])
 HOST = SERVER_CONFIG["host"]
 PORT = int(SERVER_CONFIG["port"])
 DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite3")).resolve()
@@ -136,6 +154,24 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         if clean_path == "/api/workout-files":
             self.send_json({"files": list_workout_files()})
             return
+        if clean_path == "/api/polar/status":
+            self.send_json(polar_status())
+            return
+        if clean_path == "/api/polar/connect":
+            try:
+                self.redirect(polar_authorization_url())
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            return
+        if clean_path == "/api/polar/callback":
+            try:
+                payload = handle_polar_callback(self.path)
+                self.send_html(polar_callback_html(payload))
+            except AppError as exc:
+                self.send_html(polar_callback_html({"ok": False, "error": str(exc)}), status=exc.status)
+            except Exception as exc:
+                self.send_html(polar_callback_html({"ok": False, "error": f"unexpected server error: {exc}"}), status=500)
+            return
         self.serve_static()
 
     def do_POST(self):
@@ -145,6 +181,16 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 payload = self.read_json()
                 save_state(payload)
                 self.send_json({"ok": True})
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/polar/sync":
+            try:
+                result = sync_polar_workouts()
+                self.send_json(result)
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
             except Exception as exc:
@@ -203,6 +249,22 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def send_html(self, html, status=200):
+        data = html.encode("utf-8")
+        self.send_response(status)
+        self.add_cors_headers()
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def redirect(self, location):
+        self.send_response(302)
+        self.add_cors_headers()
+        self.send_header("Location", location)
+        self.end_headers()
 
     def add_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -305,6 +367,362 @@ def save_state_value(key, value):
             """,
             (key, raw),
         )
+
+
+def polar_status():
+    credentials = load_polar_credentials()
+    token = load_state_value("polarToken", {})
+    return {
+        "enabled": bool(POLAR_CONFIG.get("enabled", True)),
+        "configured": bool(credentials.get("client_id") and credentials.get("client_secret")),
+        "connected": bool(token.get("access_token")),
+        "userId": token.get("x_user_id") or token.get("user_id") or "",
+        "lastSync": load_state_value("polarLastSync", ""),
+        "credentialsFile": str((ROOT / POLAR_CONFIG.get("credentialsFile", "cred_polar.txt")).name),
+        "downloadTcx": bool(POLAR_CONFIG.get("downloadTcx", True)),
+    }
+
+
+def load_polar_credentials():
+    credentials = {
+        "client_id": POLAR_CONFIG.get("clientId") or os.environ.get(POLAR_CONFIG.get("clientIdEnv", "POLAR_CLIENT_ID"), ""),
+        "client_secret": POLAR_CONFIG.get("clientSecret") or os.environ.get(POLAR_CONFIG.get("clientSecretEnv", "POLAR_CLIENT_SECRET"), ""),
+        "redirect_uri": POLAR_CONFIG.get("redirectUri", f"http://{HOST}:{PORT}/api/polar/callback"),
+        "scope": POLAR_CONFIG.get("scope", "accesslink.read_all"),
+    }
+    file_credentials = read_polar_credentials_file()
+    return {**credentials, **{key: value for key, value in file_credentials.items() if value}}
+
+
+def read_polar_credentials_file():
+    path = ROOT / POLAR_CONFIG.get("credentialsFile", "cred_polar.txt")
+    if not path.exists() or not path.is_file():
+        return {}
+
+    raw_lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
+    result = {}
+
+    aliases = {
+        "clientid": "client_id",
+        "client_id": "client_id",
+        "client id": "client_id",
+        "id": "client_id",
+        "clientsecret": "client_secret",
+        "client_secret": "client_secret",
+        "client secret": "client_secret",
+        "secret": "client_secret",
+        "redirecturi": "redirect_uri",
+        "redirect_uri": "redirect_uri",
+        "redirect uri": "redirect_uri",
+        "callback": "redirect_uri",
+        "scope": "scope",
+        "access_token": "access_token",
+        "access token": "access_token",
+        "token": "access_token",
+        "user_id": "user_id",
+        "user id": "user_id",
+    }
+
+    def normalized_key(value):
+        compact = re.sub(r"[^a-z0-9_ ]+", "", value.strip().lower())
+        compact_no_space = compact.replace(" ", "")
+        return aliases.get(compact) or aliases.get(compact_no_space)
+
+    index = 0
+    positional = []
+    while index < len(lines):
+        line = lines[index]
+        separator = "=" if "=" in line else ":" if ":" in line else ""
+        if separator:
+            key, value = [part.strip() for part in line.split(separator, 1)]
+            mapped = normalized_key(key)
+            if mapped and value:
+                result[mapped] = value
+            index += 1
+            continue
+
+        mapped = normalized_key(line)
+        if mapped and index + 1 < len(lines):
+            result[mapped] = lines[index + 1].strip()
+            index += 2
+            continue
+
+        if not mapped:
+            positional.append(line)
+        index += 1
+
+    if "client_id" not in result and positional:
+        result["client_id"] = positional[0]
+    if "client_secret" not in result and len(positional) > 1:
+        result["client_secret"] = positional[1]
+    if "redirect_uri" not in result and len(positional) > 2 and positional[2].startswith("http"):
+        result["redirect_uri"] = positional[2]
+    if "access_token" in result:
+        token = load_state_value("polarToken", {})
+        token["access_token"] = result["access_token"]
+        if result.get("user_id"):
+            token["x_user_id"] = result["user_id"]
+        save_state_value("polarToken", token)
+
+    return result
+
+
+def polar_authorization_url():
+    credentials = load_polar_credentials()
+    if not credentials.get("client_id") or not credentials.get("client_secret"):
+        raise AppError("Polar credentials not found. Add client_id/client_secret to cred_polar.txt or conf.json.", 500)
+
+    state = secrets.token_urlsafe(24)
+    save_state_value("polarOAuthState", {"state": state, "createdAt": int(time.time())})
+    params = {
+        "response_type": "code",
+        "client_id": credentials["client_id"],
+        "redirect_uri": credentials["redirect_uri"],
+        "scope": credentials.get("scope", "accesslink.read_all"),
+        "state": state,
+    }
+    return "https://flow.polar.com/oauth2/authorization?" + urlencode(params)
+
+
+def handle_polar_callback(path):
+    query = parse_qs(urlparse(path).query)
+    if query.get("error"):
+        raise AppError(f"Polar authorization error: {query['error'][0]}", 400)
+    code = first_query_value(query, "code")
+    state = first_query_value(query, "state")
+    if not code:
+        raise AppError("Polar callback has no authorization code", 400)
+
+    stored_state = load_state_value("polarOAuthState", {})
+    if stored_state.get("state") and state != stored_state.get("state"):
+        raise AppError("Polar OAuth state mismatch", 400)
+
+    token = exchange_polar_code(code)
+    token["connected_at"] = int(time.time())
+    save_state_value("polarToken", token)
+    register_polar_user(token)
+    save_state_value("polarOAuthState", {})
+    return {"ok": True, "userId": token.get("x_user_id") or token.get("user_id") or ""}
+
+
+def first_query_value(query, key):
+    values = query.get(key) or []
+    return values[0] if values else ""
+
+
+def exchange_polar_code(code):
+    credentials = load_polar_credentials()
+    data = urlencode(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": credentials.get("redirect_uri", ""),
+        }
+    ).encode("utf-8")
+    headers = {
+        "Authorization": "Basic " + basic_auth_token(credentials["client_id"], credentials["client_secret"]),
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json;charset=UTF-8",
+    }
+    return http_json("https://polarremote.com/v2/oauth2/token", method="POST", data=data, headers=headers)
+
+
+def register_polar_user(token):
+    access_token = token.get("access_token")
+    if not access_token:
+        return
+    member_id = f"training-coach-{token.get('x_user_id') or token.get('user_id') or 'local'}"
+    body = json.dumps({"member-id": member_id}).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    try:
+        result = http_json("https://www.polaraccesslink.com/v3/users", method="POST", data=body, headers=headers)
+        if result.get("polar-user-id"):
+            token["polar_user_id"] = result.get("polar-user-id")
+            save_state_value("polarToken", token)
+    except AppError as exc:
+        if exc.status not in {409, 400}:
+            raise
+
+
+def sync_polar_workouts():
+    credentials = load_polar_credentials()
+    if not credentials.get("client_id") or not credentials.get("client_secret"):
+        raise AppError("Polar credentials not found. Check cred_polar.txt.", 500)
+    token = load_state_value("polarToken", {})
+    access_token = token.get("access_token")
+    if not access_token:
+        raise AppError("Polar is not connected. Open /api/polar/connect first.", 401)
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+    }
+    exercises = http_json("https://www.polaraccesslink.com/v3/exercises?zones=true", headers=headers)
+    if not isinstance(exercises, list):
+        exercises = []
+
+    workouts = [polar_exercise_to_workout(item) for item in exercises]
+    saved_tcx = []
+    if POLAR_CONFIG.get("downloadTcx", True):
+        for exercise in exercises:
+            saved = download_polar_tcx(exercise, access_token)
+            if saved:
+                saved_tcx.append(saved)
+
+    save_state_value("polarLastSync", int(time.time()))
+    return {
+        "ok": True,
+        "count": len(workouts),
+        "workouts": workouts,
+        "savedTcx": saved_tcx,
+    }
+
+
+def polar_exercise_to_workout(exercise):
+    exercise_id = str(exercise.get("id") or "")
+    start_time = exercise.get("start_time") or exercise.get("start-time") or exercise.get("upload_time") or exercise.get("upload-time")
+    offset = exercise.get("start_time_utc_offset", exercise.get("start-time-utc-offset"))
+    heart_rate = exercise.get("heart_rate") or exercise.get("heart-rate") or {}
+    training_load_pro = exercise.get("training_load_pro") or exercise.get("training-load-pro") or {}
+    load = (
+        exercise.get("training_load")
+        or exercise.get("training-load")
+        or training_load_pro.get("cardio-load")
+        or training_load_pro.get("cardio_load")
+    )
+    distance_m = number_or_none(exercise.get("distance"))
+    duration_min = minutes_from_iso_duration(exercise.get("duration"))
+    sport = exercise.get("detailed_sport_info") or exercise.get("detailed-sport-info") or exercise.get("sport") or "Polar"
+    avg_hr = (heart_rate or {}).get("average")
+    max_hr = (heart_rate or {}).get("maximum")
+    date = polar_start_to_iso(start_time, offset)
+    distance_km = round(distance_m / 1000, 2) if distance_m else 0
+    return {
+        "id": f"{date[:16]}-polar-{exercise_id or duration_min}-{distance_km}",
+        "source": f"Polar:{exercise_id}" if exercise_id else "Polar",
+        "date": date,
+        "sport": sport,
+        "durationMin": duration_min,
+        "distanceKm": distance_km,
+        "avgHr": int(round(avg_hr)) if avg_hr else None,
+        "maxHr": int(round(max_hr)) if max_hr else None,
+        "load": int(round(load)) if load else duration_min,
+        "loadSource": "imported" if load else "duration",
+        "notes": "Polar Flow sync",
+    }
+
+
+def download_polar_tcx(exercise, access_token):
+    exercise_id = str(exercise.get("id") or "")
+    if not exercise_id:
+        return ""
+    start_time = exercise.get("start_time") or exercise.get("start-time") or exercise.get("upload_time") or exercise.get("upload-time") or ""
+    safe_date = re.sub(r"[^0-9T-]+", "-", start_time)[:19].replace("T", "_") or "exercise"
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", exercise_id)
+    folder = ROOT / "Workouts" / "TCX"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"Polar_{safe_date}_{safe_id}.TCX"
+    if target.exists() and target.stat().st_size > 0:
+        return target.name
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.garmin.tcx+xml",
+    }
+    url = f"https://www.polaraccesslink.com/v3/exercises/{quote(exercise_id)}/tcx"
+    try:
+        raw = http_bytes(url, headers=headers)
+        if raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        if raw.strip():
+            target.write_bytes(raw)
+            return target.name
+    except AppError:
+        return ""
+    return ""
+
+
+def polar_start_to_iso(value, offset_minutes=None):
+    if not value:
+        return ""
+    text = str(value)
+    if text.endswith("Z") or re.search(r"[+-]\d\d:?\d\d$", text):
+        return text.replace("Z", "+00:00")
+    if offset_minutes is None:
+        return text
+    try:
+        offset = int(offset_minutes)
+    except (TypeError, ValueError):
+        return text
+    sign = "+" if offset >= 0 else "-"
+    offset = abs(offset)
+    return f"{text}{sign}{offset // 60:02d}:{offset % 60:02d}"
+
+
+def minutes_from_iso_duration(value):
+    if not value:
+        return 0
+    match = re.fullmatch(r"P(?:\d+D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", str(value))
+    if not match:
+        return 0
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = float(match.group(3) or 0)
+    return int(round(hours * 60 + minutes + seconds / 60))
+
+
+def number_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def basic_auth_token(client_id, client_secret):
+    return base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+
+
+def http_json(url, method="GET", data=None, headers=None):
+    raw = http_bytes(url, method=method, data=data, headers=headers)
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8"))
+
+
+def http_bytes(url, method="GET", data=None, headers=None):
+    timeout = int(POLAR_CONFIG.get("timeoutSeconds", 45))
+    req = request.Request(url, data=data, method=method, headers=headers or {})
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+    except error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        raise AppError(f"Polar API error {exc.code}: {details}", exc.code)
+    except error.URLError as exc:
+        raise AppError(f"failed to connect to Polar API: {exc.reason}", 502)
+
+
+def polar_callback_html(payload):
+    if payload.get("ok"):
+        message = "Polar Flow подключен. Можно закрыть эту вкладку и вернуться в Training Coach."
+        title = "Polar подключен"
+    else:
+        message = payload.get("error") or "Polar Flow не подключен."
+        title = "Ошибка Polar"
+    return f"""<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>{title}</title></head>
+<body style="font-family:Segoe UI,Arial,sans-serif;max-width:720px;margin:48px auto;line-height:1.5">
+  <h1>{title}</h1>
+  <p>{message}</p>
+  <p><a href="/">Вернуться в приложение</a></p>
+</body>
+</html>"""
 
 
 def list_workout_files():

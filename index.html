@@ -92,6 +92,20 @@
             </div>
           </div>
 
+          <section class="panel polar-panel">
+            <div class="panel-head compact-head">
+              <div>
+                <h2>Polar Flow</h2>
+                <span id="polarStatus">Проверяем подключение...</span>
+              </div>
+              <div class="button-row">
+                <button class="ghost-btn" id="connectPolar" type="button">Подключить Polar</button>
+                <button class="primary-btn" id="syncPolar" type="button">Синхронизировать</button>
+              </div>
+            </div>
+            <p id="polarHint">Тренировки будут подтягиваться через Polar AccessLink и сохраняться в локальной БД.</p>
+          </section>
+
           <label class="dropzone" for="fileInput" id="dropzone">
             <input id="fileInput" type="file" multiple accept=".tcx,.gpx,.csv,.json,.xml">
             <span>Выберите файлы тренировок</span>
