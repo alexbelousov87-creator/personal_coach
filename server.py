@@ -529,22 +529,29 @@ def is_rest_assignment(day):
 
 
 def format_daily_assignment_message(day):
-    planned = day.get("plannedWorkout") or day.get("details") or "Задание не указано."
+    planned_parts = unique_items([day.get("plannedWorkout"), day.get("details")])
+    planned = "\n\n".join(planned_parts) if planned_parts else "Задание не указано."
+    parameters = []
+    if day.get("targetDistance"):
+        parameters.append(f"Ориентир: {day.get('targetDistance')}")
+    if day.get("intensity"):
+        parameters.append(f"Интенсивность: {day.get('intensity')}")
+    if day.get("load"):
+        parameters.append(f"Нагрузка: {day.get('load')}")
+
     lines = [
         "План на сегодня",
         f"{day.get('dateLabel') or date.today().strftime('%d.%m.%Y')}",
         "",
         f"{day.get('focus') or 'Тренировка'}: {day.get('title') or 'Задание'}",
+        "",
+        "Задание:",
         planned,
     ]
-    if day.get("targetDistance"):
-        lines.append(f"Ориентир: {day.get('targetDistance')}")
-    if day.get("intensity"):
-        lines.append(f"Интенсивность: {day.get('intensity')}")
-    if day.get("load"):
-        lines.append(f"Нагрузка: {day.get('load')}")
+    if parameters:
+        lines.extend(["", "Параметры:", *parameters])
     if day.get("rationale"):
-        lines.extend(["", f"Почему так: {day.get('rationale')}"])
+        lines.extend(["", "Почему так:", str(day.get("rationale"))])
     return "\n".join(lines)
 
 
