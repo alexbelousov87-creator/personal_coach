@@ -598,8 +598,9 @@ function renderMetricChart(title, unit, items, key, maxValue, formatValue, class
             const height = value ? Math.max(4, (value / scaleMax) * 120) : 4;
             return `
               <div class="bar-wrap" title="${formatted} ${unit}">
+                <span class="bar-value">${value ? formatted : ""}</span>
                 <div class="bar ${className}" style="height:${height}px"></div>
-                <span>${item.label}</span>
+                <span class="bar-date">${item.label}</span>
               </div>
             `;
           })

@@ -378,13 +378,19 @@ p {
   align-items: end;
   grid-template-columns: repeat(14, minmax(12px, 1fr));
   gap: 8px;
-  min-height: 150px;
+  min-height: 170px;
+  padding-top: 4px;
+  border-bottom: 1px solid var(--line);
+  background-image: linear-gradient(to top, rgba(99, 114, 123, 0.14) 1px, transparent 1px);
+  background-size: 100% 40px;
+  background-position: 0 25px;
 }
 
 .bar-wrap {
   display: grid;
   align-items: end;
-  gap: 8px;
+  grid-template-rows: 18px minmax(4px, auto) 18px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -402,9 +408,18 @@ p {
   background: var(--warn);
 }
 
-.bar-wrap span {
+.bar-value {
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.bar-date {
   color: var(--muted);
   font-size: 11px;
+  line-height: 1;
   text-align: center;
 }
 
