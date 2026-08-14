@@ -397,6 +397,10 @@ p {
   color: var(--muted);
 }
 
+.dropzone .primary-btn {
+  min-width: 240px;
+}
+
 .dropzone strong {
   font-size: 22px;
 }

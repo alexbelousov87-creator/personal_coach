@@ -34,6 +34,7 @@ const views = document.querySelectorAll(".view");
 const navItems = document.querySelectorAll(".nav-item");
 const fileInput = document.querySelector("#fileInput");
 const dropzone = document.querySelector("#dropzone");
+const selectWorkoutFilesButton = document.querySelector("#selectWorkoutFiles");
 const importLog = document.querySelector("#importLog");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
@@ -98,6 +99,7 @@ function wireNavigation() {
 
 function wireImport() {
   fileInput.addEventListener("change", (event) => handleFiles([...event.target.files]));
+  selectWorkoutFilesButton.addEventListener("click", () => fileInput.click());
 
   ["dragenter", "dragover"].forEach((eventName) => {
     dropzone.addEventListener(eventName, (event) => {

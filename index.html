@@ -106,11 +106,11 @@
             <p id="polarHint">Тренировки будут подтягиваться через Polar AccessLink и сохраняться в локальной БД.</p>
           </section>
 
-          <label class="dropzone" for="fileInput" id="dropzone">
+          <div class="dropzone" id="dropzone">
             <input id="fileInput" type="file" multiple accept=".tcx,.gpx,.csv,.json,.xml">
-            <span>Выберите файлы тренировок</span>
+            <button class="primary-btn" id="selectWorkoutFiles" type="button">Выберите файлы тренировок</button>
             <strong>или перетащите их сюда</strong>
-          </label>
+          </div>
 
           <div class="import-log" id="importLog"></div>
         </section>
