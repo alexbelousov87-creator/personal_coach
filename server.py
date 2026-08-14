@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
         "clientSecret": "",
         "clientIdEnv": "POLAR_CLIENT_ID",
         "clientSecretEnv": "POLAR_CLIENT_SECRET",
-        "redirectUri": "http://127.0.0.1:8765/api/polar/callback",
+        "redirectUri": "",
         "scope": "accesslink.read_all",
         "downloadTcx": True,
         "timeoutSeconds": 45,
@@ -400,10 +400,11 @@ def polar_authorization_url():
     params = {
         "response_type": "code",
         "client_id": credentials["client_id"],
-        "redirect_uri": credentials["redirect_uri"],
         "scope": credentials.get("scope", "accesslink.read_all"),
         "state": state,
     }
+    if credentials.get("redirect_uri"):
+        params["redirect_uri"] = credentials["redirect_uri"]
     return "https://flow.polar.com/oauth2/authorization?" + urlencode(params)
 
 
@@ -439,7 +440,7 @@ def exchange_polar_code(code):
         {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": credentials.get("redirect_uri", ""),
+            **({"redirect_uri": credentials["redirect_uri"]} if credentials.get("redirect_uri") else {}),
         }
     ).encode("utf-8")
     headers = {
