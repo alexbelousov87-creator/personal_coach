@@ -2506,7 +2506,7 @@ function updatePolarUi(status) {
   }
   if (!configured) {
     polarStatus.textContent = "Не найдены client_id/client_secret";
-    polarHint.textContent = "Добавьте данные клиента Polar в cred_polar.txt или conf.json.";
+    polarHint.textContent = "Добавьте данные клиента Polar в секцию polar файла conf.json.";
     return;
   }
   if (!connected) {

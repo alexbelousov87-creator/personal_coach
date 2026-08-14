@@ -40,7 +40,6 @@ DEFAULT_CONFIG = {
     },
     "polar": {
         "enabled": True,
-        "credentialsFile": "cred_polar.txt",
         "clientId": "",
         "clientSecret": "",
         "clientIdEnv": "POLAR_CLIENT_ID",
@@ -378,100 +377,23 @@ def polar_status():
         "connected": bool(token.get("access_token")),
         "userId": token.get("x_user_id") or token.get("user_id") or "",
         "lastSync": load_state_value("polarLastSync", ""),
-        "credentialsFile": str((ROOT / POLAR_CONFIG.get("credentialsFile", "cred_polar.txt")).name),
         "downloadTcx": bool(POLAR_CONFIG.get("downloadTcx", True)),
     }
 
 
 def load_polar_credentials():
-    credentials = {
+    return {
         "client_id": POLAR_CONFIG.get("clientId") or os.environ.get(POLAR_CONFIG.get("clientIdEnv", "POLAR_CLIENT_ID"), ""),
         "client_secret": POLAR_CONFIG.get("clientSecret") or os.environ.get(POLAR_CONFIG.get("clientSecretEnv", "POLAR_CLIENT_SECRET"), ""),
         "redirect_uri": POLAR_CONFIG.get("redirectUri", f"http://{HOST}:{PORT}/api/polar/callback"),
         "scope": POLAR_CONFIG.get("scope", "accesslink.read_all"),
     }
-    file_credentials = read_polar_credentials_file()
-    return {**credentials, **{key: value for key, value in file_credentials.items() if value}}
-
-
-def read_polar_credentials_file():
-    path = ROOT / POLAR_CONFIG.get("credentialsFile", "cred_polar.txt")
-    if not path.exists() or not path.is_file():
-        return {}
-
-    raw_lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-    lines = [line.strip() for line in raw_lines if line.strip() and not line.strip().startswith("#")]
-    result = {}
-
-    aliases = {
-        "clientid": "client_id",
-        "client_id": "client_id",
-        "client id": "client_id",
-        "id": "client_id",
-        "clientsecret": "client_secret",
-        "client_secret": "client_secret",
-        "client secret": "client_secret",
-        "secret": "client_secret",
-        "redirecturi": "redirect_uri",
-        "redirect_uri": "redirect_uri",
-        "redirect uri": "redirect_uri",
-        "callback": "redirect_uri",
-        "scope": "scope",
-        "access_token": "access_token",
-        "access token": "access_token",
-        "token": "access_token",
-        "user_id": "user_id",
-        "user id": "user_id",
-    }
-
-    def normalized_key(value):
-        compact = re.sub(r"[^a-z0-9_ ]+", "", value.strip().lower())
-        compact_no_space = compact.replace(" ", "")
-        return aliases.get(compact) or aliases.get(compact_no_space)
-
-    index = 0
-    positional = []
-    while index < len(lines):
-        line = lines[index]
-        separator = "=" if "=" in line else ":" if ":" in line else ""
-        if separator:
-            key, value = [part.strip() for part in line.split(separator, 1)]
-            mapped = normalized_key(key)
-            if mapped and value:
-                result[mapped] = value
-            index += 1
-            continue
-
-        mapped = normalized_key(line)
-        if mapped and index + 1 < len(lines):
-            result[mapped] = lines[index + 1].strip()
-            index += 2
-            continue
-
-        if not mapped:
-            positional.append(line)
-        index += 1
-
-    if "client_id" not in result and positional:
-        result["client_id"] = positional[0]
-    if "client_secret" not in result and len(positional) > 1:
-        result["client_secret"] = positional[1]
-    if "redirect_uri" not in result and len(positional) > 2 and positional[2].startswith("http"):
-        result["redirect_uri"] = positional[2]
-    if "access_token" in result:
-        token = load_state_value("polarToken", {})
-        token["access_token"] = result["access_token"]
-        if result.get("user_id"):
-            token["x_user_id"] = result["user_id"]
-        save_state_value("polarToken", token)
-
-    return result
 
 
 def polar_authorization_url():
     credentials = load_polar_credentials()
     if not credentials.get("client_id") or not credentials.get("client_secret"):
-        raise AppError("Polar credentials not found. Add client_id/client_secret to cred_polar.txt or conf.json.", 500)
+        raise AppError("Polar credentials not found. Add polar.clientId and polar.clientSecret to conf.json.", 500)
 
     state = secrets.token_urlsafe(24)
     save_state_value("polarOAuthState", {"state": state, "createdAt": int(time.time())})
@@ -552,7 +474,7 @@ def register_polar_user(token):
 def sync_polar_workouts():
     credentials = load_polar_credentials()
     if not credentials.get("client_id") or not credentials.get("client_secret"):
-        raise AppError("Polar credentials not found. Check cred_polar.txt.", 500)
+        raise AppError("Polar credentials not found. Check polar.clientId and polar.clientSecret in conf.json.", 500)
     token = load_state_value("polarToken", {})
     access_token = token.get("access_token")
     if not access_token:
