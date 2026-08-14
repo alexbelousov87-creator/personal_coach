@@ -416,6 +416,14 @@ p {
   color: var(--muted);
 }
 
+.polar-panel .ghost-btn.connected,
+.polar-panel .ghost-btn.connected:disabled {
+  border-color: rgba(36, 132, 90, 0.42);
+  background: #eef8f2;
+  color: var(--good);
+  opacity: 1;
+}
+
 .log-line {
   padding: 12px;
   border-radius: 8px;

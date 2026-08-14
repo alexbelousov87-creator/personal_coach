@@ -2496,7 +2496,9 @@ function updatePolarUi(status) {
   if (!polarStatus || !connectPolarButton || !syncPolarButton) return;
   const configured = Boolean(status?.configured);
   const connected = Boolean(status?.connected);
-  connectPolarButton.disabled = !configured;
+  connectPolarButton.textContent = connected ? "Polar подключен" : "Подключить Polar";
+  connectPolarButton.classList.toggle("connected", connected);
+  connectPolarButton.disabled = !configured || connected;
   syncPolarButton.disabled = !configured || !connected;
 
   if (status?.unavailable) {
