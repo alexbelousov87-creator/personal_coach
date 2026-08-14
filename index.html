@@ -215,6 +215,20 @@
           </div>
 
           <form class="form-grid panel" id="settingsForm">
+            <div class="profile-photo-field wide">
+              <div class="profile-photo-preview" id="profilePhotoPreview">
+                <span>Фото</span>
+              </div>
+              <div class="profile-photo-actions">
+                <strong>Фото профиля</strong>
+                <p>Изображение будет сохранено локально вместе с профилем.</p>
+                <div class="button-row compact-row">
+                  <button class="ghost-btn" id="selectProfilePhoto" type="button">Загрузить фото</button>
+                  <button class="ghost-btn" id="removeProfilePhoto" type="button">Удалить</button>
+                </div>
+                <input id="profilePhotoInput" type="file" accept="image/*" hidden>
+              </div>
+            </div>
             <label>
               Имя
               <input name="name" type="text" placeholder="Алексей">

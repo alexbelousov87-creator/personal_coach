@@ -23,6 +23,7 @@ const state = {
     raceDate: "",
     raceDistance: "",
     raceName: "",
+    photoDataUrl: "",
     maxHr: 185,
     restHr: 50,
     daysPerWeek: 4,
@@ -39,6 +40,10 @@ const importLog = document.querySelector("#importLog");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
 const planJsonInput = document.querySelector("#planJsonInput");
+const profilePhotoInput = document.querySelector("#profilePhotoInput");
+const profilePhotoPreview = document.querySelector("#profilePhotoPreview");
+const selectProfilePhotoButton = document.querySelector("#selectProfilePhoto");
+const removeProfilePhotoButton = document.querySelector("#removeProfilePhoto");
 const polarStatus = document.querySelector("#polarStatus");
 const polarHint = document.querySelector("#polarHint");
 const connectPolarButton = document.querySelector("#connectPolar");
@@ -131,6 +136,13 @@ function wirePolar() {
 function wireForms() {
   const today = new Date().toISOString().slice(0, 10);
   manualForm.elements.date.value = today;
+  selectProfilePhotoButton.addEventListener("click", () => profilePhotoInput.click());
+  removeProfilePhotoButton.addEventListener("click", () => {
+    state.profile.photoDataUrl = "";
+    profilePhotoInput.value = "";
+    renderProfilePhoto();
+  });
+  profilePhotoInput.addEventListener("change", handleProfilePhotoFile);
 
   manualForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -163,6 +175,7 @@ function wireForms() {
       raceDate: data.get("raceDate") || "",
       raceDistance: data.get("raceDistance") || "",
       raceName: data.get("raceName").trim(),
+      photoDataUrl: state.profile.photoDataUrl || "",
       maxHr: Number(data.get("maxHr")) || 185,
       restHr: Number(data.get("restHr")) || 50,
       daysPerWeek: Number(data.get("daysPerWeek")) || 4,
@@ -173,6 +186,48 @@ function wireForms() {
     renderAll();
     generatePlan();
     showToast("Профиль сохранен");
+  });
+}
+
+async function handleProfilePhotoFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("Выберите файл изображения");
+    profilePhotoInput.value = "";
+    return;
+  }
+
+  try {
+    state.profile.photoDataUrl = await resizeImageToDataUrl(file, 512);
+    renderProfilePhoto();
+  } catch {
+    showToast("Не удалось загрузить фото");
+    profilePhotoInput.value = "";
+  }
+}
+
+function resizeImageToDataUrl(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = reject;
+      image.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.86));
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
   });
 }
 
@@ -2086,7 +2141,7 @@ function buildAiRequest() {
     system:
       "Ты опытный тренер по видам спорта на выносливость. Составляй календарный недельный микроцикл с понедельника по воскресенье от текущего тренировочного состояния спортсмена и этапа подготовки preparationPhase. Понедельник - восстановительный бег или отдых при необходимости, воскресенье - длительная тренировка. В нормальной развивающей неделе должны быть 1 интенсивная интервальная работа, 1 темповая работа, 1 длительная, легкие кроссы и восстановительный бег. Если этап recovery или taper, снижай объем и не дублируй тяжелые стимулы. Все работы должны строго соответствовать целевой дистанции спортсмена. Для интервальных и темповых дней обязательно указывай структуру работы: разминку, количество повторов/блоков, длину или время каждого отрезка, интенсивность, восстановление между отрезками и заминку. Не перестраховывайся легкими днями по умолчанию. Если данные показывают перегруз, сохраняй смысл недели, но снижай объем/интенсивность и объясняй почему. Не давай медицинских диагнозов и не назначай лечение.",
     context: {
-      profile: state.profile,
+      profile: profileForPlanning(),
       race: getRaceSummary(),
       preparationPhase: getPreparationPhase(),
       readiness: getReadiness(),
@@ -2157,6 +2212,11 @@ function buildPlanningWeek() {
     instruction:
       "Сформируй план именно на эти 7 дат с понедельника по воскресенье. Используй фактические тренировки и состояние спортсмена, а не текущий отображаемый план.",
   };
+}
+
+function profileForPlanning() {
+  const { photoDataUrl, ...profile } = state.profile || {};
+  return profile;
 }
 
 function buildTrainingState() {
@@ -2422,6 +2482,7 @@ function copyFromTextField(field) {
 }
 
 function hydrateProfile() {
+  renderProfilePhoto();
   settingsForm.elements.name.value = state.profile.name || "";
   settingsForm.elements.goal.value = state.profile.goal || "Поддержание формы";
   settingsForm.elements.targetDistance.value = state.profile.targetDistance || "10k";
@@ -2433,6 +2494,15 @@ function hydrateProfile() {
   settingsForm.elements.restHr.value = state.profile.restHr || 50;
   settingsForm.elements.daysPerWeek.value = state.profile.daysPerWeek || 4;
   settingsForm.elements.constraints.value = state.profile.constraints || "";
+}
+
+function renderProfilePhoto() {
+  const photo = state.profile.photoDataUrl || "";
+  if (!profilePhotoPreview) return;
+  profilePhotoPreview.innerHTML = photo
+    ? `<img src="${photo}" alt="Фото профиля">`
+    : "<span>Фото</span>";
+  removeProfilePhotoButton.disabled = !photo;
 }
 
 function persistWorkouts() {
