@@ -559,27 +559,54 @@ function renderWorkouts() {
 function renderBars() {
   const bars = document.querySelector("#loadBars");
   const days = lastDays(14);
-  const loads = days.map((day) => ({
-    label: day.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
-    load: state.workouts
-      .filter((workout) => sameDay(new Date(workout.date), day))
-      .reduce((sum, workout) => sum + workout.load, 0),
-  }));
-  const maxLoad = Math.max(...loads.map((item) => item.load), 1);
+  const daily = days.map((day) => {
+    const workouts = state.workouts.filter((workout) => sameDay(new Date(workout.date), day));
+    return {
+      label: day.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
+      load: workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0),
+      distanceKm: workouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0),
+      hours: workouts.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0) / 60,
+    };
+  });
+  const maxLoad = Math.max(...daily.map((item) => item.load), 0);
+  const maxDistance = Math.max(...daily.map((item) => item.distanceKm), 0);
+  const maxHours = Math.max(...daily.map((item) => item.hours), 0);
 
   document.querySelector("#loadLabel").textContent = state.workouts.length
-    ? `пик ${maxLoad} TRIMP за день`
+    ? `пики: ${maxLoad} TRIMP · ${round(maxDistance, 1)} км · ${round(maxHours, 1)} ч`
     : "нет данных";
-  bars.innerHTML = loads
-    .map(
-      (item) => `
-        <div class="bar-wrap" title="${item.load} TRIMP">
-          <div class="bar" style="height:${Math.max(4, (item.load / maxLoad) * 190)}px"></div>
-          <span>${item.label}</span>
-        </div>
-      `
-    )
-    .join("");
+  bars.innerHTML = [
+    renderMetricChart("Нагрузка", "TRIMP", daily, "load", maxLoad, (value) => Math.round(value), "load"),
+    renderMetricChart("Километраж", "км", daily, "distanceKm", maxDistance, (value) => round(value, 1), "distance"),
+    renderMetricChart("Время", "часы", daily, "hours", maxHours, (value) => round(value, 1), "hours"),
+  ].join("");
+}
+
+function renderMetricChart(title, unit, items, key, maxValue, formatValue, className) {
+  const scaleMax = Math.max(maxValue, 1);
+  return `
+    <section class="load-chart">
+      <div class="load-chart-head">
+        <strong>${title}</strong>
+        <span>${formatValue(maxValue)} ${unit}</span>
+      </div>
+      <div class="chart-bars">
+        ${items
+          .map((item) => {
+            const value = Number(item[key]) || 0;
+            const formatted = formatValue(value);
+            const height = value ? Math.max(4, (value / scaleMax) * 120) : 4;
+            return `
+              <div class="bar-wrap" title="${formatted} ${unit}">
+                <div class="bar ${className}" style="height:${height}px"></div>
+                <span>${item.label}</span>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    </section>
+  `;
 }
 
 function generatePlan() {

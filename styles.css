@@ -347,12 +347,38 @@ p {
   color: var(--muted);
 }
 
-.bars {
+.load-charts {
+  display: grid;
+  gap: 18px;
+}
+
+.load-chart {
+  display: grid;
+  gap: 8px;
+}
+
+.load-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.load-chart-head strong {
+  font-size: 14px;
+}
+
+.load-chart-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chart-bars {
   display: grid;
   align-items: end;
   grid-template-columns: repeat(14, minmax(12px, 1fr));
   gap: 8px;
-  min-height: 230px;
+  min-height: 150px;
 }
 
 .bar-wrap {
@@ -366,6 +392,14 @@ p {
   min-height: 4px;
   border-radius: 6px 6px 0 0;
   background: var(--accent-2);
+}
+
+.bar.distance {
+  background: var(--good);
+}
+
+.bar.hours {
+  background: var(--warn);
 }
 
 .bar-wrap span {
