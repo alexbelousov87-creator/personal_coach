@@ -115,7 +115,7 @@ function wireNavigation() {
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
   document.querySelector("#adjustLocalPlan").addEventListener("click", adjustPlanLocally);
   document.querySelector("#adjustJsonPlan").addEventListener("click", reloadJsonPlan);
-  document.querySelector("#reviewAiPlan").addEventListener("click", reviewCurrentPlanWithAi);
+  document.querySelector("#reviewAiPlan")?.addEventListener("click", reviewCurrentPlanWithAi);
   document.querySelector("#generateAiPlan").addEventListener("click", selectAiPlan);
   document.querySelector("#loadPlanJson").addEventListener("click", selectJsonPlan);
   document.querySelector("#togglePlanDensity").addEventListener("click", togglePlanDensity);
