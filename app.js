@@ -2500,6 +2500,9 @@ function normalizedPlanTitle(day, fallbackDay, focus, details) {
   if (titleMentionsRun(title) && assignmentHasNoRun(details)) {
     return defaultTitleForPlannedType(focusType || "recovery", details);
   }
+  if (titleMentionsStrides(title) && assignmentForbidsStrides(details)) {
+    return defaultTitleForPlannedType(focusType || "easy", details);
+  }
   if (focusType && titleType && focusType !== titleType) {
     return defaultTitleForPlannedType(focusType, details);
   }
@@ -2571,6 +2574,16 @@ function titleMentionsRun(value) {
   return matchesAny(text, ["бег", "кросс", "run"]);
 }
 
+function assignmentForbidsStrides(value) {
+  const text = String(value || "").toLowerCase();
+  return matchesAny(text, ["без ускорений", "без ускорения", "без финишного ускорения", "без длинных ускорений", "не ускоряйтесь", "не добавляйте лишние ускорения"]);
+}
+
+function titleMentionsStrides(value) {
+  const text = String(value || "").toLowerCase();
+  return matchesAny(text, ["ускорен", "strides"]);
+}
+
 function focusForPlannedType(type) {
   return {
     race: "Гонка",
@@ -2587,7 +2600,7 @@ function defaultTitleForPlannedType(type, details) {
   const text = String(details || "").toLowerCase();
   if (assignmentHasNoRun(text) && matchesAny(text, ["мобилити", "офп", "растяж"])) return "Мобилити без бега";
   if (assignmentHasNoRun(text)) return "Восстановительный день без бега";
-  if (type === "easy" && matchesAny(text, ["ускорен", "strides"])) return "Легкий бег с ускорениями";
+  if (type === "easy" && matchesAny(text, ["ускорен", "strides"]) && !assignmentForbidsStrides(text)) return "Легкий бег с ускорениями";
   return {
     race: "Старт",
     rest: "Отдых",
