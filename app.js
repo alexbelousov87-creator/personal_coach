@@ -116,7 +116,7 @@ function wireNavigation() {
   document.querySelector("#adjustLocalPlan").addEventListener("click", adjustPlanLocally);
   document.querySelector("#adjustJsonPlan").addEventListener("click", reloadJsonPlan);
   document.querySelector("#reviewAiPlan")?.addEventListener("click", reviewCurrentPlanWithAi);
-  document.querySelector("#generateAiPlan").addEventListener("click", selectAiPlan);
+  document.querySelector("#generateAiPlan")?.addEventListener("click", selectAiPlan);
   document.querySelector("#loadPlanJson").addEventListener("click", selectJsonPlan);
   document.querySelector("#togglePlanDensity").addEventListener("click", togglePlanDensity);
   document.querySelector("#previousWeek").addEventListener("click", () => changeSelectedWeek(-7));
@@ -3066,7 +3066,7 @@ async function generateAiPlan() {
   const fallbackPlan = buildPlan();
   renderPlan(fallbackPlan);
   setAiStatus("ИИ формирует план...", "");
-  button.disabled = true;
+  if (button) button.disabled = true;
 
   try {
     const response = await fetch(`${API_BASE_URL}/api/plan`, {
@@ -3101,7 +3101,7 @@ async function generateAiPlan() {
     updatePlanSourceButtons("local");
     setAiStatus(`ИИ недоступен: ${error.message}. Показан локальный план.`, "error");
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
   }
 }
 
