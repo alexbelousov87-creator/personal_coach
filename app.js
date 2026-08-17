@@ -8,6 +8,15 @@ const CURRENT_PLAN_KEY = "training-coach-current-plan";
 const WORKOUT_SYNC_INTERVAL_MS = 60000;
 const POLAR_SYNC_INTERVAL_MS = 10 * 60000;
 const API_BASE_URL = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
+const WORKOUT_TYPE_OPTIONS = [
+  ["auto", "Авто"],
+  ["interval", "Интервалы"],
+  ["tempo", "Темпо"],
+  ["long", "Длительная"],
+  ["recovery", "Восстановление"],
+  ["easy", "Кросс"],
+  ["cross", "Кросс-тренинг"],
+];
 
 const state = {
   workouts: loadJson(STORAGE_KEY, []),
@@ -37,6 +46,7 @@ const fileInput = document.querySelector("#fileInput");
 const dropzone = document.querySelector("#dropzone");
 const selectWorkoutFilesButton = document.querySelector("#selectWorkoutFiles");
 const importLog = document.querySelector("#importLog");
+const workoutList = document.querySelector("#workoutList");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
 const planJsonInput = document.querySelector("#planJsonInput");
@@ -88,6 +98,7 @@ function wireNavigation() {
     item.addEventListener("click", () => showView(item.dataset.view));
   });
 
+  workoutList?.addEventListener("change", handleWorkoutTypeChange);
   document.querySelector("#openImport").addEventListener("click", () => showView("import"));
   document.querySelector("#generatePlan").addEventListener("click", selectLocalPlan);
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
@@ -498,6 +509,9 @@ function mergeDuplicateWorkouts(a, b) {
     base.load = other.load;
     base.loadSource = other.loadSource;
   }
+  if (!base.workoutTypeOverride && other.workoutTypeOverride) {
+    base.workoutTypeOverride = other.workoutTypeOverride;
+  }
   base.workoutType = classifyWorkout(base);
   return base;
 }
@@ -555,6 +569,7 @@ function normalizeWorkout(input) {
     load,
     loadSource,
     notes: String(input.notes || "").trim(),
+    workoutTypeOverride: validWorkoutType(input.workoutTypeOverride) ? input.workoutTypeOverride : "",
     workoutType: classifyWorkout({
       sport,
       durationMin,
@@ -614,7 +629,7 @@ function renderMetrics() {
 }
 
 function renderWorkouts() {
-  const list = document.querySelector("#workoutList");
+  const list = workoutList;
   if (!state.workouts.length) {
     list.innerHTML = `<div class="empty">История пуста</div>`;
     return;
@@ -624,16 +639,50 @@ function renderWorkouts() {
     .slice(0, 12)
     .map(
       (workout) => `
-        <article class="workout-row">
+        <article class="workout-row" data-workout-key="${escapeHtml(workoutDedupKey(workout))}">
           <div>
             <strong>${escapeHtml(workout.sport)} · ${escapeHtml(workoutTypeLabel(workout))}</strong>
             <span>${formatDate(workout.date)} · ${workout.durationMin} мин · ${formatDistance(workout.distanceKm)} · ${formatTrustedPace(workout)}</span>
+            ${workout.workoutTypeOverride ? `<em>тип задан вручную</em>` : ""}
+            <label class="workout-type-control">
+              Тип
+              <select data-workout-type-select>
+                ${renderWorkoutTypeOptions(workout)}
+              </select>
+            </label>
           </div>
           <small>${workout.load} TRIMP</small>
         </article>
       `
     )
     .join("");
+}
+
+function renderWorkoutTypeOptions(workout) {
+  const selected = workout.workoutTypeOverride || "auto";
+  return WORKOUT_TYPE_OPTIONS
+    .map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`)
+    .join("");
+}
+
+function handleWorkoutTypeChange(event) {
+  const select = event.target.closest("[data-workout-type-select]");
+  if (!select) return;
+  const row = select.closest(".workout-row");
+  const key = row?.dataset.workoutKey || "";
+  const workout = state.workouts.find((item) => workoutDedupKey(item) === key);
+  if (!workout) return;
+
+  if (select.value === "auto") {
+    delete workout.workoutTypeOverride;
+  } else {
+    workout.workoutTypeOverride = select.value;
+  }
+  workout.workoutType = classifyWorkout(workout);
+  persistWorkouts();
+  renderAll();
+  restoreCurrentPlanOrGenerate();
+  showToast(select.value === "auto" ? "Тип тренировки снова определяется автоматически" : "Тип тренировки задан вручную");
 }
 
 function renderBars() {
@@ -2251,6 +2300,7 @@ function buildAiRequest() {
     rpe: workout.rpe,
     load: workout.load,
     loadSource: workout.loadSource || "",
+    workoutTypeSource: workout.workoutTypeOverride ? "manual" : "auto",
   }));
 
   return {
@@ -2266,6 +2316,7 @@ function buildAiRequest() {
       load28Days: sumLoad(28),
       previous7DaysLoad: sumLoadRange(8, 14),
       recentWorkouts: recent,
+      workoutReference: workoutReferenceForPlanning(),
       workoutAccountingRules: [
         "Все импортированные активности учитывай как нагрузку и фактор восстановления.",
         "Беговые задания плана закрываются только беговыми тренировками.",
@@ -2319,6 +2370,7 @@ function buildAiRequest() {
         "если preparationPhase.id = recovery, неделя восстановительная: без полноценной интервальной и без тяжелой темповой",
       ],
       workoutSpecificationRules: [
+        "Используй context.workoutReference как словарь терминов: не смешивай темповую работу, порог, интервалы, VO2max, strides и спринт.",
         "details/plannedWorkout должны содержать только задание на тренировку, а не факт выполнения",
         "не возвращай поле actualWorkout и не пиши факт выполнения в details, plannedWorkout или rationale; факт приложение покажет само из импортированных тренировок",
         "для интервальной тренировки details/plannedWorkout должен содержать: разминка; N x дистанция или время отрезка; целевая интенсивность; восстановление между отрезками; заминка",
@@ -2330,6 +2382,45 @@ function buildAiRequest() {
       ],
     },
     planningWeek: buildPlanningWeek(),
+  };
+}
+
+function workoutReferenceForPlanning() {
+  return {
+    runningTypes: {
+      recovery: "Восстановительный бег: очень легкий бег для восстановления, RPE 1-2/10, темп не важен.",
+      easy: "Легкий бег / easy: спокойный аэробный бег, RPE 2-3/10, свободный разговор предложениями.",
+      long: "Длительный бег: продолжительный преимущественно легкий бег для аэробной выносливости, обычно RPE 2-3/10.",
+      progressive: "Прогрессивный бег: интенсивность постепенно растет от легкой к заранее заданной более высокой без резкого ускорения.",
+      strides: "Strides / ускорения: 10-30 секунд быстро и расслабленно, не спринт, с полным восстановлением.",
+      fartlek: "Фартлек: чередование быстрых и легких участков без обязательной строгой дистанции.",
+      hillRunning: "Бег в гору: короткие или средние интенсивные отрезки в подъем для силы, техники и экономичности.",
+    },
+    qualityIntensities: {
+      tempoWorkout: "Темповая работа - формат тренировки, а не одна физиологическая зона; может включать порог, соревновательное усилие или специфический темп.",
+      threshold: "Пороговое усилие: тяжелое, но устойчивое и контролируемое, RPE 6-7/10, примерно 40-60 минут для свежего подготовленного спортсмена.",
+      effort10k: "Усилие 10 км: RPE 7-8/10, разговор почти невозможен, но темп контролируемый.",
+      effort5k: "Усилие 5 км: RPE около 8/10, выше порога, обычно в интервальной работе.",
+      vo2max: "VO2max-интервалы: повторные отрезки высокой интенсивности примерно 2-5 минут, RPE 8-9/10, это не спринт.",
+      shortIntervals: "Короткие интервалы: 30 секунд - 2 минуты, быстрее усилия 5 км, но контролируемо и повторно.",
+      sprint: "Спринт: очень короткое почти максимальное или максимальное ускорение; отдельный стимул, не VO2max и не strides.",
+    },
+    additionalWork: {
+      strength: "Силовая: упражнения с внешним сопротивлением или весом тела для силы и устойчивости.",
+      plyometrics: "Прыжковые упражнения / плиометрика: короткие взрывные упражнения для беговой экономичности.",
+      generalPhysicalPreparation: "ОФП: корпус, баланс, стабильность, силовая выносливость и общая физическая подготовленность.",
+      mobility: "Мобилити: контролируемая подвижность суставов и диапазон движения; не тяжелая силовая.",
+      crossTraining: "Кросс-тренинг: небеговая аэробная нагрузка; учитывается как нагрузка, но не заменяет ключевую беговую работу автоматически.",
+    },
+    intensityScale: ["восстановительный", "легкий", "длительный легкий", "порог", "усилие 10 км", "усилие 5 км", "VO2max", "спринт"],
+    heartRateZones: {
+      z1: "Восстановительная зона: RPE 1-2/10, ниже 60% HRR.",
+      z2: "Легкая аэробная зона: RPE 2-3/10, 60-70% HRR.",
+      z3: "Умеренная аэробная зона: steady-усилие, RPE 4-5/10, 70-80% HRR.",
+      z4: "Пороговая зона: RPE 6-7/10, 80-90% HRR.",
+      z5: "Высокая аэробная / VO2max зона: RPE 8-10/10, выше 90% HRR.",
+    },
+    heartRateCaveat: "Не используй пульсовые зоны как основной контроль коротких ускорений, strides, спринтов и коротких интервалов из-за запаздывания реакции ЧСС.",
   };
 }
 
@@ -3612,7 +3703,12 @@ function formatPace(paceMinPerKm) {
 }
 
 function getWorkoutType(workout) {
+  if (validWorkoutType(workout?.workoutTypeOverride)) return workout.workoutTypeOverride;
   return classifyWorkout(workout);
+}
+
+function validWorkoutType(type) {
+  return WORKOUT_TYPE_OPTIONS.some(([value]) => value !== "auto" && value === type);
 }
 
 function classifyWorkout(workout) {
