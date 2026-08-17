@@ -1345,6 +1345,7 @@ function evaluatePlanDayExecution(day) {
   today.setHours(0, 0, 0, 0);
   const plannedType = plannedTypeForDay(day);
   const completionActual = planCompletionWorkoutsForDay(day);
+  const expectsNoRun = planExpectsNoRun(day);
 
   if (!actual.length) {
     if (planDate < today && plannedType !== "rest") {
@@ -1367,12 +1368,21 @@ function evaluatePlanDayExecution(day) {
     };
   }
 
-  const actualTypes = actual.map(getWorkoutType);
+  const actualTypes = [...new Set(actual.map(getWorkoutType))];
   const completionTypes = completionActual.map(getWorkoutType);
   const actualLoad = actual.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const plannedLoad = plannedLoadScoreForDay(day);
-  const typeMatched = completionTypes.some((type) => planTypeMatchesActual(plannedType, type));
+  const hasRunningActual = actual.some(isRunningWorkout);
+  const typeMatched = expectsNoRun && hasRunningActual
+    ? false
+    : completionTypes.some((type) => planTypeMatchesActual(plannedType, type));
+  const typeMismatch = !typeMatched;
   const keyCompleted = ["interval", "tempo", "long", "race"].includes(plannedType) && typeMatched;
+  const typeMismatchComment = typeMismatch
+    ? `по плану ${plannedTypeLabelForDay(day, plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`
+    : "";
+  const loadComment = plannedLoad ? `факт ${actualLoad} TRIMP против ориентира около ${plannedLoad}` : "";
+  const joinedComment = (...parts) => parts.filter(Boolean).join("; ");
 
   if (!completionActual.length && planTypeRequiresRunning(plannedType)) {
     return {
@@ -1381,18 +1391,7 @@ function evaluatePlanDayExecution(day) {
       keyCompleted: false,
       level: "mismatch",
       label: "есть доп. нагрузка",
-      comment: `по плану ${plannedTypeLabel(plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}; нагрузка учтена в TRIMP, но беговое задание не закрыто`,
-    };
-  }
-
-  if (!typeMatched && plannedType !== "rest") {
-    return {
-      show: true,
-      completed: true,
-      keyCompleted: false,
-      level: "mismatch",
-      label: "другой тип",
-      comment: `по плану ${plannedTypeLabel(plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`,
+      comment: joinedComment(typeMismatchComment || `по плану ${plannedTypeLabelForDay(day, plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`, "нагрузка учтена в TRIMP, но беговое задание не закрыто", loadComment),
     };
   }
 
@@ -1402,8 +1401,8 @@ function evaluatePlanDayExecution(day) {
       completed: true,
       keyCompleted,
       level: "overloaded",
-      label: "сильно тяжелее плана",
-      comment: `факт ${actualLoad} TRIMP против ориентира около ${plannedLoad}`,
+      label: typeMismatch ? "сильно тяжелее + другой тип" : "сильно тяжелее плана",
+      comment: joinedComment(typeMismatchComment, loadComment),
     };
   }
 
@@ -1413,8 +1412,8 @@ function evaluatePlanDayExecution(day) {
       completed: true,
       keyCompleted,
       level: "harder",
-      label: "тяжелее плана",
-      comment: `факт ${actualLoad} TRIMP против ориентира около ${plannedLoad}`,
+      label: typeMismatch ? "тяжелее + другой тип" : "тяжелее плана",
+      comment: joinedComment(typeMismatchComment, loadComment),
     };
   }
 
@@ -1424,8 +1423,19 @@ function evaluatePlanDayExecution(day) {
       completed: true,
       keyCompleted,
       level: "lighter",
-      label: "легче плана",
-      comment: `факт ${actualLoad} TRIMP против ориентира около ${plannedLoad}`,
+      label: typeMismatch ? "легче + другой тип" : "легче плана",
+      comment: joinedComment(typeMismatchComment, loadComment),
+    };
+  }
+
+  if (typeMismatch) {
+    return {
+      show: true,
+      completed: true,
+      keyCompleted: false,
+      level: "mismatch",
+      label: "другой тип",
+      comment: joinedComment(typeMismatchComment, loadComment),
     };
   }
 
@@ -1594,6 +1604,11 @@ function plannedTypeLabel(type) {
 }
 
 function actualTypeLabel(type) {
+  return plannedTypeLabel(type);
+}
+
+function plannedTypeLabelForDay(day, type) {
+  if (planExpectsNoRun(day)) return "восстановление без бега";
   return plannedTypeLabel(type);
 }
 
@@ -3563,11 +3578,16 @@ function actualWorkoutsForPlanDay(day) {
 function planCompletionWorkoutsForDay(day) {
   const actual = actualWorkoutsForPlanDay(day);
   const plannedType = plannedTypeForDay(day);
+  if (planExpectsNoRun(day)) return actual;
   if (plannedType === "rest") return [];
   if (planTypeRequiresRunning(plannedType)) {
     return actual.filter(isRunningWorkout);
   }
   return actual;
+}
+
+function planExpectsNoRun(day) {
+  return assignmentHasNoRun(`${day.plannedWorkout || ""} ${day.details || ""} ${day.targetDistance || ""}`);
 }
 
 function planTypeRequiresRunning(type) {
