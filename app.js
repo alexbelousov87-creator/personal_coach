@@ -53,6 +53,8 @@ const workoutList = document.querySelector("#workoutList");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
 const planJsonInput = document.querySelector("#planJsonInput");
+const planEditModal = document.querySelector("#planEditModal");
+const planEditForm = document.querySelector("#planEditForm");
 const profilePhotoInput = document.querySelector("#profilePhotoInput");
 const profilePhotoPreview = document.querySelector("#profilePhotoPreview");
 const sidebarProfilePhoto = document.querySelector("#sidebarProfilePhoto");
@@ -117,6 +119,15 @@ function wireNavigation() {
   document.querySelector("#exportPlanJson")?.addEventListener("click", exportCurrentPlanJson);
   document.querySelector("#copyPrompt").addEventListener("click", copyPrompt);
   document.querySelector("#clearData").addEventListener("click", clearWorkouts);
+  document.querySelector("#planGrid")?.addEventListener("click", handlePlanGridClick);
+  document.querySelector("#cancelPlanEdit")?.addEventListener("click", closePlanEditModal);
+  planEditModal?.addEventListener("click", (event) => {
+    if (event.target === planEditModal) closePlanEditModal();
+  });
+  planEditForm?.addEventListener("submit", saveEditedPlanDay);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !planEditModal?.hidden) closePlanEditModal();
+  });
 }
 
 function wireImport() {
@@ -1266,13 +1277,16 @@ function renderPlan(plan) {
   const planGrid = document.querySelector("#planGrid");
   renderPlanAnalysis(plan);
   planGrid.innerHTML = plan
-    .map((day) => {
+    .map((day, index) => {
       const status = getPlanDayStatus(day);
       const execution = evaluatePlanDayExecution(day);
       const toneClass = planToneClass(day);
       return `
-        <article class="plan-card ${status.className} eval-${execution.level} ${toneClass}">
-          <time>${day.dateLabel}</time>
+        <article class="plan-card ${status.className} eval-${execution.level} ${toneClass}" data-plan-day-index="${index}">
+          <div class="plan-card-head">
+            <time>${day.dateLabel}</time>
+            <button class="ghost-btn plan-edit-btn" data-edit-plan-day="${index}" type="button" title="Редактировать день">Править</button>
+          </div>
           <div class="plan-status">${status.label}</div>
           <span>${day.focus}</span>
           <strong>${day.title}</strong>
@@ -1347,6 +1361,98 @@ function clearPlanAnalysis(message = "Для выбранной недели н�
   const container = document.querySelector("#planAnalysis");
   if (!container) return;
   container.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
+}
+
+function handlePlanGridClick(event) {
+  const button = event.target.closest("[data-edit-plan-day]");
+  if (!button) return;
+  openPlanDayEditor(Number(button.dataset.editPlanDay));
+}
+
+function openPlanDayEditor(index) {
+  const current = loadCurrentPlan();
+  const day = current?.days?.[index];
+  if (!current || !day || !planEditModal || !planEditForm) {
+    setAiStatus("Для редактирования сначала создайте или загрузите план выбранной недели.", "error");
+    return;
+  }
+
+  planEditForm.elements.dayIndex.value = String(index);
+  planEditForm.elements.focus.value = closestPlanFocusOption(day.focus || "Кросс");
+  planEditForm.elements.title.value = day.title || "";
+  planEditForm.elements.targetDistance.value = day.targetDistance || "";
+  planEditForm.elements.intensity.value = day.intensity || "";
+  planEditForm.elements.plannedWorkout.value = day.plannedWorkout || day.details || "";
+  planEditForm.elements.load.value = day.load || "";
+  planEditForm.elements.rationale.value = day.rationale || "";
+  document.querySelector("#planEditDate").textContent = day.dateLabel || formatDate(day.date);
+  planEditModal.hidden = false;
+  planEditForm.elements.title.focus();
+}
+
+function closePlanEditModal() {
+  if (planEditModal) planEditModal.hidden = true;
+}
+
+function saveEditedPlanDay(event) {
+  event.preventDefault();
+  const current = loadCurrentPlan();
+  const index = Number(planEditForm.elements.dayIndex.value);
+  const original = current?.days?.[index];
+  if (!current || !original || Number.isNaN(index)) {
+    closePlanEditModal();
+    setAiStatus("Не удалось сохранить день: текущий план не найден.", "error");
+    return;
+  }
+
+  const plannedWorkout = planEditForm.elements.plannedWorkout.value.trim();
+  const edited = {
+    ...original,
+    focus: planEditForm.elements.focus.value,
+    title: planEditForm.elements.title.value.trim(),
+    details: plannedWorkout,
+    plannedWorkout,
+    targetDistance: planEditForm.elements.targetDistance.value.trim(),
+    intensity: planEditForm.elements.intensity.value.trim(),
+    load: planEditForm.elements.load.value.trim() || original.load || "умеренная нагрузка",
+    rationale: planEditForm.elements.rationale.value.trim(),
+  };
+  const days = current.days.map((day, dayIndex) =>
+    dayIndex === index ? normalizePlanDay(edited, original, index) : day
+  );
+  const savedPlan = saveCurrentPlan({
+    ...current,
+    summary: markPlanSummaryEdited(current.summary),
+    days,
+  });
+
+  closePlanEditModal();
+  renderAll();
+  renderPlan(savedPlan?.days || days);
+  updatePlanSourceButtons(savedPlan?.source || current.source);
+  setAiStatus("День плана сохранен вручную.", "ok");
+}
+
+function closestPlanFocusOption(value) {
+  const options = [...planEditForm.elements.focus.options].map((option) => option.value);
+  if (options.includes(value)) return value;
+  const type = planTypeFromFocus(value);
+  const mapped = {
+    rest: "Отдых",
+    recovery: "Восстановление",
+    easy: "Кросс",
+    long: "Длительная",
+    tempo: "Темпо",
+    interval: "Интервалы",
+    race: "Гонка",
+    cross: "ОФП",
+  }[type];
+  return options.includes(mapped) ? mapped : "Кросс";
+}
+
+function markPlanSummaryEdited(summary) {
+  const text = String(summary || "").trim() || "План сохранен.";
+  return text.includes("Отредактировано вручную") ? text : `${text} Отредактировано вручную.`;
 }
 
 function showPlanLoading(message = "Идет загрузка плана...") {

@@ -540,6 +540,63 @@
       </main>
     </div>
 
+    <div class="modal-backdrop" id="planEditModal" hidden>
+      <form class="modal-panel plan-edit-form" id="planEditForm">
+        <input name="dayIndex" type="hidden">
+        <div class="panel-head">
+          <div>
+            <h2>Редактировать день</h2>
+            <span id="planEditDate">День плана</span>
+          </div>
+          <button class="ghost-btn" id="cancelPlanEdit" type="button">Отмена</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Тип
+            <select name="focus">
+              <option>Отдых</option>
+              <option>Восстановление</option>
+              <option>Кросс</option>
+              <option>Длительная</option>
+              <option>Темпо</option>
+              <option>Интервалы</option>
+              <option>Активация</option>
+              <option>Гонка</option>
+              <option>Силовая</option>
+              <option>ОФП</option>
+            </select>
+          </label>
+          <label>
+            Заголовок
+            <input name="title" type="text" required>
+          </label>
+          <label>
+            Ориентир
+            <input name="targetDistance" type="text" placeholder="Например: 12-14 км">
+          </label>
+          <label>
+            Интенсивность
+            <input name="intensity" type="text" placeholder="Например: Z2 или RPE 3/10">
+          </label>
+          <label class="wide">
+            Задание
+            <textarea name="plannedWorkout" rows="5" required></textarea>
+          </label>
+          <label>
+            Нагрузка
+            <input name="load" type="text" placeholder="Например: умеренная нагрузка">
+          </label>
+          <label class="wide">
+            Почему так
+            <textarea name="rationale" rows="3"></textarea>
+          </label>
+        </div>
+        <div class="button-row compact-row modal-actions">
+          <button class="primary-btn" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
