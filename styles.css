@@ -1618,6 +1618,42 @@ textarea {
   background: #eef8f2;
 }
 
+.actual-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(36, 132, 90, 0.18);
+}
+
+.actual-group:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.actual-group strong {
+  display: inline-flex;
+  width: fit-content;
+  margin: 0 0 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(36, 132, 90, 0.12);
+  color: var(--good);
+  font-size: 12px;
+}
+
+.actual-group.additional strong {
+  background: rgba(45, 111, 159, 0.12);
+  color: var(--easy);
+}
+
+.actual-group.single strong {
+  background: transparent;
+  padding: 0;
+}
+
+.actual-group p {
+  margin-top: 0;
+}
+
 .plan-execution.matched {
   border-color: rgba(36, 132, 90, 0.28);
   background: #f3faf6;

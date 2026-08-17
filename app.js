@@ -2176,7 +2176,7 @@ function updatePlanSourceButtons(source) {
 
 function renderPlanDayDetails(day) {
   const planned = day.plannedWorkout || day.details || "";
-  const actual = actualWorkoutsForPlanDay(day).map(formatActualWorkout);
+  const actualGroups = groupedActualWorkoutsForPlanDay(day);
   const execution = evaluatePlanDayExecution(day);
   const meta = [
     day.targetDistance ? `Ориентир: ${day.targetDistance}` : "",
@@ -2196,10 +2196,15 @@ function renderPlanDayDetails(day) {
         <p>${escapeHtml(meta.join(" · "))}</p>
       </div>
     ` : ""}
-    ${actual.length ? `
+    ${actualGroups.length ? `
       <div class="plan-section plan-actual">
         <span class="section-label">Факт</span>
-        <p>${actual.map((line) => escapeHtml(line)).join("<br>")}</p>
+        ${actualGroups.map((group) => `
+          <div class="actual-group ${group.kind}">
+            <strong>${escapeHtml(group.label)}</strong>
+            <p>${group.workouts.map((workout) => escapeHtml(formatActualWorkout(workout))).join("<br>")}</p>
+          </div>
+        `).join("")}
       </div>
     ` : ""}
     ${execution.show ? `
@@ -2215,6 +2220,33 @@ function renderPlanDayDetails(day) {
       </div>
     ` : ""}
   `;
+}
+
+function groupedActualWorkoutsForPlanDay(day) {
+  const actual = actualWorkoutsForPlanDay(day);
+  if (!actual.length) return [];
+
+  const credited = planCompletionWorkoutsForDay(day);
+  const creditedKeys = new Set(credited.map(workoutDedupKey));
+  const primary = actual.filter((workout) => creditedKeys.has(workoutDedupKey(workout)));
+  const additional = actual.filter((workout) => !creditedKeys.has(workoutDedupKey(workout)));
+  const groups = [];
+
+  if (primary.length) {
+    groups.push({
+      kind: additional.length ? "primary" : "single",
+      label: additional.length ? "Зачет задания" : "Факт",
+      workouts: primary,
+    });
+  }
+  if (additional.length) {
+    groups.push({
+      kind: "additional",
+      label: "Доп. нагрузка",
+      workouts: additional,
+    });
+  }
+  return groups;
 }
 
 function buildWeekExecutionSummary(plan) {
