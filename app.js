@@ -528,8 +528,10 @@ function normalizeWorkout(input) {
   const trimp = estimateTrimp(durationMin, avgHr, hrMax, hrRest);
   const load = Math.round(importedLoad || trimp || durationMin);
   const loadSource = importedLoad ? "imported" : trimp ? "trimp" : "duration";
-  const paceMinPerKm = input.paceMinPerKm || paceFromSpeed(avgSpeed) || null;
-  const paceSource = paceMinPerKm ? "imported" : "";
+  const paceFromImportedDistance = paceFromDistanceDuration(distanceKm, durationMin);
+  const paceFromImportedSpeed = paceFromSpeed(avgSpeed);
+  const paceMinPerKm = input.paceMinPerKm || paceFromImportedDistance || paceFromImportedSpeed || null;
+  const paceSource = input.paceMinPerKm ? "imported" : paceFromImportedDistance ? "distance-duration" : paceFromImportedSpeed ? "speed" : "";
   const isoDate = date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
   const sport = String(input.sport || "Другое").trim();
   return {
@@ -3267,8 +3269,15 @@ function paceFromAny(value) {
 function paceFromSpeed(speed) {
   const value = numberOrNull(speed);
   if (!value) return null;
-  const kmh = value <= 12 ? value * 3.6 : value;
+  const kmh = value <= 7 ? value * 3.6 : value;
   return kmh > 0 ? round(60 / kmh, 2) : null;
+}
+
+function paceFromDistanceDuration(distanceKm, durationMin) {
+  const distance = numberOrNull(distanceKm);
+  const duration = numberOrNull(durationMin);
+  if (!distance || !duration) return null;
+  return round(duration / distance, 2);
 }
 
 function kmFromAny(value) {
