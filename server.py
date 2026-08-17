@@ -60,6 +60,7 @@ DEFAULT_CONFIG = {
             "chatIdEnv": "TELEGRAM_CHAT_ID",
             "dailyTime": "08:00",
             "sendOnRestDays": True,
+            "removeKeyboard": True,
         },
     },
 }
@@ -416,6 +417,7 @@ def telegram_notification_config():
         "chat_id": telegram.get("chatId") or os.environ.get(telegram.get("chatIdEnv", "TELEGRAM_CHAT_ID"), ""),
         "daily_time": telegram.get("dailyTime", "08:00"),
         "send_on_rest_days": bool(telegram.get("sendOnRestDays", True)),
+        "remove_keyboard": bool(telegram.get("removeKeyboard", True)),
     }
 
 
@@ -457,7 +459,7 @@ def send_daily_assignment_notification(force=False):
         return {"ok": False, "skipped": "rest day"}
 
     text = format_daily_assignment_message(plan_day)
-    send_telegram_message(telegram["bot_token"], telegram["chat_id"], text)
+    send_telegram_message(telegram["bot_token"], telegram["chat_id"], text, remove_keyboard=telegram["remove_keyboard"])
     if not force:
         save_state_value("dailyNotificationLastSent", today_key)
     return {"ok": True, "message": text}
@@ -555,15 +557,15 @@ def format_daily_assignment_message(day):
     return "\n".join(lines)
 
 
-def send_telegram_message(bot_token, chat_id, text):
-    data = json.dumps(
-        {
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": True,
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
+def send_telegram_message(bot_token, chat_id, text, remove_keyboard=True):
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if remove_keyboard:
+        payload["reply_markup"] = {"remove_keyboard": True}
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     http_json(url, method="POST", data=data, headers=headers)
