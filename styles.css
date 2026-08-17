@@ -788,49 +788,72 @@ textarea {
   background: #fff0f0;
 }
 
-.plan-card.upcoming[class*="plan-tone-"],
-.plan-card.today[class*="plan-tone-"] {
+.plan-card[class*="plan-tone-"] {
   border-left-width: 6px;
   border-left-color: var(--plan-tone);
 }
 
-.plan-card.upcoming.plan-tone-recovery {
+.plan-card.plan-tone-recovery {
   --plan-tone: var(--tone-recovery);
+}
+
+.plan-card.plan-tone-easy {
+  --plan-tone: var(--tone-easy);
+}
+
+.plan-card.plan-tone-long {
+  --plan-tone: var(--tone-long);
+}
+
+.plan-card.plan-tone-threshold {
+  --plan-tone: var(--tone-threshold);
+}
+
+.plan-card.plan-tone-10k {
+  --plan-tone: var(--tone-10k);
+}
+
+.plan-card.plan-tone-5k {
+  --plan-tone: var(--tone-5k);
+}
+
+.plan-card.plan-tone-vo2 {
+  --plan-tone: var(--tone-vo2);
+}
+
+.plan-card.plan-tone-sprint {
+  --plan-tone: var(--tone-sprint);
+}
+
+.plan-card.upcoming.plan-tone-recovery {
   background: #f2fbfc;
 }
 
 .plan-card.upcoming.plan-tone-easy {
-  --plan-tone: var(--tone-easy);
   background: #f3faf6;
 }
 
 .plan-card.upcoming.plan-tone-long {
-  --plan-tone: var(--tone-long);
   background: #f2f7fc;
 }
 
 .plan-card.upcoming.plan-tone-threshold {
-  --plan-tone: var(--tone-threshold);
   background: #fff9eb;
 }
 
 .plan-card.upcoming.plan-tone-10k {
-  --plan-tone: var(--tone-10k);
   background: #fff5ef;
 }
 
 .plan-card.upcoming.plan-tone-5k {
-  --plan-tone: var(--tone-5k);
   background: #fff3f6;
 }
 
 .plan-card.upcoming.plan-tone-vo2 {
-  --plan-tone: var(--tone-vo2);
   background: #f7f4ff;
 }
 
 .plan-card.upcoming.plan-tone-sprint {
-  --plan-tone: var(--tone-sprint);
   background: #f3f4f6;
 }
 

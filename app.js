@@ -863,7 +863,7 @@ function renderPlan(plan) {
     .map((day) => {
       const status = getPlanDayStatus(day);
       const execution = evaluatePlanDayExecution(day);
-      const toneClass = planToneClass(day, status, execution);
+      const toneClass = planToneClass(day);
       return `
         <article class="plan-card ${status.className} eval-${execution.level} ${toneClass}">
           <time>${day.dateLabel}</time>
@@ -1456,8 +1456,7 @@ function plannedTypeForDay(day) {
   return focusType || assignmentType || "easy";
 }
 
-function planToneClass(day, status, execution) {
-  if (!["upcoming", "today"].includes(status.className) || execution.completed) return "";
+function planToneClass(day) {
   return `plan-tone-${plannedIntensityTone(day)}`;
 }
 
