@@ -61,6 +61,9 @@ DEFAULT_CONFIG = {
             "dailyTime": "08:00",
             "sendOnRestDays": True,
             "removeKeyboard": True,
+            "showTodayButton": True,
+            "todayButtonText": "Получить план на сегодня",
+            "pollCommands": True,
         },
     },
 }
@@ -406,6 +409,7 @@ def notification_status():
         "dailyTime": telegram["daily_time"],
         "lastSent": load_state_value("dailyNotificationLastSent", ""),
         "hasTodayAssignment": bool(plan_day),
+        "todayButton": telegram["today_button_text"] if telegram["show_today_button"] else "",
     }
 
 
@@ -418,6 +422,9 @@ def telegram_notification_config():
         "daily_time": telegram.get("dailyTime", "08:00"),
         "send_on_rest_days": bool(telegram.get("sendOnRestDays", True)),
         "remove_keyboard": bool(telegram.get("removeKeyboard", True)),
+        "show_today_button": bool(telegram.get("showTodayButton", True)),
+        "today_button_text": str(telegram.get("todayButtonText") or "Получить план на сегодня").strip() or "Получить план на сегодня",
+        "poll_commands": bool(telegram.get("pollCommands", True)),
     }
 
 
@@ -427,6 +434,9 @@ def start_notification_worker():
         return
     thread = threading.Thread(target=notification_worker_loop, name="daily-notifications", daemon=True)
     thread.start()
+    if telegram["bot_token"] and telegram["chat_id"] and telegram["poll_commands"]:
+        command_thread = threading.Thread(target=telegram_command_worker_loop, name="telegram-commands", daemon=True)
+        command_thread.start()
 
 
 def notification_worker_loop():
@@ -436,6 +446,15 @@ def notification_worker_loop():
         except Exception as exc:
             print(f"Daily notification error: {exc}")
         time.sleep(60)
+
+
+def telegram_command_worker_loop():
+    while True:
+        try:
+            poll_telegram_updates()
+        except Exception as exc:
+            print(f"Telegram command error: {exc}")
+            time.sleep(10)
 
 
 def send_daily_assignment_notification(force=False):
@@ -459,7 +478,12 @@ def send_daily_assignment_notification(force=False):
         return {"ok": False, "skipped": "rest day"}
 
     text = format_daily_assignment_message(plan_day)
-    send_telegram_message(telegram["bot_token"], telegram["chat_id"], text, remove_keyboard=telegram["remove_keyboard"])
+    send_telegram_message(
+        telegram["bot_token"],
+        telegram["chat_id"],
+        text,
+        reply_markup=telegram_reply_markup(telegram),
+    )
     if not force:
         save_state_value("dailyNotificationLastSent", today_key)
     return {"ok": True, "message": text}
@@ -557,18 +581,88 @@ def format_daily_assignment_message(day):
     return "\n".join(lines)
 
 
-def send_telegram_message(bot_token, chat_id, text, remove_keyboard=True):
+def telegram_reply_markup(telegram):
+    if telegram.get("show_today_button"):
+        return {
+            "keyboard": [[{"text": telegram["today_button_text"]}]],
+            "resize_keyboard": True,
+            "one_time_keyboard": False,
+            "is_persistent": True,
+        }
+    if telegram.get("remove_keyboard"):
+        return {"remove_keyboard": True}
+    return None
+
+
+def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
     payload = {
         "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
     }
-    if remove_keyboard:
-        payload["reply_markup"] = {"remove_keyboard": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     http_json(url, method="POST", data=data, headers=headers)
+
+
+def poll_telegram_updates():
+    telegram = telegram_notification_config()
+    if not telegram["enabled"] or not telegram["poll_commands"] or not telegram["bot_token"] or not telegram["chat_id"]:
+        time.sleep(10)
+        return
+
+    params = {
+        "timeout": 25,
+        "allowed_updates": json.dumps(["message"]),
+    }
+    offset = int(load_state_value("telegramUpdateOffset", 0) or 0)
+    if offset:
+        params["offset"] = offset
+    url = f"https://api.telegram.org/bot{telegram['bot_token']}/getUpdates?{urlencode(params)}"
+    payload = http_json(url)
+    updates = payload.get("result") if isinstance(payload, dict) else []
+    if not isinstance(updates, list):
+        return
+
+    last_update_id = None
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            last_update_id = update_id if last_update_id is None else max(last_update_id, update_id)
+        handle_telegram_update(update, telegram)
+
+    if last_update_id is not None:
+        save_state_value("telegramUpdateOffset", last_update_id + 1)
+
+
+def handle_telegram_update(update, telegram):
+    message = update.get("message") if isinstance(update.get("message"), dict) else {}
+    text = str(message.get("text") or "").strip()
+    chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+    chat_id = str(chat.get("id") or "")
+    if not text or chat_id != str(telegram["chat_id"]):
+        return
+
+    commands = {telegram["today_button_text"].strip().lower(), "/today", "/plan", "/start"}
+    if text.lower() not in commands:
+        return
+
+    plan_day = get_today_plan_day()
+    if plan_day:
+        response = format_daily_assignment_message(plan_day)
+    else:
+        response = "На сегодня нет сохраненного плана. Откройте приложение и создайте или загрузите план на текущую неделю."
+    send_telegram_message(
+        telegram["bot_token"],
+        telegram["chat_id"],
+        response,
+        reply_markup=telegram_reply_markup(telegram),
+    )
 
 
 def polar_status():
