@@ -1000,14 +1000,15 @@ def http_json(url, method="GET", data=None, headers=None):
 def http_bytes(url, method="GET", data=None, headers=None):
     timeout = int(POLAR_CONFIG.get("timeoutSeconds", 45))
     req = request.Request(url, data=data, method=method, headers=headers or {})
+    service_name = "Telegram API" if "api.telegram.org" in url else "Polar API"
     try:
         with request.urlopen(req, timeout=timeout) as response:
             return response.read()
     except error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
-        raise AppError(f"Polar API error {exc.code}: {details}", exc.code)
+        raise AppError(f"{service_name} error {exc.code}: {details}", exc.code)
     except error.URLError as exc:
-        raise AppError(f"failed to connect to Polar API: {exc.reason}", 502)
+        raise AppError(f"failed to connect to {service_name}: {exc.reason}", 502)
 
 
 def polar_callback_html(payload):
