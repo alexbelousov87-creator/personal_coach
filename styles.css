@@ -961,6 +961,55 @@ textarea {
   font-size: 14px;
 }
 
+.template-library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.template-item {
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--tone-color, var(--accent-2));
+  border-radius: 8px;
+  background: var(--tone-bg, #fbfcfd);
+}
+
+.template-item strong,
+.template-item small {
+  display: block;
+}
+
+.template-item p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.template-item small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.template-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: end;
+}
+
+.template-tags span {
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .intensity-scale {
   display: grid;
   grid-template-columns: repeat(8, minmax(96px, 1fr));

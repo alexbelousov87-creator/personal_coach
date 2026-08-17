@@ -639,6 +639,7 @@ function renderAll() {
   renderBars();
   renderWeekComparison();
   renderProfileHrZones();
+  renderWorkoutTemplateLibrary();
   renderPlanWeekLabel();
   document.querySelector("#storageCount").textContent = formatCount(state.workouts.length);
 }
@@ -743,6 +744,29 @@ function renderProfileHrZones() {
     </div>
     ${renderHeartRateZoneStrip()}
   `;
+}
+
+function renderWorkoutTemplateLibrary() {
+  const container = document.querySelector("#templateLibrary");
+  if (!container) return;
+  const templates = workoutTemplateLibrary();
+  container.innerHTML = templates
+    .map((template) => `
+      <article class="template-item ${template.toneClass}">
+        <div>
+          <span class="section-label">${escapeHtml(template.type)}</span>
+          <strong>${escapeHtml(template.name)}</strong>
+        </div>
+        <p>${escapeHtml(template.structure)}</p>
+        <small>${escapeHtml(template.useWhen)}</small>
+        <small>${escapeHtml(template.constraints)}</small>
+        <div class="template-tags">
+          ${template.targets.map((target) => `<span>${escapeHtml(target)}</span>`).join("")}
+          ${template.phases.map((phase) => `<span>${escapeHtml(phase)}</span>`).join("")}
+        </div>
+      </article>
+    `)
+    .join("");
 }
 
 function renderTodayPlan() {
@@ -3220,6 +3244,7 @@ function buildAiRequest() {
       previous7DaysLoad: sumLoadRange(8, 14),
       recentWorkouts: recent,
       workoutReference: workoutReferenceForPlanning(),
+      workoutTemplates: workoutTemplateLibrary().map(({ toneClass, ...template }) => template),
       workoutAccountingRules: [
         "Все импортированные активности учитывай как нагрузку и фактор восстановления.",
         "Беговые задания плана закрываются только беговыми тренировками.",
@@ -3274,6 +3299,8 @@ function buildAiRequest() {
       ],
       workoutSpecificationRules: [
         "Используй context.workoutReference как словарь терминов: не смешивай темповую работу, порог, интервалы, VO2max, strides и спринт.",
+        "Используй context.workoutTemplates как библиотеку типовых тренировок: выбирай подходящие шаблоны и адаптируй объем/интенсивность под цель, этап и состояние спортсмена.",
+        "Если задание заметно отходит от шаблона библиотеки, объясни это в rationale.",
         "details/plannedWorkout должны содержать только задание на тренировку, а не факт выполнения",
         "не возвращай поле actualWorkout и не пиши факт выполнения в details, plannedWorkout или rationale; факт приложение покажет само из импортированных тренировок",
         "для интервальной тренировки details/plannedWorkout должен содержать: разминка; N x дистанция или время отрезка; целевая интенсивность; восстановление между отрезками; заминка",
@@ -3325,6 +3352,132 @@ function workoutReferenceForPlanning() {
     },
     heartRateCaveat: "Не используй пульсовые зоны как основной контроль коротких ускорений, strides, спринтов и коротких интервалов из-за запаздывания реакции ЧСС.",
   };
+}
+
+function workoutTemplateLibrary() {
+  return [
+    {
+      id: "recovery-run",
+      type: "восстановление",
+      name: "Восстановительный бег или отдых",
+      targets: ["5 км", "10 км", "21 км", "42 км"],
+      phases: ["base", "speed", "specific", "taper", "recovery"],
+      structure: "Отдых либо 20-45 минут очень легко в Z1-Z2, без ускорений и без контроля темпа.",
+      useWhen: "После тяжелой работы, гонки, длительной или при признаках накопленной усталости.",
+      constraints: "Не закрывает ключевую работу; при усталости лучше выбрать отдых.",
+      toneClass: "tone-recovery",
+    },
+    {
+      id: "easy-run",
+      type: "кросс",
+      name: "Легкий аэробный кросс",
+      targets: ["5 км", "10 км", "21 км", "42 км"],
+      phases: ["base", "speed", "specific", "taper"],
+      structure: "35-75 минут легко в Z2, разговорный темп, ровно; опционально 4-6 x 15 секунд strides при свежих ногах.",
+      useWhen: "Для набора объема между ключевыми стимулами и поддержания аэробной базы.",
+      constraints: "Не превращать в скрытую темповую работу; strides не делать при усталости.",
+      toneClass: "tone-easy",
+    },
+    {
+      id: "threshold-tempo",
+      type: "темповая",
+      name: "Пороговая темповая работа",
+      targets: ["10 км", "21 км", "42 км"],
+      phases: ["base", "speed", "specific"],
+      structure: "Разминка 15 минут + 2-4 x 8-15 минут в Z4/RPE 6-7, восстановление 3-5 минут легко, заминка 10-15 минут.",
+      useWhen: "Когда нужна устойчивость на контролируемо тяжелом усилии без VO2max-нагрузки.",
+      constraints: "Не ставить ближе 48 часов к полноценным интервалам, если нет явной причины.",
+      toneClass: "tone-threshold",
+    },
+    {
+      id: "race-pace-block",
+      type: "специфическая",
+      name: "Блок в целевом соревновательном усилии",
+      targets: ["10 км", "21 км", "42 км"],
+      phases: ["specific", "taper"],
+      structure: "Разминка 15 минут, затем 20-50 минут суммарно в целевом усилии дистанции блоками, восстановление легко, заминка 10 минут.",
+      useWhen: "В специфическом этапе, чтобы связать аэробный объем с целевым усилием гонки.",
+      constraints: "В taper резко сокращать объем; не добавлять темповый финиш перед длительной без причины.",
+      toneClass: "tone-10k",
+    },
+    {
+      id: "10k-intervals",
+      type: "интервалы",
+      name: "Длинные интервалы под 10 км",
+      targets: ["5 км", "10 км", "21 км"],
+      phases: ["speed", "specific"],
+      structure: "Разминка 15-20 минут + 4 x 15 секунд свободно; затем 4-6 x 1000 м или 4-6 x 3-4 минуты в усилии 10 км, восстановление 2-3 минуты легко, заминка 10-15 минут.",
+      useWhen: "Для развития скорости, экономичности и способности держать контролируемо высокое усилие.",
+      constraints: "Не делать как спринт; при распаде техники сокращать количество повторов.",
+      toneClass: "tone-10k",
+    },
+    {
+      id: "vo2max-short-intervals",
+      type: "интервалы",
+      name: "VO2max / короткие интервалы",
+      targets: ["5 км", "10 км"],
+      phases: ["speed"],
+      structure: "Разминка 15-20 минут; затем 8-12 x 1-2 минуты в усилии 5 км/VO2max, восстановление 1-2 минуты легко, заминка 10-15 минут.",
+      useWhen: "Для коротких целей и этапа развития скорости, если восстановление позволяет.",
+      constraints: "Не ставить в неделю с перегрузом; пульс не главный контроль из-за запаздывания ЧСС.",
+      toneClass: "tone-vo2",
+    },
+    {
+      id: "hill-repeats",
+      type: "горки",
+      name: "Бег в гору",
+      targets: ["5 км", "10 км", "21 км", "42 км"],
+      phases: ["base", "speed"],
+      structure: "Разминка 15 минут; затем 8-12 x 20-60 секунд в подъем технично и мощно, спуск/трусца до восстановления, заминка 10 минут.",
+      useWhen: "Для силы, техники и экономичности без жесткой привязки к темпу.",
+      constraints: "Не выполнять максимально; не ставить накануне тяжелой работы или длительной.",
+      toneClass: "tone-5k",
+    },
+    {
+      id: "fartlek",
+      type: "фартлек",
+      name: "Контролируемый фартлек",
+      targets: ["5 км", "10 км", "21 км"],
+      phases: ["base", "speed", "specific"],
+      structure: "45-70 минут всего: после разминки 8-12 чередований 1-3 минуты бодро / 1-3 минуты легко, заминка легко.",
+      useWhen: "Когда нужен развивающий стимул без жесткой дорожки и точных отрезков.",
+      constraints: "Быстрые части контролируемые; не превращать в гонку.",
+      toneClass: "tone-threshold",
+    },
+    {
+      id: "long-run",
+      type: "длительная",
+      name: "Длительная легкая",
+      targets: ["10 км", "21 км", "42 км"],
+      phases: ["base", "specific"],
+      structure: "75-150 минут преимущественно в Z2; для марафона длительная обычно не короче 100 минут, с питанием/питьем каждые 30-40 минут.",
+      useWhen: "Для развития аэробной выносливости и устойчивости к длительной работе.",
+      constraints: "Не добавлять финишное темпо при признаках усталости или после тяжелой недели.",
+      toneClass: "tone-long",
+    },
+    {
+      id: "long-run-with-block",
+      type: "длительная",
+      name: "Длительная с целевым блоком",
+      targets: ["21 км", "42 км"],
+      phases: ["specific"],
+      structure: "90-150 минут: основа Z2, внутри или ближе к концу 20-45 минут суммарно в целевом усилии 21/42 км, без рывков.",
+      useWhen: "В специфическом этапе при хорошей переносимости предыдущей нагрузки.",
+      constraints: "Не ставить после перегруза; следующий день восстановительный.",
+      toneClass: "tone-long",
+    },
+    {
+      id: "strength-mobility",
+      type: "дополнительно",
+      name: "Силовая / ОФП / мобилити",
+      targets: ["5 км", "10 км", "21 км", "42 км"],
+      phases: ["base", "speed", "specific", "recovery"],
+      structure: "20-45 минут: корпус, ягодичные, стопа, баланс, мобилити; 2-4 упражнения по 2-4 подхода без отказа.",
+      useWhen: "Для устойчивости, профилактики перегруза и поддержки техники.",
+      constraints: "Не ставить тяжелую силовую накануне ключевой беговой работы или длительной.",
+      toneClass: "tone-recovery",
+    },
+  ];
 }
 
 function buildPlanningWeek() {
