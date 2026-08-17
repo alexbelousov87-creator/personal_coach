@@ -624,6 +624,11 @@ textarea {
   background: #fbfcfd;
 }
 
+.reference-item.hr-zone-item {
+  border-top: 6px solid var(--tone-color);
+  background: var(--tone-bg);
+}
+
 .reference-item strong {
   display: block;
   margin-bottom: 8px;
@@ -701,6 +706,16 @@ textarea {
 
 .reference-notes p {
   max-width: 980px;
+}
+
+.reference-note-callout {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(17, 106, 123, 0.22);
+  border-radius: 8px;
+  background: #f2f8fa;
+  color: var(--accent-2);
+  line-height: 1.45;
 }
 
 .compact-head {
