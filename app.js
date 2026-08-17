@@ -1176,9 +1176,15 @@ function adjustPlanLocally() {
     days: buildPlan(),
   };
   const adjustedDays = adjustRemainingPlanDays(current.days);
+  const changeLog = appendPlanChangeLog(
+    current.changeLog,
+    buildPlanAdjustmentChanges(current.days, adjustedDays, "local-adjust", "Локальная корректировка")
+  );
   const savedPlan = saveCurrentPlan({
     ...current,
     summary: current.summary || "План скорректирован по факту выполненных тренировок.",
+    updatedAt: new Date().toISOString(),
+    changeLog,
     days: adjustedDays,
   });
   renderPlan(savedPlan?.days || adjustedDays);
@@ -1193,9 +1199,13 @@ function autoAdjustActiveLocalPlanIfNeeded() {
   const current = getCurrentWeekPlan("local");
   if (!current) return;
   const adjustedDays = adjustRemainingPlanDays(current.days);
+  const adjustmentChanges = buildPlanAdjustmentChanges(current.days, adjustedDays, "auto-adjust", "Автокорректировка");
+  if (!adjustmentChanges.length) return;
   saveCurrentPlan({
     ...current,
     summary: current.summary || "Локальный план автоматически скорректирован по факту.",
+    updatedAt: new Date().toISOString(),
+    changeLog: appendPlanChangeLog(current.changeLog, adjustmentChanges),
     days: adjustedDays,
   });
 }
@@ -1276,6 +1286,7 @@ function softenAfterHeavyActual(days, evaluations, target, today) {
 function renderPlan(plan) {
   const planGrid = document.querySelector("#planGrid");
   renderPlanAnalysis(plan);
+  renderPlanChangeLog(loadCurrentPlan());
   planGrid.innerHTML = plan
     .map((day, index) => {
       const status = getPlanDayStatus(day);
@@ -1357,6 +1368,51 @@ function renderPlanControl(summary) {
   `;
 }
 
+function renderPlanChangeLog(planState) {
+  const container = document.querySelector("#planChangeLog");
+  if (!container) return;
+  const items = normalizePlanChangeLog(planState?.changeLog).slice(0, 8);
+  if (!items.length) {
+    container.innerHTML = `
+      <div class="panel-head compact-head">
+        <div>
+          <h2>История изменений</h2>
+          <span>для выбранного плана пока нет ручных или локальных правок</span>
+        </div>
+      </div>
+      <div class="empty">Изменения появятся здесь после редактирования дня или локальной корректировки плана.</div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="panel-head compact-head">
+      <div>
+        <h2>История изменений</h2>
+        <span>${items.length} последних записей по выбранному плану</span>
+      </div>
+    </div>
+    <div class="change-log-list">
+      ${items.map((item) => `
+        <article class="change-log-item">
+          <div>
+            <strong>${escapeHtml(item.title)}</strong>
+            <span>${escapeHtml(formatChangeLogDate(item.timestamp))}${item.dayLabel ? ` · ${escapeHtml(item.dayLabel)}` : ""}</span>
+          </div>
+          <p>${escapeHtml(item.details)}</p>
+          ${item.fields?.length ? `<small>${escapeHtml(item.fields.join(", "))}</small>` : ""}
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function clearPlanChangeLog(message = "Для выбранной недели нет журнала изменений.") {
+  const container = document.querySelector("#planChangeLog");
+  if (!container) return;
+  container.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
+}
+
 function clearPlanAnalysis(message = "Для выбранной недели нет плана для анализа.") {
   const container = document.querySelector("#planAnalysis");
   if (!container) return;
@@ -1417,12 +1473,14 @@ function saveEditedPlanDay(event) {
     load: planEditForm.elements.load.value.trim() || original.load || "умеренная нагрузка",
     rationale: planEditForm.elements.rationale.value.trim(),
   };
-  const days = current.days.map((day, dayIndex) =>
-    dayIndex === index ? normalizePlanDay(edited, original, index) : day
-  );
+  const editedDay = normalizePlanDay(edited, original, index);
+  const change = buildManualPlanChange(original, editedDay);
+  const days = current.days.map((day, dayIndex) => (dayIndex === index ? editedDay : day));
   const savedPlan = saveCurrentPlan({
     ...current,
     summary: markPlanSummaryEdited(current.summary),
+    updatedAt: new Date().toISOString(),
+    changeLog: change ? appendPlanChangeLog(current.changeLog, change) : normalizePlanChangeLog(current.changeLog),
     days,
   });
 
@@ -1455,11 +1513,99 @@ function markPlanSummaryEdited(summary) {
   return text.includes("Отредактировано вручную") ? text : `${text} Отредактировано вручную.`;
 }
 
+function normalizePlanChangeLog(changeLog) {
+  if (!Array.isArray(changeLog)) return [];
+  return changeLog
+    .map((item) => ({
+      timestamp: item?.timestamp || new Date().toISOString(),
+      type: item?.type || "change",
+      title: String(item?.title || "Изменение плана").slice(0, 120),
+      details: String(item?.details || "").slice(0, 260),
+      dayDate: item?.dayDate || "",
+      dayLabel: item?.dayLabel || "",
+      fields: Array.isArray(item?.fields) ? item.fields.map(String).slice(0, 8) : [],
+    }))
+    .filter((item) => item.details || item.fields.length)
+    .slice(0, 40);
+}
+
+function appendPlanChangeLog(existing, entries) {
+  const current = normalizePlanChangeLog(existing);
+  const nextEntries = normalizePlanChangeLog(Array.isArray(entries) ? entries : [entries]);
+  return [...nextEntries, ...current].slice(0, 40);
+}
+
+function buildManualPlanChange(original, edited) {
+  const changedFields = changedPlanDayFields(original, edited);
+  if (!changedFields.length) return null;
+  return {
+    timestamp: new Date().toISOString(),
+    type: "manual-edit",
+    title: "Ручная правка дня",
+    details: `${edited.dayLabel || formatDate(edited.date)}: ${edited.focus || "План"} - ${edited.title || "тренировка"}`,
+    dayDate: edited.date || "",
+    dayLabel: edited.dayLabel || original.dateLabel || "",
+    fields: changedFields,
+  };
+}
+
+function buildPlanAdjustmentChanges(beforeDays, afterDays, type, title) {
+  return afterDays
+    .map((day, index) => {
+      const original = beforeDays[index];
+      if (!original) return null;
+      const changedFields = changedPlanDayFields(original, day);
+      if (!changedFields.length) return null;
+      return {
+        timestamp: new Date().toISOString(),
+        type,
+        title,
+        details: `${day.dateLabel || formatDate(day.date)}: ${day.focus || "План"} - ${day.title || "тренировка"}`,
+        dayDate: day.date || "",
+        dayLabel: day.dateLabel || "",
+        fields: changedFields,
+      };
+    })
+    .filter(Boolean);
+}
+
+function changedPlanDayFields(before, after) {
+  const fields = [
+    ["focus", "тип"],
+    ["title", "заголовок"],
+    ["plannedWorkout", "задание"],
+    ["targetDistance", "ориентир"],
+    ["intensity", "интенсивность"],
+    ["load", "нагрузка"],
+    ["rationale", "почему так"],
+  ];
+  return fields
+    .filter(([key]) => planDayFieldValue(before, key) !== planDayFieldValue(after, key))
+    .map(([, label]) => label);
+}
+
+function planDayFieldValue(day, key) {
+  if (key === "plannedWorkout") return String(day?.plannedWorkout || day?.details || "").trim();
+  return String(day?.[key] || "").trim();
+}
+
+function formatChangeLogDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function showPlanLoading(message = "Идет загрузка плана...") {
   const planGrid = document.querySelector("#planGrid");
   const weekStart = selectedWeekStartDate();
   const placeholders = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   clearPlanAnalysis("Идет загрузка плана и проверка выполненных тренировок.");
+  clearPlanChangeLog("Журнал изменений появится после загрузки плана.");
   planGrid.innerHTML = placeholders
     .map(
       (date) => `
@@ -1498,6 +1644,7 @@ function restoreCurrentPlanOrGenerate() {
 function showNoSavedPlanForWeek() {
   const planGrid = document.querySelector("#planGrid");
   clearPlanAnalysis();
+  clearPlanChangeLog();
   planGrid.innerHTML = `
     <div class="empty">
       Для выбранной недели нет сохраненного плана. Можно создать локальный план, загрузить JSON или сформировать план от ИИ.
@@ -1552,7 +1699,9 @@ function normalizeStoredPlan(planState) {
       summary: normalized.summary,
       modelUsed: normalized.modelUsed || planState.modelUsed || "",
       savedAt: planState.savedAt || new Date().toISOString(),
+      updatedAt: planState.updatedAt || planState.savedAt || new Date().toISOString(),
       weekStart: normalized.days[0]?.date || "",
+      changeLog: normalizePlanChangeLog(planState.changeLog),
       days: normalized.days,
     };
   } catch {
@@ -1630,7 +1779,9 @@ function normalizeStoredPlanForWeek(planState, weekKey) {
       summary: normalized.summary,
       modelUsed: normalized.modelUsed || planState.modelUsed || "",
       savedAt: planState.savedAt || new Date().toISOString(),
+      updatedAt: planState.updatedAt || planState.savedAt || new Date().toISOString(),
       weekStart: weekKey,
+      changeLog: normalizePlanChangeLog(planState.changeLog),
       days: normalized.days,
     };
   } catch {
@@ -2457,7 +2608,9 @@ async function handlePlanJsonFile(event) {
     const rawPlan = parsePlanJsonText(await file.text());
     const plan = normalizeAiPlan(rawPlan.plan || rawPlan);
     const planWeekKey = weekKeyFromPlanDays(plan.days);
-    const replacingExistingPlan = Boolean(weekPlans(planWeekKey || selectedWeekKey()).sources?.json);
+    const targetWeekKey = planWeekKey || selectedWeekKey();
+    const existingJsonPlan = normalizeStoredPlanForWeek(weekPlans(targetWeekKey).sources?.json, targetWeekKey);
+    const replacingExistingPlan = Boolean(existingJsonPlan);
     if (planWeekKey && planWeekKey !== selectedWeekKey()) {
       state.selectedWeekStart = planWeekKey;
       saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
@@ -2467,6 +2620,16 @@ async function handlePlanJsonFile(event) {
       source: "json",
       summary: plan.summary,
       modelUsed: plan.modelUsed,
+      updatedAt: new Date().toISOString(),
+      changeLog: replacingExistingPlan
+        ? appendPlanChangeLog(existingJsonPlan.changeLog, {
+          timestamp: new Date().toISOString(),
+          type: "json-reload",
+          title: "План из JSON заменен",
+          details: `Загружена новая версия плана на неделю ${targetWeekKey}.`,
+          fields: ["весь план"],
+        })
+        : [],
       days: plan.days,
     });
     renderPlan(savedPlan?.days || plan.days);

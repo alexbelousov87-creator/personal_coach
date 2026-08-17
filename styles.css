@@ -1131,6 +1131,44 @@ textarea {
   background: #fff3f3;
 }
 
+.plan-change-log {
+  margin-bottom: 18px;
+}
+
+.change-log-list {
+  display: grid;
+  gap: 8px;
+}
+
+.change-log-item {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1fr) minmax(120px, 0.35fr);
+  gap: 12px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.change-log-item strong,
+.change-log-item span,
+.change-log-item small {
+  display: block;
+}
+
+.change-log-item span,
+.change-log-item small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.change-log-item p {
+  margin: 0;
+  font-size: 14px;
+}
+
 .plan-card {
   min-height: 230px;
   padding: 16px;
@@ -1533,6 +1571,7 @@ textarea {
 
   .week-row,
   .week-row.head,
+  .change-log-item,
   .hr-zone-settings-head,
   .today-plan-grid,
   .hr-zone-boundaries {
