@@ -2202,6 +2202,7 @@ function renderPlanDayDetails(day) {
   const planned = day.plannedWorkout || day.details || "";
   const actualGroups = groupedActualWorkoutsForPlanDay(day);
   const execution = evaluatePlanDayExecution(day);
+  const executionDetails = planExecutionDetails(day, execution);
   const meta = [
     day.targetDistance ? `Ориентир: ${day.targetDistance}` : "",
     day.intensity ? `Интенсивность: ${day.intensity}` : "",
@@ -2235,6 +2236,12 @@ function renderPlanDayDetails(day) {
       <div class="plan-section plan-execution ${execution.level}">
         <span class="section-label">Оценка</span>
         <p><strong>${escapeHtml(execution.label)}</strong> · ${escapeHtml(execution.comment)}</p>
+        ${executionDetails.length ? `
+          <details class="execution-more">
+            <summary>Подробнее</summary>
+            <ul>${executionDetails.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </details>
+        ` : ""}
       </div>
     ` : ""}
     ${day.rationale ? `
@@ -2244,6 +2251,40 @@ function renderPlanDayDetails(day) {
       </div>
     ` : ""}
   `;
+}
+
+function planExecutionDetails(day, execution) {
+  if (!execution?.show) return [];
+  const actual = actualWorkoutsForPlanDay(day);
+  const completionActual = planCompletionWorkoutsForDay(day);
+  const plannedType = plannedTypeForDay(day);
+  const actualTypes = [...new Set(actual.map(getWorkoutType))];
+  const actualLoad = Math.round(actual.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0));
+  const plannedLoad = Math.round(plannedLoadScoreForDay(day));
+  const items = [
+    `Плановый тип: ${plannedTypeLabelForDay(day, plannedType)}.`,
+  ];
+
+  if (actual.length) {
+    items.push(`Фактические типы: ${actualTypes.map(actualTypeLabel).join(", ")}.`);
+    items.push(`Фактическая нагрузка: ${actualLoad} TRIMP.`);
+  }
+
+  if (plannedLoad) {
+    items.push(`Плановый ориентир нагрузки: около ${plannedLoad} TRIMP.`);
+    items.push(`Допуск оценки: легче < ${Math.round(plannedLoad * 0.55)} TRIMP, тяжелее > ${Math.round(plannedLoad * 1.35)} TRIMP, сильно тяжелее > ${Math.round(plannedLoad * 1.7)} TRIMP.`);
+  } else {
+    items.push("Плановый TRIMP не рассчитан: в задании недостаточно данных о длительности, дистанции или интенсивности.");
+  }
+
+  if (actual.length && completionActual.length !== actual.length) {
+    items.push(`В зачет задания: ${completionActual.length}; дополнительная нагрузка: ${actual.length - completionActual.length}.`);
+  }
+
+  if (execution.comment) {
+    items.push(`Итог: ${execution.comment}.`);
+  }
+  return items;
 }
 
 function groupedActualWorkoutsForPlanDay(day) {

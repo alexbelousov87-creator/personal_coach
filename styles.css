@@ -1738,6 +1738,27 @@ textarea {
   font-size: inherit;
 }
 
+.execution-more {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.execution-more summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.execution-more ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.execution-more li {
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
 .plan-card .rationale {
   border-color: rgba(17, 106, 123, 0.22);
   background: #f2f8fa;
