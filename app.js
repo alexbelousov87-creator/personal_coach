@@ -114,6 +114,7 @@ function wireNavigation() {
   document.querySelector("#nextWeek").addEventListener("click", () => changeSelectedWeek(7));
   document.querySelector("#currentWeek").addEventListener("click", () => selectWeek(currentWeekKey()));
   planJsonInput.addEventListener("change", handlePlanJsonFile);
+  document.querySelector("#exportPlanJson")?.addEventListener("click", exportCurrentPlanJson);
   document.querySelector("#copyPrompt").addEventListener("click", copyPrompt);
   document.querySelector("#clearData").addEventListener("click", clearWorkouts);
 }
@@ -3310,6 +3311,56 @@ async function copyPrompt() {
 
   setAiStatus("Не удалось скопировать контекст. Выделите текст вручную.", "error");
   showToast("Не удалось скопировать");
+}
+
+function exportCurrentPlanJson() {
+  const current = loadCurrentPlan();
+  if (!current) {
+    setAiStatus("Для выбранной недели нет плана для экспорта.", "error");
+    showToast("Нет плана для экспорта");
+    return;
+  }
+
+  const payload = buildExportPlanPayload(current);
+  const source = payload.source || "plan";
+  const filename = `training_plan_${selectedWeekKey()}_${source}.json`;
+  downloadJsonFile(filename, payload);
+  setAiStatus(`План экспортирован: ${filename}`, "ok");
+  showToast("План экспортирован в JSON");
+}
+
+function buildExportPlanPayload(planState) {
+  const normalized = normalizeStoredPlan(planState) || planState;
+  return {
+    summary: normalized.summary || "",
+    source: normalized.source || "local",
+    modelUsed: normalized.modelUsed || "",
+    weekStart: selectedWeekKey(),
+    exportedAt: new Date().toISOString(),
+    days: (normalized.days || []).map((day) => ({
+      date: day.date,
+      dateLabel: day.dateLabel,
+      focus: day.focus || "",
+      title: day.title || "",
+      plannedWorkout: day.plannedWorkout || day.details || "",
+      targetDistance: day.targetDistance || "",
+      intensity: day.intensity || "",
+      load: day.load || "",
+      rationale: day.rationale || "",
+    })),
+  };
+}
+
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function copyTextToClipboard(text, sourceField) {

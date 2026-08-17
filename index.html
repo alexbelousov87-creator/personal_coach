@@ -240,7 +240,10 @@
           <section class="panel prompt-panel">
             <div class="panel-head">
               <h2>Контекст для ИИ</h2>
-              <button class="ghost-btn" id="copyPrompt" type="button">Скопировать</button>
+              <div class="button-row compact-row">
+                <button class="ghost-btn" id="exportPlanJson" type="button">Экспорт JSON</button>
+                <button class="ghost-btn" id="copyPrompt" type="button">Скопировать</button>
+              </div>
             </div>
             <textarea id="aiPrompt" readonly rows="9"></textarea>
           </section>
