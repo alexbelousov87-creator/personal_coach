@@ -960,6 +960,29 @@ function renderPlanAnalysis(plan) {
         <small>${escapeHtml(summary.adjustmentReason)}</small>
       </div>
     </div>
+    ${renderPlanControl(summary)}
+  `;
+}
+
+function renderPlanControl(summary) {
+  const warnings = summary.warnings || [];
+  const correctionNotes = summary.correctionNotes || [];
+  return `
+    <div class="plan-control-grid">
+      <div class="plan-control-card ${summary.monotony.level}">
+        <span class="section-label">Монотонность нагрузки</span>
+        <strong>${summary.monotony.label}</strong>
+        <p>${escapeHtml(summary.monotony.comment)}</p>
+      </div>
+      <div class="plan-control-card ${warnings.length ? "warn" : "ok"}">
+        <span class="section-label">Предупреждения</span>
+        ${warnings.length ? `<ul>${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>Критичных конфликтов по текущей неделе не видно.</p>"}
+      </div>
+      <div class="plan-control-card ${summary.adjustmentClass}">
+        <span class="section-label">Почему корректировать</span>
+        ${correctionNotes.length ? `<ul>${correctionNotes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>Пока достаточно наблюдать за фактом и не менять план заранее.</p>"}
+      </div>
+    </div>
   `;
 }
 
@@ -1322,6 +1345,7 @@ function buildWeekExecutionSummary(plan) {
   const keyCompleted = evaluations.filter((item) => item.keyCompleted).length;
   const actualLoad = actualWeekWorkouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const actualDistanceKm = actualWeekWorkouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0);
+  const previousWeekLoad = sumWorkoutsLoadForRange(addDays(weekStart, -7), weekStart);
   const today = startOfDay(new Date());
   const elapsedIndexes = days
     .map((day, index) => ({ day, index, date: startOfDay(day.date) }))
@@ -1338,22 +1362,59 @@ function buildWeekExecutionSummary(plan) {
   const mismatchDays = elapsedEvaluations.filter((item) => item.level === "mismatch").length;
   const heavyDays = elapsedEvaluations.filter((item) => ["harder", "overloaded"].includes(item.level)).length;
   const phase = getPreparationPhase(weekStart);
+  const dailyLoads = days.map((day) => {
+    const date = startOfDay(day.date);
+    return actualWeekWorkouts
+      .filter((workout) => sameDay(startOfDay(workout.date), date))
+      .reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
+  });
+  const monotony = describeLoadMonotony(dailyLoads, actualWeekWorkouts.length);
 
   let adjustmentLevel = "наблюдать";
   let adjustmentReason = "неделя только началась или факта пока мало";
+  let adjustmentClass = "watch";
   if (heavyDays || (loadRatio && loadRatio > 1.25 && elapsedCompletedDays > 0)) {
     adjustmentLevel = "снизить";
     adjustmentReason = "фактическая нагрузка выше плана на уже выполненную часть недели";
+    adjustmentClass = "warn";
   } else if (missedPastDays || mismatchDays) {
     adjustmentLevel = "перестроить";
     adjustmentReason = "есть пропущенные или замененные тренировки";
+    adjustmentClass = "warn";
   } else if (loadRatio !== null && loadRatio < 0.55 && elapsedCompletedDays >= 2) {
     adjustmentLevel = "можно добавить";
     adjustmentReason = "фактическая нагрузка заметно ниже плана на прошедшие дни";
+    adjustmentClass = "cool";
   } else if (elapsedCompletedDays > 0) {
     adjustmentLevel = "не нужна";
     adjustmentReason = "выполнение идет близко к текущей части плана";
+    adjustmentClass = "ok";
   }
+
+  const warningContext = {
+    days,
+    evaluations,
+    actualWeekWorkouts,
+    dailyLoads,
+    loadRatio,
+    actualLoad,
+    actualElapsedLoad,
+    expectedElapsedLoad,
+    previousWeekLoad,
+    missedPastDays,
+    mismatchDays,
+    heavyDays,
+    monotony,
+    weekStart,
+  };
+  const warnings = buildPlanWarnings(warningContext);
+  const correctionNotes = buildCorrectionNotes({
+    ...warningContext,
+    adjustmentLevel,
+    adjustmentReason,
+    keyPlanned,
+    keyCompleted,
+  });
 
   return {
     weekLabel: `${formatDate(weekStart)} - ${formatDate(addDays(weekStart, 6))} · ${phase.label}`,
@@ -1370,7 +1431,148 @@ function buildWeekExecutionSummary(plan) {
     keyComment: keyPlanned ? keyExecutionComment(days, evaluations) : "на неделе нет ключевых работ",
     adjustmentLevel,
     adjustmentReason,
+    adjustmentClass,
+    monotony,
+    warnings,
+    correctionNotes,
   };
+}
+
+function describeLoadMonotony(dailyLoads, workoutCount) {
+  const loads = Array.isArray(dailyLoads) ? dailyLoads.map((value) => Number(value) || 0) : [];
+  const total = loads.reduce((sum, value) => sum + value, 0);
+  const activeDays = loads.filter((value) => value > 0).length;
+  if (!workoutCount || activeDays < 3 || total <= 0) {
+    return {
+      value: null,
+      level: "watch",
+      label: "мало данных",
+      comment: "нужно минимум несколько дней с фактической нагрузкой, чтобы оценить однообразие недели",
+    };
+  }
+
+  const avg = average(loads);
+  const variance = average(loads.map((value) => (value - avg) ** 2));
+  const sd = Math.sqrt(variance);
+  const value = sd > 0 ? round(avg / sd, 2) : 3;
+  if (value >= 2) {
+    return {
+      value,
+      level: "warn",
+      label: `${value}`,
+      comment: "нагрузка слишком ровная по дням; стоит чередовать тяжелее и легче, чтобы восстановление было заметнее",
+    };
+  }
+  if (value >= 1.5) {
+    return {
+      value,
+      level: "caution",
+      label: `${value}`,
+      comment: "монотонность умеренно повышена; следите, чтобы легкие дни действительно оставались легкими",
+    };
+  }
+  return {
+    value,
+    level: "ok",
+    label: `${value}`,
+    comment: "чередование нагрузки по дням выглядит достаточно разнообразным",
+  };
+}
+
+function buildPlanWarnings(context) {
+  const warnings = [];
+  if (context.loadRatio && context.loadRatio > 1.35) {
+    warnings.push(`Фактическая нагрузка уже ${Math.round(context.loadRatio * 100)}% от плановой для прошедшей части недели.`);
+  }
+  if (context.previousWeekLoad && context.actualLoad > context.previousWeekLoad * 1.45) {
+    warnings.push(`Нагрузка недели резко выше предыдущей: ${context.actualLoad} TRIMP против ${context.previousWeekLoad}.`);
+  }
+  if (context.heavyDays) {
+    warnings.push(`Есть дни тяжелее плана: ${context.heavyDays}.`);
+  }
+  if (context.mismatchDays) {
+    warnings.push(`Есть дни с другим типом тренировки: ${context.mismatchDays}.`);
+  }
+  if (context.missedPastDays) {
+    warnings.push(`Есть пропущенные плановые дни: ${context.missedPastDays}.`);
+  }
+  if (context.monotony.level === "warn") {
+    warnings.push(`Высокая монотонность нагрузки: ${context.monotony.label}.`);
+  }
+
+  const backToBack = findBackToBackHeavyActualDays(context.dailyLoads, context.weekStart);
+  if (backToBack) {
+    warnings.push(`Два дня подряд с высокой фактической нагрузкой: ${backToBack}.`);
+  }
+
+  const closeStimulus = findClosePlannedHardStimuli(context.days);
+  if (closeStimulus) {
+    warnings.push(`Ключевые беговые стимулы стоят слишком близко: ${closeStimulus}.`);
+  }
+
+  return warnings;
+}
+
+function buildCorrectionNotes(context) {
+  const notes = [];
+  if (context.expectedElapsedLoad) {
+    notes.push(`На прошедшую часть недели было запланировано около ${context.expectedElapsedLoad} TRIMP, выполнено ${context.actualElapsedLoad} TRIMP.`);
+  }
+  if (context.previousWeekLoad) {
+    notes.push(`Предыдущая календарная неделя: ${context.previousWeekLoad} TRIMP, текущая неделя сейчас: ${context.actualLoad} TRIMP.`);
+  }
+  if (context.heavyDays) {
+    notes.push("Следующие легкие дни лучше не усиливать: фактическая нагрузка уже выше задания.");
+  }
+  if (context.missedPastDays || context.mismatchDays) {
+    notes.push("Коррекция нужна не только по TRIMP, но и по структуре: часть плановых стимулов не закрыта нужным типом работы.");
+  }
+  if (context.keyPlanned) {
+    notes.push(`Ключевые работы: закрыто ${context.keyCompleted} из ${context.keyPlanned}.`);
+  }
+  if (context.monotony.value) {
+    notes.push(`Монотонность недели: ${context.monotony.label}. ${context.monotony.comment}`);
+  }
+  if (!notes.length && context.adjustmentLevel === "не нужна") {
+    notes.push("Факт близок к плану, поэтому оставшиеся дни можно выполнять без перестройки.");
+  }
+  return notes;
+}
+
+function findBackToBackHeavyActualDays(dailyLoads, weekStart) {
+  const threshold = Math.max(100, average(dailyLoads.filter((value) => value > 0)) * 1.15 || 100);
+  for (let index = 1; index < dailyLoads.length; index += 1) {
+    if (dailyLoads[index - 1] >= threshold && dailyLoads[index] >= threshold) {
+      const first = formatDate(addDays(weekStart, index - 1));
+      const second = formatDate(addDays(weekStart, index));
+      return `${first} и ${second}`;
+    }
+  }
+  return "";
+}
+
+function findClosePlannedHardStimuli(days) {
+  const hardTypes = new Set(["interval", "tempo", "race"]);
+  const items = days
+    .map((day, index) => ({ index, type: plannedTypeForDay(day), label: plannedTypeLabel(plannedTypeForDay(day)) }))
+    .filter((item) => hardTypes.has(item.type));
+  for (let index = 1; index < items.length; index += 1) {
+    const prev = items[index - 1];
+    const current = items[index];
+    if (current.index - prev.index < 3) {
+      return `${prev.label} и ${current.label}`;
+    }
+  }
+  return "";
+}
+
+function sumWorkoutsLoadForRange(start, end) {
+  const from = startOfDay(start);
+  const to = startOfDay(end);
+  return dedupeWorkouts(state.workouts.filter((workout) => {
+    const date = new Date(workout.date);
+    return date >= from && date < to;
+  })).reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
 }
 
 function keyExecutionComment(days, evaluations) {
@@ -2467,6 +2669,12 @@ function buildTrainingState() {
   const rampRate = previous7 ? round(load7 / previous7, 2) : null;
   const workouts7 = countWorkouts(7);
   const workouts28 = countWorkouts(28);
+  const rollingDailyLoads = lastDays(7).map((day) =>
+    state.workouts
+      .filter((workout) => sameDay(new Date(workout.date), day))
+      .reduce((sum, workout) => sum + (Number(workout.load) || 0), 0)
+  );
+  const loadMonotony7Days = describeLoadMonotony(rollingDailyLoads, workouts7);
   const last = state.workouts[0];
   const hoursSinceLast = last ? Math.round((Date.now() - new Date(last.date).getTime()) / 36e5) : null;
   const longestRecent = maxBy(state.workouts.slice(0, 12), "durationMin");
@@ -2484,6 +2692,7 @@ function buildTrainingState() {
     avgWeeklyLoadFrom28Days: avg7From28,
     acuteChronicRatio: monotony,
     rampRate,
+    loadMonotony7Days,
     workouts7,
     workouts28,
     hoursSinceLast,

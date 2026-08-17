@@ -829,6 +829,63 @@ textarea {
   font-size: 22px;
 }
 
+.plan-control-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.plan-control-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.plan-control-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.plan-control-card p,
+.plan-control-card ul {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.plan-control-card ul {
+  padding-left: 18px;
+}
+
+.plan-control-card li + li {
+  margin-top: 5px;
+}
+
+.plan-control-card.ok {
+  border-color: rgba(36, 132, 90, 0.28);
+  background: #f3faf6;
+}
+
+.plan-control-card.cool {
+  border-color: rgba(45, 111, 159, 0.3);
+  background: #f0f8fd;
+}
+
+.plan-control-card.caution,
+.plan-control-card.watch {
+  border-color: rgba(190, 143, 39, 0.28);
+  background: #fff8e8;
+}
+
+.plan-control-card.warn {
+  border-color: rgba(185, 50, 50, 0.28);
+  background: #fff3f3;
+}
+
 .plan-card {
   min-height: 230px;
   padding: 16px;
@@ -1124,6 +1181,7 @@ textarea {
   .metric-grid,
   .analysis-grid,
   .plan-legend,
+  .plan-control-grid,
   .plan-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1176,6 +1234,7 @@ textarea {
   .metric-grid,
   .analysis-grid,
   .plan-legend,
+  .plan-control-grid,
   .plan-grid,
   .form-grid {
     grid-template-columns: 1fr;
