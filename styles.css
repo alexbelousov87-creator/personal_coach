@@ -728,6 +728,89 @@ p {
   margin-top: 16px;
 }
 
+.import-diagnostics-panel {
+  margin-top: 16px;
+}
+
+.import-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.import-diagnostics-grid > div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.import-diagnostics-grid > div.ok {
+  border-color: rgba(36, 132, 90, 0.28);
+  background: #f3faf6;
+}
+
+.import-diagnostics-grid > div.warn {
+  border-color: rgba(190, 143, 39, 0.34);
+  background: #fff8e8;
+}
+
+.import-diagnostics-grid span,
+.import-diagnostics-grid small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.import-diagnostics-grid strong {
+  display: block;
+  margin: 5px 0;
+  font-size: 24px;
+}
+
+.import-diagnostics-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.import-diagnostics-columns > div,
+.import-issues {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.import-diagnostics-columns ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.import-issues {
+  margin-top: 12px;
+  border-color: rgba(185, 50, 50, 0.22);
+  background: #fff7f7;
+}
+
+.import-issues article {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(185, 50, 50, 0.16);
+}
+
+.import-issues article:first-of-type {
+  border-top: 0;
+}
+
+.import-issues span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .polar-panel {
   margin-bottom: 16px;
 }
@@ -1816,6 +1899,8 @@ textarea {
   .week-progress-grid,
   .plan-legend,
   .plan-control-grid,
+  .import-diagnostics-grid,
+  .import-diagnostics-columns,
   .plan-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1872,6 +1957,8 @@ textarea {
   .week-progress-grid,
   .plan-legend,
   .plan-control-grid,
+  .import-diagnostics-grid,
+  .import-diagnostics-columns,
   .plan-grid,
   .form-grid {
     grid-template-columns: 1fr;

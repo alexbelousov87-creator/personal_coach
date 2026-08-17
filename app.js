@@ -53,6 +53,7 @@ const fileInput = document.querySelector("#fileInput");
 const dropzone = document.querySelector("#dropzone");
 const selectWorkoutFilesButton = document.querySelector("#selectWorkoutFiles");
 const importLog = document.querySelector("#importLog");
+const importDiagnostics = document.querySelector("#importDiagnostics");
 const workoutList = document.querySelector("#workoutList");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
@@ -643,6 +644,7 @@ function renderAll() {
   renderGoalCenter();
   renderTodayPlan();
   renderWorkouts();
+  renderImportDiagnostics();
   renderBars();
   renderWeekComparison();
   renderProfileHrZones();
@@ -948,6 +950,130 @@ function renderWorkouts() {
       `
     )
     .join("");
+}
+
+function renderImportDiagnostics() {
+  if (!importDiagnostics) return;
+  const diagnostics = buildImportDiagnostics();
+  if (!diagnostics.total) {
+    importDiagnostics.innerHTML = `<div class="empty">После импорта здесь появится сводка по источникам и качеству данных.</div>`;
+    return;
+  }
+
+  importDiagnostics.innerHTML = `
+    <div class="import-diagnostics-grid">
+      <div>
+        <span>Всего в БД</span>
+        <strong>${diagnostics.total}</strong>
+        <small>${diagnostics.running} бег · ${diagnostics.other} другие</small>
+      </div>
+      <div>
+        <span>С темпом</span>
+        <strong>${diagnostics.withTrustedPace}</strong>
+        <small>${diagnostics.withDistance} с дистанцией</small>
+      </div>
+      <div>
+        <span>С TRIMP</span>
+        <strong>${diagnostics.withLoad}</strong>
+        <small>${diagnostics.withHeartRate} со средним пульсом</small>
+      </div>
+      <div class="${diagnostics.suspicious.length ? "warn" : "ok"}">
+        <span>Проверить</span>
+        <strong>${diagnostics.suspicious.length}</strong>
+        <small>${diagnostics.suspicious.length ? "есть подозрительные записи" : "критичных признаков не видно"}</small>
+      </div>
+    </div>
+    <div class="import-diagnostics-columns">
+      <div>
+        <span class="section-label">Источники</span>
+        <ul>${diagnostics.sources.map((item) => `<li>${escapeHtml(item.label)}: ${item.count}</li>`).join("")}</ul>
+      </div>
+      <div>
+        <span class="section-label">Последние файлы / источники</span>
+        <ul>${diagnostics.latestSources.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      </div>
+    </div>
+    ${diagnostics.suspicious.length ? `
+      <div class="import-issues">
+        <span class="section-label">Подозрительные данные</span>
+        ${diagnostics.suspicious.map((item) => `
+          <article>
+            <strong>${escapeHtml(item.title)}</strong>
+            <span>${escapeHtml(item.details)}</span>
+          </article>
+        `).join("")}
+      </div>
+    ` : ""}
+  `;
+}
+
+function buildImportDiagnostics() {
+  const workouts = state.workouts || [];
+  const sourceCounts = new Map();
+  const suspicious = [];
+
+  workouts.forEach((workout) => {
+    const sourceKind = importSourceKind(workout);
+    sourceCounts.set(sourceKind, (sourceCounts.get(sourceKind) || 0) + 1);
+    const issue = suspiciousWorkoutIssue(workout);
+    if (issue) suspicious.push(issue);
+  });
+
+  return {
+    total: workouts.length,
+    running: workouts.filter(isRunningWorkout).length,
+    other: workouts.filter((workout) => !isRunningWorkout(workout)).length,
+    withDistance: workouts.filter((workout) => Number(workout.distanceKm) > 0).length,
+    withTrustedPace: workouts.filter((workout) => trustedPace(workout)).length,
+    withLoad: workouts.filter((workout) => Number(workout.load) > 0).length,
+    withHeartRate: workouts.filter((workout) => Number(workout.avgHr) > 0).length,
+    sources: [...sourceCounts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count),
+    latestSources: [...new Set(workouts.map((workout) => fileNameFromSource(workout.source) || workout.source || "без источника"))].slice(0, 8),
+    suspicious: suspicious.slice(0, 8),
+  };
+}
+
+function importSourceKind(workout) {
+  const source = String(workout?.source || "").toLowerCase();
+  if (source.startsWith("polar:") || source.includes("polar_")) return "Polar";
+  if (source.endsWith(".tcx")) return "TCX";
+  if (source.endsWith(".csv")) return "CSV";
+  if (source.endsWith(".gpx")) return "GPX";
+  if (source.endsWith(".json")) return "JSON";
+  if (source === "manual") return "ручной ввод";
+  return source ? "другой источник" : "без источника";
+}
+
+function suspiciousWorkoutIssue(workout) {
+  const title = `${formatDate(workout.date)} · ${workoutTypeLabel(workout)}`;
+  const pace = trustedPace(workout);
+  if (isRunningWorkout(workout) && pace && (pace < 2.3 || pace > 9)) {
+    return {
+      title,
+      details: `подозрительный темп ${formatPace(pace)}; источник: ${fileNameFromSource(workout.source) || workout.source || "не указан"}`,
+    };
+  }
+  if (isRunningWorkout(workout) && Number(workout.durationMin) >= 20 && !Number(workout.distanceKm)) {
+    return {
+      title,
+      details: `у беговой тренировки ${workout.durationMin} мин нет дистанции`,
+    };
+  }
+  if (Number(workout.distanceKm) > 0 && !trustedPace(workout)) {
+    return {
+      title,
+      details: `есть дистанция ${formatDistance(workout.distanceKm)}, но нет надежного импортированного темпа`,
+    };
+  }
+  if (!Number(workout.load) && Number(workout.durationMin) >= 20) {
+    return {
+      title,
+      details: `нет TRIMP/кардионагрузки для тренировки ${workout.durationMin} мин`,
+    };
+  }
+  return null;
 }
 
 function renderWorkoutTypeOptions(workout) {
