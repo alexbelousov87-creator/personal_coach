@@ -1074,6 +1074,73 @@ textarea {
   font-size: 22px;
 }
 
+.week-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.week-progress-item {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.week-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.week-progress-head span,
+.week-progress-item small {
+  color: var(--muted);
+}
+
+.week-progress-head span {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.week-progress-track {
+  height: 8px;
+  margin: 10px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.week-progress-bar {
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--progress-color, var(--accent-2));
+}
+
+.week-progress-item.low {
+  --progress-color: var(--easy);
+}
+
+.week-progress-item.on-track {
+  --progress-color: var(--good);
+}
+
+.week-progress-item.high {
+  --progress-color: var(--warn);
+}
+
+.week-progress-item.over {
+  --progress-color: var(--bad);
+}
+
+.week-progress-item.empty {
+  --progress-color: var(--muted);
+}
+
 .plan-control-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1507,6 +1574,7 @@ textarea {
   .analysis-grid,
   .goal-grid,
   .hr-zone-grid,
+  .week-progress-grid,
   .plan-legend,
   .plan-control-grid,
   .plan-grid {
@@ -1562,6 +1630,7 @@ textarea {
   .analysis-grid,
   .goal-grid,
   .hr-zone-grid,
+  .week-progress-grid,
   .plan-legend,
   .plan-control-grid,
   .plan-grid,

@@ -1107,6 +1107,14 @@ function plannedDistanceEstimate(day) {
   return average([bounds.from, bounds.to]);
 }
 
+function plannedDistanceKmForProgress(day) {
+  return plannedDistanceKm(day) || plannedDistanceEstimate(day) || 0;
+}
+
+function plannedMinutesForProgress(day) {
+  return Math.max(plannedDurationMinutes(day) || 0, plannedDurationFromDistance(day) || 0);
+}
+
 function generatePlan() {
   hideAdjustChoice();
   const plan = buildPlan();
@@ -1342,8 +1350,67 @@ function renderPlanAnalysis(plan) {
         <small>${escapeHtml(summary.adjustmentReason)}</small>
       </div>
     </div>
+    ${renderWeekProgress(summary)}
     ${renderPlanControl(summary)}
   `;
+}
+
+function renderWeekProgress(summary) {
+  const items = [
+    weeklyProgressItem("TRIMP", summary.actualLoad, summary.plannedLoad, "TRIMP", (value) => Math.round(value)),
+    weeklyProgressItem("Километраж", summary.actualDistanceKm, summary.plannedDistanceKm, "км", (value) => round(value, 1)),
+    weeklyProgressItem("Время", summary.actualMinutes, summary.plannedMinutes, "мин", (value) => Math.round(value)),
+    weeklyProgressItem("Тренировочные дни", summary.completedDays, summary.plannedTrainingDays, "дн.", (value) => Math.round(value)),
+    weeklyProgressItem("Ключевые работы", summary.keyCompleted, summary.keyPlanned, "", (value) => Math.round(value)),
+  ];
+
+  return `
+    <div class="week-progress-grid">
+      ${items.map((item) => `
+        <div class="week-progress-item ${item.level}">
+          <div class="week-progress-head">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(item.percentLabel)}</strong>
+          </div>
+          <div class="week-progress-track">
+            <div class="week-progress-bar" style="width:${item.width}%"></div>
+          </div>
+          <small>${escapeHtml(item.details)}</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function weeklyProgressItem(label, actual, planned, unit, formatValue) {
+  const safeActual = Number(actual) || 0;
+  const safePlanned = Number(planned) || 0;
+  if (!safePlanned) {
+    return {
+      label,
+      level: "empty",
+      width: 0,
+      percentLabel: "нет плана",
+      details: `${formatValue(safeActual)}${unit ? ` ${unit}` : ""} факт`,
+    };
+  }
+
+  const ratio = safeActual / safePlanned;
+  const percent = Math.round(ratio * 100);
+  return {
+    label,
+    level: weeklyProgressLevel(ratio),
+    width: clamp(percent, 0, 100),
+    percentLabel: `${percent}%`,
+    details: `${formatValue(safeActual)} / ${formatValue(safePlanned)}${unit ? ` ${unit}` : ""}`,
+  };
+}
+
+function weeklyProgressLevel(ratio) {
+  if (ratio < 0.8) return "low";
+  if (ratio <= 1.15) return "on-track";
+  if (ratio <= 1.35) return "high";
+  return "over";
 }
 
 function renderPlanControl(summary) {
@@ -1957,8 +2024,12 @@ function buildWeekExecutionSummary(plan) {
   const keyTypes = new Set(["interval", "tempo", "long", "race"]);
   const keyPlanned = days.filter((day) => keyTypes.has(plannedTypeForDay(day))).length;
   const keyCompleted = evaluations.filter((item) => item.keyCompleted).length;
+  const plannedLoad = days.reduce((sum, day) => sum + plannedLoadScoreForDay(day), 0);
+  const plannedDistanceKm = days.reduce((sum, day) => sum + (plannedDistanceKmForProgress(day) || 0), 0);
+  const plannedMinutes = days.reduce((sum, day) => sum + (plannedMinutesForProgress(day) || 0), 0);
   const actualLoad = actualWeekWorkouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const actualDistanceKm = actualWeekWorkouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0);
+  const actualMinutes = actualWeekWorkouts.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0);
   const previousWeekLoad = sumWorkoutsLoadForRange(addDays(weekStart, -7), weekStart);
   const today = startOfDay(new Date());
   const elapsedIndexes = days
@@ -2040,6 +2111,10 @@ function buildWeekExecutionSummary(plan) {
     actualWorkouts: actualWeekWorkouts.length,
     actualLoad,
     actualDistanceKm,
+    actualMinutes,
+    plannedLoad,
+    plannedDistanceKm,
+    plannedMinutes,
     keyPlanned,
     keyCompleted,
     keyComment: keyPlanned ? keyExecutionComment(days, evaluations) : "на неделе нет ключевых работ",
