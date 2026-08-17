@@ -34,6 +34,7 @@ const state = {
     raceDistance: "",
     raceName: "",
     photoDataUrl: "",
+    planningMode: "normal",
     maxHr: 185,
     restHr: 50,
     hrZoneMode: "default",
@@ -213,6 +214,7 @@ function wireForms() {
       raceDistance: data.get("raceDistance") || "",
       raceName: data.get("raceName").trim(),
       photoDataUrl: state.profile.photoDataUrl || "",
+      planningMode: data.get("planningMode") || "normal",
       maxHr: Number(data.get("maxHr")) || 185,
       restHr: Number(data.get("restHr")) || 50,
       hrZoneMode: hrZones.mode,
@@ -669,6 +671,7 @@ function renderGoalCenter() {
 
   const target = getTargetDistanceProfile();
   const phase = getPreparationPhase(selectedWeekStartDate());
+  const planningMode = getPlanningModeProfile();
   const race = getRaceSummary();
   const readiness = getReadiness();
   const raceLine = race
@@ -696,8 +699,8 @@ function renderGoalCenter() {
       </div>
       <div>
         <span class="section-label">Режим</span>
-        <strong>${Number(state.profile.daysPerWeek) || 4} дн./нед. · ${escapeHtml(readiness.label)}</strong>
-        <p>${escapeHtml(constraints)}</p>
+        <strong>${escapeHtml(planningMode.label)} · ${Number(state.profile.daysPerWeek) || 4} дн./нед. · ${escapeHtml(readiness.label)}</strong>
+        <p>${escapeHtml(planningMode.description)} ${escapeHtml(constraints)}</p>
       </div>
     </div>
     ${renderHeartRateZoneStrip()}
@@ -2812,6 +2815,36 @@ function getPreparationPhase(weekStart = selectedWeekStartDate()) {
   return preparationPhaseById("base");
 }
 
+function getPlanningModeProfile() {
+  const modes = {
+    conservative: {
+      id: "conservative",
+      label: "консервативный",
+      description: "меньше риск, мягче прирост нагрузки, при сомнениях приоритет восстановления.",
+      loadGuidance: "держи недельный объем и TRIMP около текущей переносимой базы или ниже; добавляй не больше одного тяжелого бегового стимула, если есть усталость или рост нагрузки",
+      qualityGuidance: "предпочитай контролируемый порог, короткую активацию, легкие горки или сокращенные интервалы; избегай VO2max при сомнениях",
+      progressionGuidance: "не повышай недельную нагрузку больше чем на 5-8% относительно средней переносимой недели",
+    },
+    normal: {
+      id: "normal",
+      label: "нормальный",
+      description: "сбалансированный развивающий план с учетом фактического восстановления.",
+      loadGuidance: "если состояние стабильное, планируй развивающую неделю около текущей базы с умеренным приростом; тяжелые стимулы дозируй по восстановлению",
+      qualityGuidance: "допускается 1-2 качественных беговых стимула плюс длительная, если последние тренировки и нагрузка это позволяют",
+      progressionGuidance: "обычный прирост недельной нагрузки держи примерно в пределах 8-12%, если нет признаков перегруза",
+    },
+    aggressive: {
+      id: "aggressive",
+      label: "агрессивный",
+      description: "смелее развивающий план, но без нарушения предупреждений по восстановлению.",
+      loadGuidance: "можно планировать верхнюю часть допустимого объема и более выраженный стимул, если данные показывают хорошую переносимость",
+      qualityGuidance: "можно выбирать более специфичные интервалы, темповую связку или длительную с блоком, но не игнорировать усталость, гонку и hardSafetyRules",
+      progressionGuidance: "не превышай примерно 12-18% прироста недельной нагрузки и обязательно смягчай план при высоком acute/chronic ratio или тяжелых днях подряд",
+    },
+  };
+  return modes[state.profile.planningMode] || modes.normal;
+}
+
 function preparationPhaseById(id) {
   const phases = {
     auto: {
@@ -3229,6 +3262,7 @@ function buildAiRequest() {
     loadSource: workout.loadSource || "",
     workoutTypeSource: workout.workoutTypeOverride ? "manual" : "auto",
   }));
+  const planningMode = getPlanningModeProfile();
 
   return {
     system:
@@ -3237,6 +3271,7 @@ function buildAiRequest() {
       profile: profileForPlanning(),
       race: getRaceSummary(),
       preparationPhase: getPreparationPhase(),
+      planningMode,
       readiness: getReadiness(),
       trainingState: buildTrainingState(),
       load7Days: sumLoad(7),
@@ -3252,6 +3287,7 @@ function buildAiRequest() {
       ],
       weeklyPlanningGuidelines: [
         "Планируй неделю как набор тренировочных стимулов, а не как фиксированный шаблон вторник-суббота-воскресенье.",
+        `Режим генерации: ${planningMode.label}. ${planningMode.loadGuidance}. ${planningMode.qualityGuidance}. ${planningMode.progressionGuidance}.`,
         "В нормальной развивающей неделе обычно нужны: один скоростной/интервальный стимул, один темповый/пороговый/специфический стимул, одна длительная, легкие кроссы и восстановление.",
         "Длительная чаще всего удобна в воскресенье, но ее можно перенести, если это лучше по гонке, восстановлению или фактически выполненным тренировкам.",
         "Темповая + длительная в соседние дни допустимы как специфическая связка, но не обязательны каждую неделю.",
@@ -3565,6 +3601,7 @@ function buildTrainingState() {
     recommendedApproach: chooseTrainingApproach(load7, avg7From28, rampRate, hoursSinceLast),
     targetDistance: getTargetDistanceProfile().label,
     preparationPhase: getPreparationPhase(weekStart),
+    planningMode: getPlanningModeProfile(),
     race: getRaceSummary(),
   };
 }
@@ -3979,6 +4016,7 @@ function hydrateProfile() {
   settingsForm.elements.goal.value = state.profile.goal || "Поддержание формы";
   settingsForm.elements.targetDistance.value = state.profile.targetDistance || "10k";
   settingsForm.elements.prepPhase.value = state.profile.prepPhase || "auto";
+  settingsForm.elements.planningMode.value = state.profile.planningMode || "normal";
   settingsForm.elements.raceDate.value = state.profile.raceDate || "";
   settingsForm.elements.raceDistance.value = state.profile.raceDistance || "";
   settingsForm.elements.raceName.value = state.profile.raceName || "";

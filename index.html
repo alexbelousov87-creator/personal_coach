@@ -369,6 +369,26 @@
 
           <section class="panel reference-panel">
             <div class="panel-head compact-head">
+              <h2>Режимы генерации</h2>
+            </div>
+            <div class="reference-grid">
+              <article class="reference-item">
+                <strong>Консервативный</strong>
+                <p>Мягче прирост нагрузки, чаще восстановление, при сомнениях сокращается объем или количество тяжелых стимулов.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Нормальный</strong>
+                <p>Сбалансированная развивающая неделя: нагрузка растет только если фактическое состояние и последние тренировки это позволяют.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Агрессивный</strong>
+                <p>Смелее объем и специфические работы, но предупреждения по перегрузу, гонке и восстановлению остаются жесткими ограничениями.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel reference-panel">
+            <div class="panel-head compact-head">
               <h2>Шкала интенсивности</h2>
             </div>
             <div class="intensity-scale" aria-label="Шкала интенсивности">
@@ -475,6 +495,14 @@
                 <option value="specific">Специфическая подготовка</option>
                 <option value="taper">Подводка</option>
                 <option value="recovery">Восстановительная неделя</option>
+              </select>
+            </label>
+            <label>
+              Режим планирования
+              <select name="planningMode">
+                <option value="conservative">Консервативный</option>
+                <option value="normal">Нормальный</option>
+                <option value="aggressive">Агрессивный</option>
               </select>
             </label>
             <label>
