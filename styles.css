@@ -701,6 +701,33 @@ p {
   justify-content: flex-start;
 }
 
+.hr-zone-settings {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.hr-zone-settings-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.hr-zone-boundaries {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hr-zone-boundaries input:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
 label {
   display: grid;
   gap: 7px;
@@ -1358,7 +1385,9 @@ textarea {
   }
 
   .week-row,
-  .week-row.head {
+  .week-row.head,
+  .hr-zone-settings-head,
+  .hr-zone-boundaries {
     grid-template-columns: 1fr;
   }
 

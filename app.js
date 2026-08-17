@@ -17,6 +17,7 @@ const WORKOUT_TYPE_OPTIONS = [
   ["easy", "Кросс"],
   ["cross", "Кросс-тренинг"],
 ];
+const HR_ZONE_BOUNDARY_FIELDS = ["z1Max", "z2Max", "z3Max", "z4Max"];
 
 const state = {
   workouts: loadJson(STORAGE_KEY, []),
@@ -35,6 +36,8 @@ const state = {
     photoDataUrl: "",
     maxHr: 185,
     restHr: 50,
+    hrZoneMode: "default",
+    hrZoneBoundaries: [],
     daysPerWeek: 4,
     constraints: "",
   }),
@@ -55,6 +58,7 @@ const profilePhotoPreview = document.querySelector("#profilePhotoPreview");
 const sidebarProfilePhoto = document.querySelector("#sidebarProfilePhoto");
 const selectProfilePhotoButton = document.querySelector("#selectProfilePhoto");
 const removeProfilePhotoButton = document.querySelector("#removeProfilePhoto");
+const useDefaultHrZonesButton = document.querySelector("#useDefaultHrZones");
 const polarStatus = document.querySelector("#polarStatus");
 const polarHint = document.querySelector("#polarHint");
 const connectPolarButton = document.querySelector("#connectPolar");
@@ -155,6 +159,14 @@ function wireForms() {
     renderProfilePhoto();
   });
   profilePhotoInput.addEventListener("change", handleProfilePhotoFile);
+  settingsForm.elements.hrZoneMode?.addEventListener("change", updateHrZoneInputsMode);
+  settingsForm.elements.maxHr?.addEventListener("input", updateDefaultHrZoneInputs);
+  settingsForm.elements.restHr?.addEventListener("input", updateDefaultHrZoneInputs);
+  useDefaultHrZonesButton?.addEventListener("click", () => {
+    settingsForm.elements.hrZoneMode.value = "default";
+    fillHrZoneBoundaryInputs(defaultHrZoneBoundaries(profileValuesFromSettingsForm()));
+    updateHrZoneInputsMode();
+  });
 
   manualForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -179,6 +191,7 @@ function wireForms() {
   settingsForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const data = new FormData(settingsForm);
+    const hrZones = hrZoneSettingsFromForm(data);
     state.profile = {
       name: data.get("name").trim(),
       goal: data.get("goal"),
@@ -190,14 +203,19 @@ function wireForms() {
       photoDataUrl: state.profile.photoDataUrl || "",
       maxHr: Number(data.get("maxHr")) || 185,
       restHr: Number(data.get("restHr")) || 50,
+      hrZoneMode: hrZones.mode,
+      hrZoneBoundaries: hrZones.boundaries,
       daysPerWeek: Number(data.get("daysPerWeek")) || 4,
       constraints: data.get("constraints").trim(),
     };
     saveJson(PROFILE_KEY, state.profile);
     saveBackendState();
+    hydrateProfile();
     renderAll();
     generatePlan();
-    showToast("Профиль сохранен");
+    showToast(data.get("hrZoneMode") === "custom" && hrZones.mode !== "custom"
+      ? "Профиль сохранен, но пульсовые зоны возвращены к HRR по умолчанию: границы должны возрастать между пульсом покоя и максимумом"
+      : "Профиль сохранен");
   });
 }
 
@@ -702,11 +720,12 @@ function renderHeartRateZoneStrip() {
 function renderProfileHrZones() {
   const container = document.querySelector("#profileHrZones");
   if (!container) return;
+  const modeLabel = state.profile.hrZoneMode === "custom" ? "свои границы" : "по умолчанию HRR";
   container.innerHTML = `
     <div class="panel-head compact-head">
       <div>
         <h2>Пульсовые зоны</h2>
-        <span>расчет по HRR: пульс покоя ${Number(state.profile.restHr) || 0}, максимум ${Number(state.profile.maxHr) || 0}</span>
+        <span>${modeLabel}: пульс покоя ${Number(state.profile.restHr) || 0}, максимум ${Number(state.profile.maxHr) || 0}</span>
       </div>
     </div>
     ${renderHeartRateZoneStrip()}
@@ -718,14 +737,81 @@ function heartRateZonesBpm(profile = state.profile) {
   const maxHr = Number(profile?.maxHr) || 0;
   if (!restHr || !maxHr || maxHr <= restHr) return [];
 
-  const hrrToBpm = (ratio) => Math.round(restHr + (maxHr - restHr) * ratio);
+  const boundaries = effectiveHrZoneBoundaries(profile);
+  if (!boundaries.length) return [];
   return [
-    { label: "Z1", range: `до ${hrrToBpm(0.6)} уд/мин`, note: "восстановление", className: "zone-z1" },
-    { label: "Z2", range: `${hrrToBpm(0.6)}-${hrrToBpm(0.7)} уд/мин`, note: "легко", className: "zone-z2" },
-    { label: "Z3", range: `${hrrToBpm(0.7)}-${hrrToBpm(0.8)} уд/мин`, note: "умеренно", className: "zone-z3" },
-    { label: "Z4", range: `${hrrToBpm(0.8)}-${hrrToBpm(0.9)} уд/мин`, note: "порог", className: "zone-z4" },
-    { label: "Z5", range: `от ${hrrToBpm(0.9)} уд/мин`, note: "VO2max", className: "zone-z5" },
+    { label: "Z1", range: `до ${boundaries[0]} уд/мин`, note: "восстановление", className: "zone-z1" },
+    { label: "Z2", range: `${boundaries[0]}-${boundaries[1]} уд/мин`, note: "легко", className: "zone-z2" },
+    { label: "Z3", range: `${boundaries[1]}-${boundaries[2]} уд/мин`, note: "умеренно", className: "zone-z3" },
+    { label: "Z4", range: `${boundaries[2]}-${boundaries[3]} уд/мин`, note: "порог", className: "zone-z4" },
+    { label: "Z5", range: `от ${boundaries[3]} уд/мин`, note: "VO2max", className: "zone-z5" },
   ];
+}
+
+function effectiveHrZoneBoundaries(profile = state.profile) {
+  const restHr = Number(profile?.restHr) || 0;
+  const maxHr = Number(profile?.maxHr) || 0;
+  if (!restHr || !maxHr || maxHr <= restHr) return [];
+  const custom = normalizeCustomHrZoneBoundaries(profile?.hrZoneBoundaries, restHr, maxHr);
+  if (profile?.hrZoneMode === "custom" && custom) return custom;
+  return defaultHrZoneBoundaries(profile);
+}
+
+function defaultHrZoneBoundaries(profile = state.profile) {
+  const restHr = Number(profile?.restHr) || 0;
+  const maxHr = Number(profile?.maxHr) || 0;
+  if (!restHr || !maxHr || maxHr <= restHr) return [];
+  return [0.6, 0.7, 0.8, 0.9].map((ratio) => Math.round(restHr + (maxHr - restHr) * ratio));
+}
+
+function normalizeCustomHrZoneBoundaries(boundaries, restHr, maxHr) {
+  if (!Array.isArray(boundaries) || boundaries.length !== 4) return null;
+  const values = boundaries.map((value) => Number(value)).filter(Number.isFinite);
+  if (values.length !== 4) return null;
+  if (values[0] <= restHr || values[3] >= maxHr) return null;
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index] <= values[index - 1]) return null;
+  }
+  return values.map(Math.round);
+}
+
+function profileValuesFromSettingsForm() {
+  return {
+    maxHr: Number(settingsForm.elements.maxHr?.value) || state.profile.maxHr || 185,
+    restHr: Number(settingsForm.elements.restHr?.value) || state.profile.restHr || 50,
+  };
+}
+
+function fillHrZoneBoundaryInputs(boundaries) {
+  HR_ZONE_BOUNDARY_FIELDS.forEach((field, index) => {
+    if (settingsForm.elements[field]) {
+      settingsForm.elements[field].value = boundaries[index] || "";
+    }
+  });
+}
+
+function updateDefaultHrZoneInputs() {
+  if (settingsForm.elements.hrZoneMode?.value !== "default") return;
+  fillHrZoneBoundaryInputs(defaultHrZoneBoundaries(profileValuesFromSettingsForm()));
+}
+
+function updateHrZoneInputsMode() {
+  const custom = settingsForm.elements.hrZoneMode?.value === "custom";
+  if (!custom) updateDefaultHrZoneInputs();
+  HR_ZONE_BOUNDARY_FIELDS.forEach((field) => {
+    if (settingsForm.elements[field]) settingsForm.elements[field].disabled = !custom;
+  });
+}
+
+function hrZoneSettingsFromForm(data) {
+  const mode = data.get("hrZoneMode") === "custom" ? "custom" : "default";
+  const values = HR_ZONE_BOUNDARY_FIELDS.map((field) => Number(data.get(field)));
+  const { restHr, maxHr } = profileValuesFromSettingsForm();
+  const normalized = normalizeCustomHrZoneBoundaries(values, restHr, maxHr);
+  return {
+    mode: mode === "custom" && normalized ? "custom" : "default",
+    boundaries: mode === "custom" && normalized ? normalized : [],
+  };
 }
 
 function renderWorkouts() {
@@ -2864,7 +2950,14 @@ function buildPlanningWeek() {
 
 function profileForPlanning() {
   const { photoDataUrl, ...profile } = state.profile || {};
-  return profile;
+  return {
+    ...profile,
+    heartRateZones: heartRateZonesBpm(state.profile).map((zone) => ({
+      zone: zone.label,
+      range: zone.range,
+      purpose: zone.note,
+    })),
+  };
 }
 
 function buildTrainingState() {
@@ -3282,6 +3375,9 @@ function hydrateProfile() {
   settingsForm.elements.raceName.value = state.profile.raceName || "";
   settingsForm.elements.maxHr.value = state.profile.maxHr || 185;
   settingsForm.elements.restHr.value = state.profile.restHr || 50;
+  settingsForm.elements.hrZoneMode.value = state.profile.hrZoneMode === "custom" ? "custom" : "default";
+  fillHrZoneBoundaryInputs(effectiveHrZoneBoundaries(state.profile));
+  updateHrZoneInputsMode();
   settingsForm.elements.daysPerWeek.value = state.profile.daysPerWeek || 4;
   settingsForm.elements.constraints.value = state.profile.constraints || "";
 }

@@ -490,6 +490,36 @@
               Пульс покоя
               <input name="restHr" type="number" min="30" max="100" step="1" value="50">
             </label>
+            <div class="hr-zone-settings wide">
+              <div class="hr-zone-settings-head">
+                <label>
+                  Пульсовые зоны
+                  <select name="hrZoneMode">
+                    <option value="default">По умолчанию HRR</option>
+                    <option value="custom">Свои границы</option>
+                  </select>
+                </label>
+                <button class="ghost-btn" id="useDefaultHrZones" type="button">Вернуть по умолчанию</button>
+              </div>
+              <div class="hr-zone-boundaries">
+                <label>
+                  Z1 до
+                  <input name="z1Max" type="number" min="60" max="230" step="1">
+                </label>
+                <label>
+                  Z2 до
+                  <input name="z2Max" type="number" min="60" max="230" step="1">
+                </label>
+                <label>
+                  Z3 до
+                  <input name="z3Max" type="number" min="60" max="230" step="1">
+                </label>
+                <label>
+                  Z4 до
+                  <input name="z4Max" type="number" min="60" max="230" step="1">
+                </label>
+              </div>
+            </div>
             <label>
               Тренировочных дней в неделю
               <input name="daysPerWeek" type="number" min="2" max="7" step="1" value="4">
