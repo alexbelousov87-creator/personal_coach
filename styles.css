@@ -460,6 +460,107 @@ p {
   background: #f3f9fb;
 }
 
+.today-plan-panel {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.today-plan-panel[class*="plan-tone-"] {
+  border-left: 5px solid var(--tone-color, var(--accent-2));
+}
+
+.today-plan-panel.eval-matched {
+  border-color: rgba(36, 132, 90, 0.5);
+  background: #f1faf5;
+}
+
+.today-plan-panel.eval-lighter {
+  border-color: rgba(45, 111, 159, 0.46);
+  background: #eef7fc;
+}
+
+.today-plan-panel.eval-harder {
+  border-color: rgba(190, 143, 39, 0.5);
+  background: #fff7df;
+}
+
+.today-plan-panel.eval-overloaded,
+.today-plan-panel.eval-mismatch,
+.today-plan-panel.eval-missed {
+  border-color: rgba(185, 50, 50, 0.48);
+  background: #fff0f0;
+}
+
+.today-plan-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
+  gap: 14px;
+}
+
+.today-assignment,
+.today-fact {
+  min-width: 0;
+}
+
+.today-assignment strong,
+.today-fact strong,
+.today-assignment small,
+.today-fact small {
+  display: block;
+}
+
+.today-assignment strong {
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.today-assignment p,
+.today-fact p {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.today-assignment small,
+.today-fact small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.today-status {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.today-status.matched,
+.today-fact strong.matched {
+  color: var(--good);
+}
+
+.today-status.lighter,
+.today-fact strong.lighter {
+  color: var(--easy);
+}
+
+.today-status.harder,
+.today-fact strong.harder {
+  color: var(--warn);
+}
+
+.today-status.overloaded,
+.today-status.mismatch,
+.today-status.missed,
+.today-fact strong.overloaded,
+.today-fact strong.mismatch,
+.today-fact strong.missed {
+  color: var(--bad);
+}
+
 .workout-list {
   display: grid;
   gap: 10px;
@@ -1387,6 +1488,7 @@ textarea {
   .week-row,
   .week-row.head,
   .hr-zone-settings-head,
+  .today-plan-grid,
   .hr-zone-boundaries {
     grid-template-columns: 1fr;
   }

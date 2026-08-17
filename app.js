@@ -623,6 +623,7 @@ function estimateTrimpFromHrr(durationMin, hrReserveRatio) {
 function renderAll() {
   renderMetrics();
   renderGoalCenter();
+  renderTodayPlan();
   renderWorkouts();
   renderBars();
   renderWeekComparison();
@@ -730,6 +731,66 @@ function renderProfileHrZones() {
       </div>
     </div>
     ${renderHeartRateZoneStrip()}
+  `;
+}
+
+function renderTodayPlan() {
+  const container = document.querySelector("#todayPlanPanel");
+  if (!container) return;
+
+  const today = startOfDay(new Date());
+  const weekStart = startOfTrainingWeek(today);
+  const weekKey = toDateInputValue(weekStart);
+  const savedPlan = storedPlanForWeekKey(weekKey);
+  const planDays = savedPlan?.days || buildPlan(weekStart);
+  const day = planDays.find((item) => sameDay(new Date(item.date), today));
+  container.className = "panel today-plan-panel";
+  if (!day) {
+    container.innerHTML = `
+      <div class="panel-head compact-head">
+        <div>
+          <h2>Сегодня</h2>
+          <span>${formatDate(today)}</span>
+        </div>
+      </div>
+      <div class="empty">На сегодня нет задания.</div>
+    `;
+    return;
+  }
+
+  const status = getPlanDayStatus(day);
+  const execution = evaluatePlanDayExecution(day);
+  const planned = day.plannedWorkout || day.details || "Задание не описано.";
+  const actual = actualWorkoutsForPlanDay(day).map(formatActualWorkout);
+  const sourceLabel = savedPlan ? planSourceLabel(savedPlan.source) : "локальный черновик";
+  const meta = [
+    day.targetDistance ? `Ориентир: ${day.targetDistance}` : "",
+    day.intensity ? `Интенсивность: ${day.intensity}` : "",
+    day.load ? `Плановая нагрузка: ${day.load}` : "",
+  ].filter(Boolean);
+
+  container.className = `panel today-plan-panel eval-${execution.level} ${planToneClass(day)}`;
+  container.innerHTML = `
+    <div class="panel-head compact-head">
+      <div>
+        <h2>Сегодня</h2>
+        <span>${formatDate(today)} · ${escapeHtml(sourceLabel)}</span>
+      </div>
+      <span class="today-status ${execution.level}">${escapeHtml(status.label)}</span>
+    </div>
+    <div class="today-plan-grid">
+      <div class="today-assignment">
+        <span class="section-label">${escapeHtml(day.focus || "Задание")}</span>
+        <strong>${escapeHtml(day.title || "Тренировка")}</strong>
+        <p>${escapeHtml(planned)}</p>
+        ${meta.length ? `<small>${escapeHtml(meta.join(" · "))}</small>` : ""}
+      </div>
+      <div class="today-fact">
+        <span class="section-label">Факт и оценка</span>
+        ${actual.length ? `<p>${actual.map((line) => escapeHtml(line)).join("<br>")}</p>` : "<p>Факт пока не найден среди импортированных тренировок.</p>"}
+        ${execution.show ? `<strong class="${execution.level}">${escapeHtml(execution.label)}</strong><small>${escapeHtml(execution.comment)}</small>` : ""}
+      </div>
+    </div>
   `;
 }
 
