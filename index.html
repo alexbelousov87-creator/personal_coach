@@ -25,6 +25,7 @@
           <button class="nav-item" data-view="import" type="button">Импорт</button>
           <button class="nav-item" data-view="manual" type="button">Добавить</button>
           <button class="nav-item" data-view="plan" type="button">План</button>
+          <button class="nav-item" data-view="reference" type="button">Справка</button>
           <button class="nav-item" data-view="settings" type="button">Профиль</button>
         </nav>
 
@@ -205,6 +206,136 @@
               <button class="ghost-btn" id="copyPrompt" type="button">Скопировать</button>
             </div>
             <textarea id="aiPrompt" readonly rows="9"></textarea>
+          </section>
+        </section>
+
+        <section class="view" id="reference">
+          <div class="page-head compact">
+            <div>
+              <h1>Справка по видам работ</h1>
+              <p>Единый словарь интенсивностей и форматов тренировок для планов, оценки факта и контекста ИИ.</p>
+            </div>
+          </div>
+
+          <section class="panel reference-panel">
+            <div class="panel-head compact-head">
+              <h2>Основные типы бега</h2>
+            </div>
+            <div class="reference-grid">
+              <article class="reference-item">
+                <strong>Восстановительный бег</strong>
+                <p>Очень легкий бег для восстановления. RPE 1-2/10, дыхание свободное, темп не важен.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Легкий бег / easy</strong>
+                <p>Спокойный аэробный бег. RPE 2-3/10, можно свободно разговаривать предложениями.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Длительный бег</strong>
+                <p>Продолжительный преимущественно легкий бег для развития аэробной выносливости. Обычно RPE 2-3/10.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Прогрессивный бег</strong>
+                <p>Бег, где интенсивность постепенно растет от легкой к заранее заданной более высокой, без резкого ускорения.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Strides / ускорения</strong>
+                <p>Короткие контролируемые ускорения 10-30 секунд: быстро и расслабленно, но не спринт. Между повторами полное восстановление.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Фартлек</strong>
+                <p>Чередование быстрых и легких участков без обязательной строгой дистанции. Интенсивность задается временем, рельефом или ощущением.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Бег в гору</strong>
+                <p>Короткие или средние интенсивные отрезки в подъем для силы, техники и экономичности. Не обязательно выполнять максимально.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel reference-panel">
+            <div class="panel-head compact-head">
+              <h2>Качественные интенсивности</h2>
+            </div>
+            <div class="reference-grid">
+              <article class="reference-item">
+                <strong>Темповая работа</strong>
+                <p>Формат продолжительного бега заметно быстрее легкого. Может включать порог, соревновательное усилие или специфический темп.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Пороговое усилие</strong>
+                <p>Тяжелое, но устойчивое и контролируемое усилие. RPE 6-7/10, примерно то, что свежий подготовленный спортсмен выдерживает 40-60 минут.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Усилие 10 км</strong>
+                <p>Интенсивность соревновательного бега на 10 км. RPE 7-8/10, разговор почти невозможен, но темп остается контролируемым.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Усилие 5 км</strong>
+                <p>Интенсивность соревновательного бега на 5 км. RPE около 8/10, выше порога, чаще используется в интервальной работе.</p>
+              </article>
+              <article class="reference-item">
+                <strong>VO2max-интервалы</strong>
+                <p>Повторные отрезки высокой интенсивности примерно 2-5 минут для развития максимальной аэробной мощности. RPE 8-9/10, это не спринт.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Короткие интервалы</strong>
+                <p>Отрезки примерно от 30 секунд до 2 минут, быстрее усилия 5 км, но выполняемые контролируемо и повторно.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Спринт</strong>
+                <p>Очень короткое почти максимальное или максимальное ускорение. Это отдельный стимул, не VO2max-интервалы и не strides.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel reference-panel">
+            <div class="panel-head compact-head">
+              <h2>Дополнительные тренировки</h2>
+            </div>
+            <div class="reference-grid">
+              <article class="reference-item">
+                <strong>Силовая</strong>
+                <p>Упражнения с внешним сопротивлением или весом тела для развития силы и устойчивости.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Прыжковые упражнения / плиометрика</strong>
+                <p>Короткие взрывные упражнения для развития жесткости мышечно-сухожильной системы и беговой экономичности.</p>
+              </article>
+              <article class="reference-item">
+                <strong>ОФП</strong>
+                <p>Общефизическая подготовка: корпус, баланс, стабильность, силовая выносливость и общая физическая подготовленность.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Мобилити</strong>
+                <p>Упражнения на контролируемую подвижность суставов и диапазон движения. Это не тяжелая силовая тренировка.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Кросс-тренинг</strong>
+                <p>Небеговая аэробная нагрузка: велосипед, SkiErg, эллипс, плавание и другое. Учитывается как нагрузка, но не закрывает ключевую беговую работу автоматически.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel reference-panel">
+            <div class="panel-head compact-head">
+              <h2>Шкала интенсивности</h2>
+            </div>
+            <div class="intensity-scale" aria-label="Шкала интенсивности">
+              <span>восстановительный</span>
+              <span>легкий</span>
+              <span>длительный легкий</span>
+              <span>порог</span>
+              <span>усилие 10 км</span>
+              <span>усилие 5 км</span>
+              <span>VO2max</span>
+              <span>спринт</span>
+            </div>
+            <div class="reference-notes">
+              <p><strong>Темповая работа</strong> - формат тренировки, а <strong>порог</strong> - конкретная интенсивность.</p>
+              <p><strong>Интервалы</strong> - способ организации тренировки, а <strong>VO2max</strong> - цель или уровень интенсивности интервальной работы.</p>
+              <p><strong>Strides</strong> - короткая скоростная активация без значимого утомления.</p>
+            </div>
           </section>
         </section>
 

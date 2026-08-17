@@ -598,6 +598,71 @@ textarea {
   margin-bottom: 18px;
 }
 
+.reference-panel {
+  margin-bottom: 18px;
+}
+
+.reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.reference-item {
+  min-height: 132px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.reference-item strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.reference-item p {
+  margin-top: 0;
+  font-size: 14px;
+}
+
+.intensity-scale {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(96px, 1fr));
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.intensity-scale span {
+  min-height: 48px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f1f6f7;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.intensity-scale span:nth-child(4),
+.intensity-scale span:nth-child(5) {
+  background: #fff7df;
+}
+
+.intensity-scale span:nth-child(n + 6) {
+  background: #fff0f0;
+}
+
+.reference-notes {
+  margin-top: 14px;
+}
+
+.reference-notes p {
+  max-width: 980px;
+}
+
 .compact-head {
   margin-bottom: 10px;
 }
