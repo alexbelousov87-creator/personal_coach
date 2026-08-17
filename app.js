@@ -1369,13 +1369,12 @@ function evaluatePlanDayExecution(day) {
   }
 
   const actualTypes = [...new Set(actual.map(getWorkoutType))];
-  const completionTypes = completionActual.map(getWorkoutType);
   const actualLoad = actual.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const plannedLoad = plannedLoadScoreForDay(day);
   const hasRunningActual = actual.some(isRunningWorkout);
   const typeMatched = expectsNoRun && hasRunningActual
     ? false
-    : completionTypes.some((type) => planTypeMatchesActual(plannedType, type));
+    : completionActual.some((workout) => planTypeMatchesActual(plannedType, getWorkoutType(workout), day, workout));
   const typeMismatch = !typeMatched;
   const keyCompleted = ["interval", "tempo", "long", "race"].includes(plannedType) && typeMatched;
   const typeMismatchComment = typeMismatch
@@ -1453,13 +1452,68 @@ function plannedTypeForDay(day) {
   return planTypeFromFocus(day.focus) || planTypeFromAssignment(`${day.title || ""} ${day.plannedWorkout || day.details || ""}`) || "easy";
 }
 
-function planTypeMatchesActual(plannedType, actualType) {
+function planTypeMatchesActual(plannedType, actualType, day = null, workout = null) {
   if (plannedType === actualType) return true;
+  if (day && plannedTypeAllowsOptionalEasyRun(day) && ["recovery", "easy", "long"].includes(actualType) && actualMatchesPlannedEnvelope(day, workout)) return true;
+  if (day && plannedType === "easy" && actualType === "long" && actualMatchesPlannedEnvelope(day, workout)) return true;
+  if (day && plannedType === "long" && actualType === "easy" && actualMatchesPlannedEnvelope(day, workout)) return true;
   if (plannedType === "easy" && ["easy", "cross", "recovery"].includes(actualType)) return true;
   if (plannedType === "recovery" && ["recovery", "easy", "cross"].includes(actualType)) return true;
   if (plannedType === "race") return ["interval", "tempo", "long", "easy"].includes(actualType);
   if (plannedType === "rest") return false;
   return false;
+}
+
+function plannedTypeAllowsOptionalEasyRun(day) {
+  const text = planDayComparableText(day);
+  const optionalRest = matchesAny(text, ["полный отдых либо", "полный отдых или", "отдых либо", "отдых или"]);
+  const hasEasyRun = matchesAny(text, ["легко", "очень легко", "z1", "z2", "бег", "мин", "км"]);
+  return optionalRest && hasEasyRun;
+}
+
+function actualMatchesPlannedEnvelope(day, workout) {
+  if (!workout) return false;
+  const durationBounds = plannedDurationBounds(day);
+  const distanceBounds = plannedDistanceBounds(day);
+  const duration = Number(workout.durationMin) || 0;
+  const distance = Number(workout.distanceKm) || 0;
+  const durationOk = durationBounds ? valueWithinRange(duration, durationBounds, 0.25, 0.15) : false;
+  const distanceOk = distanceBounds ? valueWithinRange(distance, distanceBounds, 0.25, 0.15) : false;
+  if (durationBounds && distanceBounds) return durationOk || distanceOk;
+  if (durationBounds) return durationOk;
+  if (distanceBounds) return distanceOk;
+  return false;
+}
+
+function plannedDurationBounds(day) {
+  const text = planDayComparableText(day);
+  const ranges = [...text.matchAll(/(\d{1,3})\s*[-–—]\s*(\d{1,3})\s*мин\w*/gi)]
+    .map((match) => ({ from: Number(match[1]), to: Number(match[2]) }))
+    .filter((range) => range.from > 0 && range.to >= range.from);
+  if (!ranges.length) return null;
+  return ranges.reduce((best, range) => (range.to > best.to ? range : best), ranges[0]);
+}
+
+function plannedDistanceBounds(day) {
+  const text = planDayComparableText(day);
+  const ranges = [...text.matchAll(/(\d{1,2}(?:\.\d+)?)\s*[-–—]\s*(\d{1,2}(?:\.\d+)?)\s*км/gi)]
+    .map((match) => ({ from: Number(match[1]), to: Number(match[2]) }))
+    .filter((range) => range.to > 0 && range.to >= range.from);
+  if (!ranges.length) return null;
+  return ranges.reduce((best, range) => (range.to > best.to ? range : best), ranges[0]);
+}
+
+function valueWithinRange(value, range, lowerSlack, upperSlack) {
+  if (!value || !range) return false;
+  const lower = range.from * (1 - lowerSlack);
+  const upper = range.to * (1 + upperSlack);
+  return value >= lower && value <= upper;
+}
+
+function planDayComparableText(day) {
+  return `${day.focus || ""} ${day.title || ""} ${day.intensity || ""} ${day.targetDistance || ""} ${day.plannedWorkout || ""} ${day.details || ""}`
+    .toLowerCase()
+    .replace(/,/g, ".");
 }
 
 function plannedLoadScoreForDay(day) {
@@ -3579,6 +3633,7 @@ function planCompletionWorkoutsForDay(day) {
   const actual = actualWorkoutsForPlanDay(day);
   const plannedType = plannedTypeForDay(day);
   if (planExpectsNoRun(day)) return actual;
+  if (plannedTypeAllowsOptionalEasyRun(day)) return actual.filter(isRunningWorkout);
   if (plannedType === "rest") return [];
   if (planTypeRequiresRunning(plannedType)) {
     return actual.filter(isRunningWorkout);
