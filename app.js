@@ -5,6 +5,7 @@ const PLANS_BY_WEEK_KEY = "training-coach-plans-by-week";
 const ACTIVE_PLAN_SOURCE_KEY = "training-coach-active-plan-source";
 const SELECTED_WEEK_KEY = "training-coach-selected-week";
 const CURRENT_PLAN_KEY = "training-coach-current-plan";
+const PLAN_VIEW_MODE_KEY = "training-coach-plan-view-mode";
 const WORKOUT_SYNC_INTERVAL_MS = 60000;
 const POLAR_SYNC_INTERVAL_MS = 10 * 60000;
 const API_BASE_URL = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
@@ -25,6 +26,7 @@ const state = {
   plansByWeek: loadJson(PLANS_BY_WEEK_KEY, {}),
   activePlanSource: loadJson(ACTIVE_PLAN_SOURCE_KEY, "json"),
   selectedWeekStart: loadJson(SELECTED_WEEK_KEY, currentWeekKey()),
+  planViewMode: loadJson(PLAN_VIEW_MODE_KEY, "detailed"),
   planReview: null,
   profile: loadJson(PROFILE_KEY, {
     name: "",
@@ -115,6 +117,7 @@ function wireNavigation() {
   document.querySelector("#reviewAiPlan").addEventListener("click", reviewCurrentPlanWithAi);
   document.querySelector("#generateAiPlan").addEventListener("click", selectAiPlan);
   document.querySelector("#loadPlanJson").addEventListener("click", selectJsonPlan);
+  document.querySelector("#togglePlanDensity").addEventListener("click", togglePlanDensity);
   document.querySelector("#previousWeek").addEventListener("click", () => changeSelectedWeek(-7));
   document.querySelector("#nextWeek").addEventListener("click", () => changeSelectedWeek(7));
   document.querySelector("#currentWeek").addEventListener("click", () => selectWeek(currentWeekKey()));
@@ -645,6 +648,7 @@ function renderAll() {
   renderProfileHrZones();
   renderWorkoutTemplateLibrary();
   renderPlanWeekLabel();
+  updatePlanDensityUi();
   document.querySelector("#storageCount").textContent = formatCount(state.workouts.length);
 }
 
@@ -1325,6 +1329,7 @@ function renderPlan(plan) {
   renderPlanAnalysis(plan);
   renderAiPlanReview();
   renderPlanChangeLog(loadCurrentPlan());
+  updatePlanDensityUi();
   planGrid.innerHTML = plan
     .map((day, index) => {
       const status = getPlanDayStatus(day);
@@ -1346,6 +1351,23 @@ function renderPlan(plan) {
     })
     .join("");
   document.querySelector("#aiPrompt").value = buildAiPrompt(plan);
+}
+
+function togglePlanDensity() {
+  state.planViewMode = state.planViewMode === "compact" ? "detailed" : "compact";
+  saveJson(PLAN_VIEW_MODE_KEY, state.planViewMode);
+  updatePlanDensityUi();
+}
+
+function updatePlanDensityUi() {
+  const planGrid = document.querySelector("#planGrid");
+  const button = document.querySelector("#togglePlanDensity");
+  const compact = state.planViewMode === "compact";
+  planGrid?.classList.toggle("compact-plan", compact);
+  if (button) {
+    button.textContent = compact ? "Подробно" : "Компактно";
+    button.classList.toggle("active", compact);
+  }
 }
 
 function renderPlanAnalysis(plan) {
@@ -1878,6 +1900,7 @@ function showPlanLoading(message = "Идет загрузка плана...") {
   const planGrid = document.querySelector("#planGrid");
   const weekStart = selectedWeekStartDate();
   const placeholders = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+  updatePlanDensityUi();
   clearPlanAnalysis("Идет загрузка плана и проверка выполненных тренировок.");
   clearPlanChangeLog("Журнал изменений появится после загрузки плана.");
   planGrid.innerHTML = placeholders
@@ -1917,6 +1940,7 @@ function restoreCurrentPlanOrGenerate() {
 
 function showNoSavedPlanForWeek() {
   const planGrid = document.querySelector("#planGrid");
+  updatePlanDensityUi();
   clearPlanAnalysis();
   clearPlanChangeLog();
   planGrid.innerHTML = `

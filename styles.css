@@ -872,6 +872,10 @@ textarea {
   margin-bottom: 18px;
 }
 
+.plan-grid.compact-plan {
+  gap: 10px;
+}
+
 .plan-analysis {
   margin-bottom: 18px;
 }
@@ -1388,6 +1392,39 @@ textarea {
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.compact-plan .plan-card {
+  min-height: 180px;
+  padding: 12px;
+}
+
+.compact-plan .plan-card strong {
+  margin: 8px 0 6px;
+  font-size: 16px;
+}
+
+.compact-plan .plan-status {
+  margin: 6px 0 8px;
+}
+
+.compact-plan .plan-section {
+  margin-top: 8px;
+  padding: 8px;
+}
+
+.compact-plan .plan-assignment p,
+.compact-plan .plan-actual p,
+.compact-plan .plan-execution p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.compact-plan .plan-meta,
+.compact-plan .rationale {
+  display: none;
 }
 
 .plan-card.completed {
