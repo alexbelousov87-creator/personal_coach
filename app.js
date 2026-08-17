@@ -1440,23 +1440,7 @@ function evaluatePlanDayExecution(day) {
 }
 
 function plannedTypeForDay(day) {
-  const focus = String(day.focus || "").toLowerCase();
-  if (matchesAny(focus, ["гонка", "старт", "race"])) return "race";
-  if (matchesAny(focus, ["отдых"])) return "rest";
-  if (matchesAny(focus, ["интервал", "vo2"])) return "interval";
-  if (matchesAny(focus, ["темпо", "порог", "threshold"])) return "tempo";
-  if (matchesAny(focus, ["длитель", "long"])) return "long";
-  if (matchesAny(focus, ["восстанов", "recovery"])) return "recovery";
-  if (matchesAny(focus, ["кросс", "легк", "аэроб"])) return "easy";
-
-  const assignment = `${day.title || ""} ${day.plannedWorkout || day.details || ""}`.toLowerCase();
-  if (matchesAny(assignment, ["гонка", "старт", "race"])) return "race";
-  if (matchesAny(assignment, ["отдых", "без нагрузки"])) return "rest";
-  if (matchesAny(assignment, ["интервал", "vo2", "повтор", "400", "800", "1000"])) return "interval";
-  if (matchesAny(assignment, ["темповая работа", "темповый блок", "темповое включение", "порог", "threshold"])) return "tempo";
-  if (matchesAny(assignment, ["длитель", "long"])) return "long";
-  if (matchesAny(assignment, ["восстанов", "recovery"])) return "recovery";
-  return "easy";
+  return planTypeFromFocus(day.focus) || planTypeFromAssignment(`${day.title || ""} ${day.plannedWorkout || day.details || ""}`) || "easy";
 }
 
 function planTypeMatchesActual(plannedType, actualType) {
@@ -2376,13 +2360,16 @@ function normalizePlanDay(day, fallbackDay, index) {
         month: "short",
       });
   const splitDetails = splitPlanAndActual(day);
+  const details = splitDetails.planned || fallbackDay?.details || "Детали не указаны.";
+  const focus = normalizedPlanFocus(day, fallbackDay, details);
+  const title = normalizedPlanTitle(day, fallbackDay, focus, details);
 
   return {
     date,
     dateLabel,
-    focus: day.focus || fallbackDay?.focus || "План",
-    title: day.title || fallbackDay?.title || "Тренировка",
-    details: splitDetails.planned || fallbackDay?.details || "Детали не указаны.",
+    focus,
+    title,
+    details,
     plannedWorkout: splitDetails.planned,
     actualWorkout: "",
     intensity: day.intensity || "",
@@ -2419,6 +2406,79 @@ function splitPlanAndActual(day) {
     planned: explicitPlanned || planned,
     actual: "",
   };
+}
+
+function normalizedPlanFocus(day, fallbackDay, details) {
+  const explicitFocus = day.focus || fallbackDay?.focus || "План";
+  const explicitType = planTypeFromFocus(explicitFocus);
+  const assignmentType = planTypeFromAssignment(`${details} ${day.intensity || ""}`);
+  if (assignmentType && !explicitType) {
+    return focusForPlannedType(assignmentType);
+  }
+  if (assignmentType && explicitType && assignmentType !== explicitType) {
+    return focusForPlannedType(assignmentType);
+  }
+  return explicitFocus;
+}
+
+function normalizedPlanTitle(day, fallbackDay, focus, details) {
+  const title = day.title || fallbackDay?.title || "Тренировка";
+  const focusType = planTypeFromFocus(focus);
+  const titleType = planTypeFromFocus(title);
+  if (focusType && titleType && focusType !== titleType) {
+    return defaultTitleForPlannedType(focusType, details);
+  }
+  return title;
+}
+
+function planTypeFromFocus(value) {
+  const text = String(value || "").toLowerCase();
+  if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
+  if (matchesAny(text, ["отдых"])) return "rest";
+  if (matchesAny(text, ["интервал", "vo2"])) return "interval";
+  if (matchesAny(text, ["темпо", "порог", "threshold"])) return "tempo";
+  if (matchesAny(text, ["длитель", "long"])) return "long";
+  if (matchesAny(text, ["восстанов", "recovery"])) return "recovery";
+  if (matchesAny(text, ["кросс", "легк", "аэроб"])) return "easy";
+  return "";
+}
+
+function planTypeFromAssignment(value) {
+  const text = String(value || "").toLowerCase();
+  if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
+  if (matchesAny(text, ["полный отдых", "день отдыха", "без нагрузки"])) return "rest";
+  if (matchesAny(text, ["интервал", "vo2", "повтор", "400 м", "800 м", "1000 м"])) return "interval";
+  if (matchesAny(text, ["темповая работа", "темповый блок", "темповое включение", "порог", "threshold"])) return "tempo";
+  if (matchesAny(text, ["длитель", "long"])) return "long";
+  if (matchesAny(text, ["восстанов", "очень легко"])) return "recovery";
+  if (matchesAny(text, ["легк", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"])) return "easy";
+  return "";
+}
+
+function focusForPlannedType(type) {
+  return {
+    race: "Гонка",
+    rest: "Отдых",
+    interval: "Интервалы",
+    tempo: "Темпо",
+    long: "Длительная",
+    recovery: "Восстановление",
+    easy: "Кросс",
+  }[type] || "План";
+}
+
+function defaultTitleForPlannedType(type, details) {
+  const text = String(details || "").toLowerCase();
+  if (type === "easy" && matchesAny(text, ["ускорен", "strides"])) return "Легкий бег с ускорениями";
+  return {
+    race: "Старт",
+    rest: "Отдых",
+    interval: "Интервальная работа",
+    tempo: "Темповая работа",
+    long: "Длительная тренировка",
+    recovery: "Восстановительный день",
+    easy: "Легкий аэробный бег",
+  }[type] || "Тренировка";
 }
 
 function planDayDetailsText(day) {
