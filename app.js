@@ -603,8 +603,11 @@ function estimateTrimpFromHrr(durationMin, hrReserveRatio) {
 
 function renderAll() {
   renderMetrics();
+  renderGoalCenter();
   renderWorkouts();
   renderBars();
+  renderWeekComparison();
+  renderProfileHrZones();
   renderPlanWeekLabel();
   document.querySelector("#storageCount").textContent = formatCount(state.workouts.length);
 }
@@ -626,6 +629,103 @@ function renderMetrics() {
   document.querySelector("#readiness").textContent = readiness.label;
   document.querySelector("#readinessReason").textContent = readiness.reason;
   document.querySelector("#readinessCard").className = `metric readiness ${readiness.level}`;
+}
+
+function renderGoalCenter() {
+  const container = document.querySelector("#goalCenter");
+  if (!container) return;
+
+  const target = getTargetDistanceProfile();
+  const phase = getPreparationPhase(selectedWeekStartDate());
+  const race = getRaceSummary();
+  const readiness = getReadiness();
+  const raceLine = race
+    ? `${race.name} · ${race.distanceLabel} · ${race.dateLabel}${race.daysUntil >= 0 ? ` · через ${race.daysUntil} дн.` : " · старт уже прошел"}`
+    : "гонка не указана";
+  const constraints = state.profile.constraints?.trim() || "без дополнительных ограничений";
+
+  container.innerHTML = `
+    <div class="panel-head compact-head">
+      <div>
+        <h2>Цель и этап</h2>
+        <span>контекст, с которым строится план</span>
+      </div>
+    </div>
+    <div class="goal-grid">
+      <div class="goal-main">
+        <span class="section-label">Цель</span>
+        <strong>${escapeHtml(state.profile.goal || "Поддержание формы")} · ${escapeHtml(target.label)}</strong>
+        <p>${escapeHtml(raceLine)}</p>
+      </div>
+      <div>
+        <span class="section-label">Этап</span>
+        <strong>${escapeHtml(phase.label)}</strong>
+        <p>${escapeHtml(phase.description)}</p>
+      </div>
+      <div>
+        <span class="section-label">Режим</span>
+        <strong>${Number(state.profile.daysPerWeek) || 4} дн./нед. · ${escapeHtml(readiness.label)}</strong>
+        <p>${escapeHtml(constraints)}</p>
+      </div>
+    </div>
+    ${renderHeartRateZoneStrip()}
+  `;
+}
+
+function renderHeartRateZoneStrip() {
+  const zones = heartRateZonesBpm();
+  if (!zones.length) {
+    return `
+      <div class="hr-zone-strip muted">
+        <span class="section-label">Пульсовые зоны</span>
+        <p>Укажите корректные максимальный пульс и пульс покоя в профиле.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="hr-zone-strip">
+      <span class="section-label">Пульсовые зоны HRR</span>
+      <div class="hr-zone-grid">
+        ${zones.map((zone) => `
+          <div class="hr-zone ${zone.className}">
+            <strong>${zone.label}</strong>
+            <span>${zone.range}</span>
+            <small>${zone.note}</small>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderProfileHrZones() {
+  const container = document.querySelector("#profileHrZones");
+  if (!container) return;
+  container.innerHTML = `
+    <div class="panel-head compact-head">
+      <div>
+        <h2>Пульсовые зоны</h2>
+        <span>расчет по HRR: пульс покоя ${Number(state.profile.restHr) || 0}, максимум ${Number(state.profile.maxHr) || 0}</span>
+      </div>
+    </div>
+    ${renderHeartRateZoneStrip()}
+  `;
+}
+
+function heartRateZonesBpm(profile = state.profile) {
+  const restHr = Number(profile?.restHr) || 0;
+  const maxHr = Number(profile?.maxHr) || 0;
+  if (!restHr || !maxHr || maxHr <= restHr) return [];
+
+  const hrrToBpm = (ratio) => Math.round(restHr + (maxHr - restHr) * ratio);
+  return [
+    { label: "Z1", range: `до ${hrrToBpm(0.6)} уд/мин`, note: "восстановление", className: "zone-z1" },
+    { label: "Z2", range: `${hrrToBpm(0.6)}-${hrrToBpm(0.7)} уд/мин`, note: "легко", className: "zone-z2" },
+    { label: "Z3", range: `${hrrToBpm(0.7)}-${hrrToBpm(0.8)} уд/мин`, note: "умеренно", className: "zone-z3" },
+    { label: "Z4", range: `${hrrToBpm(0.8)}-${hrrToBpm(0.9)} уд/мин`, note: "порог", className: "zone-z4" },
+    { label: "Z5", range: `от ${hrrToBpm(0.9)} уд/мин`, note: "VO2max", className: "zone-z5" },
+  ];
 }
 
 function renderWorkouts() {
@@ -737,6 +837,115 @@ function renderMetricChart(title, unit, items, key, maxValue, formatValue, class
       </div>
     </section>
   `;
+}
+
+function renderWeekComparison() {
+  const container = document.querySelector("#weekComparison");
+  if (!container) return;
+
+  const rows = buildWeekComparison(6);
+  const hasData = rows.some((row) => row.actualWorkouts || row.plannedLoad);
+  if (!hasData) {
+    container.innerHTML = `<div class="empty">Появится после импорта тренировок или сохранения недельного плана.</div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="week-row head">
+      <span>Неделя</span>
+      <span>Факт</span>
+      <span>План</span>
+      <span>Ключевые</span>
+    </div>
+    ${rows.map((row) => `
+      <div class="week-row ${row.weekKey === currentWeekKey() ? "current" : ""}">
+        <div>
+          <strong>${escapeHtml(row.label)}</strong>
+          <small>${row.weekKey === currentWeekKey() ? "текущая" : escapeHtml(row.sourceLabel)}</small>
+        </div>
+        <div>
+          <strong>${Math.round(row.actualLoad)} TRIMP</strong>
+          <small>${round(row.actualDistanceKm, 1)} км · ${Math.round(row.actualMinutes)} мин</small>
+        </div>
+        <div>
+          <strong>${row.plannedLoad ? `${row.plannedLoad} TRIMP` : "нет плана"}</strong>
+          <small>${row.plannedDistanceKm ? `${round(row.plannedDistanceKm, 1)} км` : escapeHtml(row.sourceLabel)}</small>
+        </div>
+        <div>
+          <strong>${escapeHtml(row.actualKeyLabel)}</strong>
+          <small>${escapeHtml(row.plannedKeyLabel)}</small>
+        </div>
+      </div>
+    `).join("")}
+  `;
+}
+
+function buildWeekComparison(count = 6) {
+  const current = startOfTrainingWeek(new Date());
+  return Array.from({ length: count }, (_, index) => {
+    const weekStart = addDays(current, (index - count + 1) * 7);
+    return summarizeWeekForComparison(weekStart);
+  });
+}
+
+function summarizeWeekForComparison(weekStart) {
+  const range = weekRange(weekStart);
+  const weekKey = toDateInputValue(range.start);
+  const workouts = dedupeWorkouts(state.workouts.filter((workout) => {
+    const date = new Date(workout.date);
+    return date >= range.start && date < range.end;
+  }));
+  const planState = storedPlanForWeekKey(weekKey);
+  const planDays = planState?.days || [];
+  const keyTypes = new Set(["interval", "tempo", "long", "race"]);
+  const actualKeyTypes = [...new Set(workouts.map(getWorkoutType).filter((type) => keyTypes.has(type)))];
+  const plannedKeyTypes = [...new Set(planDays.map(plannedTypeForDay).filter((type) => keyTypes.has(type)))];
+  const actualLoad = workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
+  const actualDistanceKm = workouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0);
+  const actualMinutes = workouts.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0);
+  const plannedLoad = planDays.reduce((sum, day) => sum + plannedLoadScoreForDay(day), 0);
+  const plannedDistanceKm = planDays.reduce((sum, day) => sum + plannedDistanceEstimate(day), 0);
+
+  return {
+    weekKey,
+    label: `${formatDate(range.start)} - ${formatDate(addDays(range.start, 6))}`,
+    sourceLabel: planState ? planSourceLabel(planState.source) : "план не сохранен",
+    actualWorkouts: workouts.length,
+    actualLoad,
+    actualDistanceKm,
+    actualMinutes,
+    plannedLoad,
+    plannedDistanceKm,
+    actualKeyLabel: actualKeyTypes.length ? actualKeyTypes.map(actualTypeLabel).join(", ") : "нет",
+    plannedKeyLabel: plannedKeyTypes.length ? `план: ${plannedKeyTypes.map(plannedTypeLabel).join(", ")}` : "ключевых работ в плане нет",
+  };
+}
+
+function storedPlanForWeekKey(weekKey) {
+  const bucket = weekPlans(weekKey);
+  const sources = bucket.sources || {};
+  const preferred = bucket.activePlanSource || state.activePlanSource || "json";
+  const sourceOrder = [...new Set([preferred, "json", "ai", "local"])];
+  for (const source of sourceOrder) {
+    const normalized = normalizeStoredPlanForWeek(sources[source], weekKey);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function planSourceLabel(source) {
+  const labels = {
+    local: "локальный",
+    json: "JSON",
+    ai: "ИИ",
+  };
+  return labels[source] || "сохраненный план";
+}
+
+function plannedDistanceEstimate(day) {
+  const bounds = plannedDistanceBounds(day);
+  if (!bounds) return 0;
+  return average([bounds.from, bounds.to]);
 }
 
 function generatePlan() {

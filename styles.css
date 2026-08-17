@@ -347,6 +347,119 @@ p {
   margin-bottom: 14px;
 }
 
+.goal-center {
+  margin-bottom: 18px;
+}
+
+.goal-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.goal-grid > div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.goal-grid strong,
+.hr-zone strong,
+.week-row strong {
+  display: block;
+}
+
+.goal-grid p,
+.hr-zone-strip p,
+.hr-zone small,
+.week-row small {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.hr-zone-strip {
+  margin-top: 12px;
+}
+
+.hr-zone-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hr-zone {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--tone-color, var(--accent-2));
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.hr-zone span {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.zone-z1 {
+  --tone-color: var(--tone-recovery);
+}
+
+.zone-z2 {
+  --tone-color: var(--tone-easy);
+}
+
+.zone-z3 {
+  --tone-color: var(--tone-long);
+}
+
+.zone-z4 {
+  --tone-color: var(--tone-threshold);
+}
+
+.zone-z5 {
+  --tone-color: var(--tone-vo2);
+}
+
+.week-comparison-panel {
+  margin-top: 18px;
+}
+
+.week-comparison {
+  display: grid;
+  gap: 8px;
+}
+
+.week-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.2fr) repeat(3, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.week-row.head {
+  padding: 0 12px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.week-row.current {
+  border-color: rgba(17, 106, 123, 0.32);
+  background: #f3f9fb;
+}
+
 .workout-list {
   display: grid;
   gap: 10px;
@@ -1180,6 +1293,8 @@ textarea {
 @media (max-width: 1080px) {
   .metric-grid,
   .analysis-grid,
+  .goal-grid,
+  .hr-zone-grid,
   .plan-legend,
   .plan-control-grid,
   .plan-grid {
@@ -1233,10 +1348,17 @@ textarea {
 
   .metric-grid,
   .analysis-grid,
+  .goal-grid,
+  .hr-zone-grid,
   .plan-legend,
   .plan-control-grid,
   .plan-grid,
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .week-row,
+  .week-row.head {
     grid-template-columns: 1fr;
   }
 
