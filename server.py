@@ -17,6 +17,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CONF_FILE = ROOT / "conf.json"
+TODAY_BUTTON_TEXT = "Получить план на сегодня"
 
 DEFAULT_CONFIG = {
     "server": {
@@ -62,7 +63,7 @@ DEFAULT_CONFIG = {
             "sendOnRestDays": True,
             "removeKeyboard": True,
             "showTodayButton": True,
-            "todayButtonText": "Получить план на сегодня",
+            "todayButtonText": TODAY_BUTTON_TEXT,
             "pollCommands": True,
             "clearMenu": True,
         },
@@ -415,6 +416,14 @@ def notification_status():
     }
 
 
+def clean_telegram_button_text(value):
+    text = str(value or "").strip()
+    compact = text.replace(" ", "")
+    if not text or "\ufffd" in text or (compact and set(compact) <= {"?"}):
+        return TODAY_BUTTON_TEXT
+    return text
+
+
 def telegram_notification_config():
     telegram = NOTIFICATIONS_CONFIG.get("telegram", {})
     return {
@@ -425,7 +434,7 @@ def telegram_notification_config():
         "send_on_rest_days": bool(telegram.get("sendOnRestDays", True)),
         "remove_keyboard": bool(telegram.get("removeKeyboard", True)),
         "show_today_button": bool(telegram.get("showTodayButton", True)),
-        "today_button_text": str(telegram.get("todayButtonText") or "Получить план на сегодня").strip() or "Получить план на сегодня",
+        "today_button_text": clean_telegram_button_text(telegram.get("todayButtonText")),
         "poll_commands": bool(telegram.get("pollCommands", True)),
         "clear_menu": bool(telegram.get("clearMenu", True)),
     }
@@ -700,8 +709,7 @@ def handle_telegram_update(update, telegram):
     if not text or chat_id != str(telegram["chat_id"]):
         return
 
-    commands = {telegram["today_button_text"].strip().lower(), "/today", "/plan", "/start"}
-    if text.lower() not in commands:
+    if not is_today_plan_command(text, telegram):
         return
 
     if daily_assignment_sent_today():
@@ -719,6 +727,14 @@ def handle_telegram_update(update, telegram):
         response,
         reply_markup=telegram_reply_markup(telegram),
     )
+
+
+def is_today_plan_command(text, telegram):
+    normalized = str(text or "").strip().lower()
+    commands = {telegram["today_button_text"].strip().lower(), "/today", "/plan", "/start"}
+    if normalized in commands:
+        return True
+    return bool(normalized) and all(char in {"?", " "} for char in normalized)
 
 
 def polar_status():
