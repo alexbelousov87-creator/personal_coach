@@ -25,6 +25,7 @@ const state = {
   plansByWeek: loadJson(PLANS_BY_WEEK_KEY, {}),
   activePlanSource: loadJson(ACTIVE_PLAN_SOURCE_KEY, "json"),
   selectedWeekStart: loadJson(SELECTED_WEEK_KEY, currentWeekKey()),
+  planReview: null,
   profile: loadJson(PROFILE_KEY, {
     name: "",
     goal: "Поддержание формы",
@@ -111,6 +112,7 @@ function wireNavigation() {
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
   document.querySelector("#adjustLocalPlan").addEventListener("click", adjustPlanLocally);
   document.querySelector("#adjustJsonPlan").addEventListener("click", reloadJsonPlan);
+  document.querySelector("#reviewAiPlan").addEventListener("click", reviewCurrentPlanWithAi);
   document.querySelector("#generateAiPlan").addEventListener("click", selectAiPlan);
   document.querySelector("#loadPlanJson").addEventListener("click", selectJsonPlan);
   document.querySelector("#previousWeek").addEventListener("click", () => changeSelectedWeek(-7));
@@ -1321,6 +1323,7 @@ function softenAfterHeavyActual(days, evaluations, target, today) {
 function renderPlan(plan) {
   const planGrid = document.querySelector("#planGrid");
   renderPlanAnalysis(plan);
+  renderAiPlanReview();
   renderPlanChangeLog(loadCurrentPlan());
   planGrid.innerHTML = plan
     .map((day, index) => {
@@ -1380,6 +1383,182 @@ function renderPlanAnalysis(plan) {
     ${renderWeekProgress(summary)}
     ${renderPlanControl(summary)}
   `;
+}
+
+function renderAiPlanReview() {
+  const container = document.querySelector("#aiPlanReview");
+  if (!container) return;
+
+  const review = state.planReview;
+  if (!review || review.weekKey !== selectedWeekKey()) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+
+  const issues = Array.isArray(review.issues) ? review.issues : [];
+  const recommendations = Array.isArray(review.recommendations) ? review.recommendations : [];
+  container.hidden = false;
+  container.innerHTML = `
+    <div class="panel-head compact-head">
+      <div>
+        <h2>ИИ-ревью плана</h2>
+        <span>${escapeHtml(review.modelUsed ? `Модель: ${review.modelUsed}` : "проверка текущей недели")}</span>
+      </div>
+      <strong class="review-verdict ${escapeHtml(review.verdictLevel)}">${escapeHtml(review.verdict)}</strong>
+    </div>
+    <p class="review-summary">${escapeHtml(review.summary)}</p>
+    ${issues.length ? `
+      <div class="review-list">
+        ${issues.map((issue) => `
+          <article class="review-item ${escapeHtml(issue.severity)}">
+            <span>${escapeHtml(issue.day || issue.severityLabel)}</span>
+            <strong>${escapeHtml(issue.title)}</strong>
+            <p>${escapeHtml(issue.details)}</p>
+          </article>
+        `).join("")}
+      </div>
+    ` : `<div class="empty">ИИ не нашел критичных конфликтов в структуре плана.</div>`}
+    ${recommendations.length ? `
+      <div class="review-recommendations">
+        <span class="section-label">Что проверить перед выполнением</span>
+        <ul>${recommendations.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      </div>
+    ` : ""}
+  `;
+}
+
+async function reviewCurrentPlanWithAi() {
+  hideAdjustChoice();
+  const current = loadCurrentPlan();
+  if (!current) {
+    setAiStatus("Для ИИ-ревью сначала создайте, загрузите или выберите план недели.", "error");
+    return;
+  }
+
+  const button = document.querySelector("#reviewAiPlan");
+  button.disabled = true;
+  setAiStatus("ИИ проверяет текущий план...", "");
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/plan/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildPlanReviewRequest(current)),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "сервер вернул ошибку");
+    }
+
+    state.planReview = normalizePlanReview(payload.review, current);
+    renderAiPlanReview();
+    setAiStatus(`ИИ-ревью готово: ${state.planReview.summary}`, state.planReview.verdictLevel === "danger" ? "error" : "ok");
+  } catch (error) {
+    setAiStatus(`ИИ-ревью недоступно: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function buildPlanReviewRequest(planState) {
+  const aiRequest = buildAiRequest();
+  const planDays = planState.days || [];
+  return {
+    system: "Ты опытный тренер-ревьюер. Проверяй готовый недельный план на риски, противоречия и соответствие цели. Не переписывай план целиком.",
+    context: aiRequest.context,
+    planningWeek: aiRequest.planningWeek,
+    plan: {
+      source: planState.source || "",
+      sourceLabel: planSourceLabel(planState.source),
+      summary: planState.summary || "",
+      modelUsed: planState.modelUsed || "",
+      weekStart: selectedWeekKey(),
+      days: planDays.map((day) => ({
+        date: day.date,
+        dateLabel: day.dateLabel,
+        focus: day.focus,
+        title: day.title,
+        plannedWorkout: day.plannedWorkout || day.details || "",
+        targetDistance: day.targetDistance || "",
+        intensity: day.intensity || "",
+        load: day.load || "",
+        rationale: day.rationale || "",
+        plannedType: plannedTypeForDay(day),
+        plannedLoadEstimate: plannedLoadScoreForDay(day),
+      })),
+    },
+    localAnalysis: buildWeekExecutionSummary(planDays),
+    reviewRules: [
+      "Проверь соответствие заголовков и заданий: focus/title не должны противоречить plannedWorkout.",
+      "Проверь расстояние между тяжелыми беговыми стимулами, особенно интервалы, темпо, гонка и длительная.",
+      "Проверь, что цель, этап подготовки, режим planningMode и ближайшая гонка учтены.",
+      "Проверь, что тренировки достаточно конкретны: интервалы, темпо, горки и силовая должны иметь объем, интенсивность и восстановление.",
+      "Проверь нагрузку относительно recentWorkouts, load7Days, load28Days, acuteChronicRatio и локальных предупреждений.",
+      "Не предлагай медицинских диагнозов. Если данных мало, прямо укажи, какие данные ограничивают уверенность.",
+    ],
+  };
+}
+
+function normalizePlanReview(review, planState) {
+  const raw = review && typeof review === "object" ? review : {};
+  const issues = Array.isArray(raw.issues) ? raw.issues : [];
+  const normalizedIssues = issues.slice(0, 8).map((issue) => {
+    const severity = normalizeReviewSeverity(issue.severity || issue.level);
+    return {
+      severity,
+      severityLabel: reviewSeverityLabel(severity),
+      day: String(issue.day || issue.dateLabel || issue.date || "").trim(),
+      title: String(issue.title || issue.problem || "Замечание").trim(),
+      details: String(issue.details || issue.recommendation || issue.reason || "").trim(),
+    };
+  }).filter((issue) => issue.title || issue.details);
+  const verdictLevel = normalizeReviewVerdict(raw.verdictLevel || raw.level, normalizedIssues);
+  return {
+    weekKey: selectedWeekKey(),
+    source: planState.source || "",
+    summary: String(raw.summary || "Проверка готового плана выполнена.").trim(),
+    verdict: String(raw.verdict || reviewVerdictLabel(verdictLevel)).trim(),
+    verdictLevel,
+    issues: normalizedIssues,
+    recommendations: Array.isArray(raw.recommendations)
+      ? raw.recommendations.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+      : [],
+    modelUsed: raw.modelUsed || "",
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeReviewSeverity(value) {
+  const text = String(value || "").toLowerCase();
+  if (matchesAny(text, ["critical", "danger", "крит", "высок", "сильн"])) return "danger";
+  if (matchesAny(text, ["warning", "warn", "сред", "риск", "осторож"])) return "warn";
+  return "info";
+}
+
+function normalizeReviewVerdict(value, issues) {
+  const text = String(value || "").toLowerCase();
+  if (matchesAny(text, ["danger", "critical", "крит", "перестро"])) return "danger";
+  if (matchesAny(text, ["warn", "caution", "риск", "уточн", "осторож"])) return "warn";
+  if (issues.some((issue) => issue.severity === "danger")) return "danger";
+  if (issues.some((issue) => issue.severity === "warn")) return "warn";
+  return "ok";
+}
+
+function reviewSeverityLabel(severity) {
+  return {
+    danger: "критично",
+    warn: "риск",
+    info: "замечание",
+  }[severity] || "замечание";
+}
+
+function reviewVerdictLabel(level) {
+  return {
+    ok: "план выглядит согласованным",
+    warn: "нужна внимательная проверка",
+    danger: "лучше скорректировать",
+  }[level] || "ревью готово";
 }
 
 function renderWeekProgress(summary) {
@@ -1511,6 +1690,7 @@ function clearPlanAnalysis(message = "Для выбранной недели н�
   const container = document.querySelector("#planAnalysis");
   if (!container) return;
   container.innerHTML = `<div class="empty">${escapeHtml(message)}</div>`;
+  renderAiPlanReview();
 }
 
 function handlePlanGridClick(event) {

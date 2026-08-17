@@ -188,6 +188,7 @@
             <div class="button-row">
               <button class="ghost-btn" id="generatePlan" type="button">Локальный</button>
               <button class="ghost-btn" id="adjustPlan" type="button">Скорректировать</button>
+              <button class="ghost-btn" id="reviewAiPlan" type="button">Ревью ИИ</button>
               <button class="ghost-btn" id="loadPlanJson" type="button">План из JSON</button>
               <input id="planJsonInput" type="file" accept=".json,application/json" hidden>
               <button class="primary-btn" id="generateAiPlan" type="button">План от ИИ</button>
@@ -235,6 +236,7 @@
           </section>
 
           <section class="panel plan-analysis" id="planAnalysis"></section>
+          <section class="panel ai-plan-review" id="aiPlanReview" hidden></section>
           <section class="panel plan-change-log" id="planChangeLog"></section>
 
           <div class="plan-grid" id="planGrid"></div>

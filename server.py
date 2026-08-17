@@ -229,6 +229,17 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
+        if clean_path == "/api/plan/review":
+            try:
+                payload = self.read_json()
+                review = create_ai_plan_review(payload)
+                self.send_json({"review": review})
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
         if clean_path != "/api/plan":
             self.send_json({"error": "unknown endpoint"}, status=404)
             return
@@ -1104,6 +1115,56 @@ def create_ai_plan(payload):
     raise AppError(f"Не удалось получить валидный JSON от моделей: {tried}. Последняя ошибка: {retryable_errors[-1] if retryable_errors else 'нет деталей'}", 502)
 
 
+def create_ai_plan_review(payload):
+    api_key = load_api_key()
+    if not api_key:
+        raise AppError("API key не найден. Укажите llm.apiKey или llm.apiKeyEnv в conf.json.", 500)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    if LLM_CONFIG.get("siteUrl"):
+        headers["HTTP-Referer"] = LLM_CONFIG["siteUrl"]
+    if LLM_CONFIG.get("appName"):
+        headers["X-Title"] = LLM_CONFIG["appName"]
+
+    retryable_errors = []
+    for model in get_model_sequence():
+        body = build_review_chat_body(payload, model)
+        response = request.Request(
+            LLM_CONFIG["chatCompletionsUrl"],
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with request.urlopen(response, timeout=int(LLM_CONFIG["timeoutSeconds"])) as result:
+                data = json.loads(result.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 429:
+                retryable_errors.append(f"{model}: 429 {details}")
+                continue
+            raise AppError(f"OpenRouter API error {exc.code} ({model}): {details}", exc.code)
+        except error.URLError as exc:
+            raise AppError(f"не удалось подключиться к OpenRouter API: {exc.reason}", 502)
+
+        text = extract_chat_text(data)
+        try:
+            review = normalize_review_json(parse_plan_json(text))
+            review["modelUsed"] = model
+            return review
+        except AppError as exc:
+            retryable_errors.append(f"{model}: {exc}")
+            continue
+
+    tried = ", ".join(get_model_sequence())
+    raise AppError(f"Не удалось получить валидный JSON ревью от моделей: {tried}. Последняя ошибка: {retryable_errors[-1] if retryable_errors else 'нет деталей'}", 502)
+
+
 def get_model_sequence():
     models = [LLM_CONFIG["model"], *LLM_CONFIG.get("fallbackModels", [])]
     result = []
@@ -1128,6 +1189,30 @@ def build_chat_body(payload, model):
         ],
         "temperature": float(LLM_CONFIG.get("temperature", 0.2)),
         "max_tokens": int(LLM_CONFIG.get("maxTokens", 2500)),
+    }
+    if LLM_CONFIG.get("jsonMode", True):
+        body["response_format"] = {"type": "json_object"}
+    return body
+
+
+def build_review_chat_body(payload, model):
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": payload.get(
+                    "system",
+                    "Ты опытный тренер-ревьюер. Проверяй готовый недельный план на риски и противоречия.",
+                ),
+            },
+            {
+                "role": "user",
+                "content": build_review_user_prompt(payload),
+            },
+        ],
+        "temperature": float(LLM_CONFIG.get("temperature", 0.2)),
+        "max_tokens": min(int(LLM_CONFIG.get("maxTokens", 2500)), 1800),
     }
     if LLM_CONFIG.get("jsonMode", True):
         body["response_format"] = {"type": "json_object"}
@@ -1202,6 +1287,41 @@ def build_user_prompt(payload):
     )
 
 
+def build_review_user_prompt(payload):
+    schema = {
+        "summary": "Краткий вывод по качеству готового плана.",
+        "verdict": "Итог: план согласован / есть риски / лучше скорректировать.",
+        "verdictLevel": "ok | warn | danger",
+        "issues": [
+            {
+                "severity": "info | warn | danger",
+                "day": "дата или день недели, если замечание относится к конкретному дню",
+                "title": "короткое название проблемы",
+                "details": "почему это важно и что именно проверить или поправить",
+            }
+        ],
+        "recommendations": [
+            "короткая практическая рекомендация перед выполнением плана"
+        ],
+    }
+    return (
+        "Проверь готовый недельный план тренировок. Не создавай новый план и не переписывай все дни целиком. "
+        "Найди только реальные риски, противоречия и недостающую конкретику. "
+        "Особенно проверь: соответствие заголовков заданию, частоту тяжелых стимулов, расстояние между интервалами/темпо/длительной/гонкой, "
+        "соответствие цели и этапу подготовки, реалистичность нагрузки по recentWorkouts и локальному анализу, "
+        "конкретность заданий для интервалов, темпо, горок, силовой и длительной. "
+        "Если план выглядит хорошим, так и напиши, но можешь оставить 1-2 мягких пункта контроля. "
+        "Не описывай факт выполнения как часть задания. Не давай медицинских диагнозов.\n\n"
+        f"Контекст:\n{json.dumps(payload.get('context', {}), ensure_ascii=False, indent=2)}\n\n"
+        f"Планируемая неделя:\n{json.dumps(payload.get('planningWeek', {}), ensure_ascii=False, indent=2)}\n\n"
+        f"Готовый план для ревью:\n{json.dumps(payload.get('plan', {}), ensure_ascii=False, indent=2)}\n\n"
+        f"Локальный анализ выполнения и предупреждений:\n{json.dumps(payload.get('localAnalysis', {}), ensure_ascii=False, indent=2)}\n\n"
+        f"Правила ревью:\n{json.dumps(payload.get('reviewRules', []), ensure_ascii=False, indent=2)}\n\n"
+        "Верни только один валидный JSON-объект без Markdown, комментариев и пояснений. "
+        f"Форма JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+    )
+
+
 def extract_chat_text(data):
     choices = data.get("choices", [])
     if choices:
@@ -1238,6 +1358,32 @@ def parse_plan_json(text):
             except json.JSONDecodeError:
                 pass
     raise AppError("OpenRouter API вернул невалидный JSON плана", 502)
+
+
+def normalize_review_json(review):
+    if not isinstance(review, dict):
+        raise AppError("OpenRouter API вернул невалидный JSON ревью", 502)
+
+    issues = review.get("issues", [])
+    if not isinstance(issues, list):
+        issues = []
+    recommendations = review.get("recommendations", [])
+    if not isinstance(recommendations, list):
+        recommendations = []
+
+    return {
+        "summary": str(review.get("summary") or "Ревью плана выполнено.").strip(),
+        "verdict": str(review.get("verdict") or "ревью готово").strip(),
+        "verdictLevel": str(review.get("verdictLevel") or review.get("level") or "ok").strip(),
+        "issues": [
+            item for item in issues[:8]
+            if isinstance(item, dict)
+        ],
+        "recommendations": [
+            str(item).strip() for item in recommendations[:6]
+            if str(item).strip()
+        ],
+    }
 
 
 def strip_model_actuals(plan):
