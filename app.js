@@ -446,6 +446,8 @@ function dedupeWorkouts(workouts) {
 }
 
 function workoutDedupKey(workout) {
+  const polarId = polarExerciseIdFromSource(workout?.source);
+  if (polarId) return `polar-${polarId}`;
   const date = dateFromAny(workout?.date);
   const dateKey = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 16) : "";
   const sportKey = normalizedSportKey(workout?.sport);
@@ -454,16 +456,36 @@ function workoutDedupKey(workout) {
   return `${dateKey}-${sportKey}-${durationKey}-${distanceKey}`;
 }
 
+function polarExerciseIdFromSource(source) {
+  const value = String(source || "").trim();
+  const directMatch = value.match(/^Polar:([^/\\]+)$/i);
+  if (directMatch) return directMatch[1].toLowerCase();
+  const fileName = fileNameFromSource(value);
+  const fileMatch = fileName.match(/^Polar_.+_([A-Za-z0-9-]+)\.TCX$/i);
+  return fileMatch ? fileMatch[1].toLowerCase() : "";
+}
+
 function normalizedSportKey(sport) {
   const value = String(sport || "").trim().toLowerCase();
   if (value.includes("run") || value.includes("бег")) return "running";
   return value || "unknown";
 }
 
+function isRunningWorkout(workout) {
+  return normalizedSportKey(workout?.sport) === "running";
+}
+
+function isGenericSport(sport) {
+  return ["", "other", "polar", "unknown"].includes(String(sport || "").trim().toLowerCase());
+}
+
 function mergeDuplicateWorkouts(a, b) {
   const useB = workoutRichnessScore(b) > workoutRichnessScore(a);
   const base = { ...(useB ? b : a) };
   const other = useB ? a : b;
+  if (isGenericSport(base.sport) && other.sport) {
+    base.sport = other.sport;
+  }
   for (const key of ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "hrMax", "hrRest"]) {
     if (!base[key] && other[key]) base[key] = other[key];
   }
@@ -1320,6 +1342,7 @@ function evaluatePlanDayExecution(day) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const plannedType = plannedTypeForDay(day);
+  const completionActual = planCompletionWorkoutsForDay(day);
 
   if (!actual.length) {
     if (planDate < today && plannedType !== "rest") {
@@ -1343,10 +1366,22 @@ function evaluatePlanDayExecution(day) {
   }
 
   const actualTypes = actual.map(getWorkoutType);
+  const completionTypes = completionActual.map(getWorkoutType);
   const actualLoad = actual.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const plannedLoad = plannedLoadScoreForDay(day);
-  const typeMatched = actualTypes.some((type) => planTypeMatchesActual(plannedType, type));
+  const typeMatched = completionTypes.some((type) => planTypeMatchesActual(plannedType, type));
   const keyCompleted = ["interval", "tempo", "long", "race"].includes(plannedType) && typeMatched;
+
+  if (!completionActual.length && planTypeRequiresRunning(plannedType)) {
+    return {
+      show: true,
+      completed: false,
+      keyCompleted: false,
+      level: "mismatch",
+      label: "есть доп. нагрузка",
+      comment: `по плану ${plannedTypeLabel(plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}; нагрузка учтена в TRIMP, но беговое задание не закрыто`,
+    };
+  }
 
   if (!typeMatched && plannedType !== "rest") {
     return {
@@ -2151,6 +2186,11 @@ function buildAiRequest() {
       load28Days: sumLoad(28),
       previous7DaysLoad: sumLoadRange(8, 14),
       recentWorkouts: recent,
+      workoutAccountingRules: [
+        "Все импортированные активности учитывай как нагрузку и фактор восстановления.",
+        "Беговые задания плана закрываются только беговыми тренировками.",
+        "Небеговые активности не заменяют интервалы, темпо, длительную или легкий бег, но могут требовать снижения оставшихся беговых нагрузок.",
+      ],
       requiredWeeklyStructure: [
         "понедельник: восстановительный бег или отдых при необходимости",
         "вторник: интенсивная интервальная работа",
@@ -3399,7 +3439,7 @@ function workoutTypeLabel(workout) {
 }
 
 function isPlanDayCompleted(day) {
-  return actualWorkoutsForPlanDay(day).length > 0;
+  return planCompletionWorkoutsForDay(day).length > 0;
 }
 
 function actualWorkoutsForPlanDay(day) {
@@ -3408,6 +3448,20 @@ function actualWorkoutsForPlanDay(day) {
   return dedupeWorkouts(state.workouts
     .filter((workout) => sameDay(new Date(workout.date), planDate))
   ).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+function planCompletionWorkoutsForDay(day) {
+  const actual = actualWorkoutsForPlanDay(day);
+  const plannedType = plannedTypeForDay(day);
+  if (plannedType === "rest") return [];
+  if (planTypeRequiresRunning(plannedType)) {
+    return actual.filter(isRunningWorkout);
+  }
+  return actual;
+}
+
+function planTypeRequiresRunning(type) {
+  return ["interval", "tempo", "long", "easy", "recovery", "race"].includes(type);
 }
 
 function formatActualWorkout(workout) {
