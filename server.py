@@ -408,6 +408,7 @@ def notification_status():
         "configured": bool(telegram["bot_token"] and telegram["chat_id"]),
         "dailyTime": telegram["daily_time"],
         "lastSent": load_state_value("dailyNotificationLastSent", ""),
+        "lastSentAt": load_state_value("dailyNotificationLastSentAt", ""),
         "hasTodayAssignment": bool(plan_day),
         "todayButton": telegram["today_button_text"] if telegram["show_today_button"] else "",
     }
@@ -466,9 +467,7 @@ def send_daily_assignment_notification(force=False):
     if not force and not notification_time_reached(telegram["daily_time"]):
         return {"ok": False, "skipped": "not time yet"}
 
-    today_key = date.today().isoformat()
-    last_sent = load_state_value("dailyNotificationLastSent", "")
-    if not force and last_sent == today_key:
+    if not force and daily_assignment_sent_today():
         return {"ok": False, "skipped": "already sent today"}
 
     plan_day = get_today_plan_day()
@@ -485,8 +484,17 @@ def send_daily_assignment_notification(force=False):
         reply_markup=telegram_reply_markup(telegram),
     )
     if not force:
-        save_state_value("dailyNotificationLastSent", today_key)
+        mark_daily_assignment_sent()
     return {"ok": True, "message": text}
+
+
+def daily_assignment_sent_today():
+    return load_state_value("dailyNotificationLastSent", "") == date.today().isoformat()
+
+
+def mark_daily_assignment_sent():
+    save_state_value("dailyNotificationLastSent", date.today().isoformat())
+    save_state_value("dailyNotificationLastSentAt", datetime.now().isoformat(timespec="seconds"))
 
 
 def notification_time_reached(value):
@@ -652,11 +660,15 @@ def handle_telegram_update(update, telegram):
     if text.lower() not in commands:
         return
 
-    plan_day = get_today_plan_day()
-    if plan_day:
-        response = format_daily_assignment_message(plan_day)
+    if daily_assignment_sent_today():
+        response = "План на сегодня уже был отправлен ранее. Повторно не отправляю, чтобы не дублировать."
     else:
-        response = "На сегодня нет сохраненного плана. Откройте приложение и создайте или загрузите план на текущую неделю."
+        plan_day = get_today_plan_day()
+        if plan_day:
+            response = format_daily_assignment_message(plan_day)
+            mark_daily_assignment_sent()
+        else:
+            response = "На сегодня нет сохраненного плана. Откройте приложение и создайте или загрузите план на текущую неделю."
     send_telegram_message(
         telegram["bot_token"],
         telegram["chat_id"],
