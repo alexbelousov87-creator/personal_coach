@@ -863,8 +863,9 @@ function renderPlan(plan) {
     .map((day) => {
       const status = getPlanDayStatus(day);
       const execution = evaluatePlanDayExecution(day);
+      const toneClass = planToneClass(day, status, execution);
       return `
-        <article class="plan-card ${status.className} eval-${execution.level}">
+        <article class="plan-card ${status.className} eval-${execution.level} ${toneClass}">
           <time>${day.dateLabel}</time>
           <div class="plan-status">${status.label}</div>
           <span>${day.focus}</span>
@@ -1453,6 +1454,28 @@ function plannedTypeForDay(day) {
   const focusType = planTypeFromFocus(day.focus);
   if (assignmentType && !["recovery", "easy"].includes(assignmentType)) return assignmentType;
   return focusType || assignmentType || "easy";
+}
+
+function planToneClass(day, status, execution) {
+  if (!["upcoming", "today"].includes(status.className) || execution.completed) return "";
+  return `plan-tone-${plannedIntensityTone(day)}`;
+}
+
+function plannedIntensityTone(day) {
+  const text = planDayComparableText(day);
+  const type = plannedTypeForDay(day);
+  if (type === "rest" || assignmentHasNoRun(text)) return "recovery";
+  if (matchesAny(text, ["спринт", "sprint", "максимальн"])) return "sprint";
+  if (matchesAny(text, ["vo2", "vo₂", "z5"])) return "vo2";
+  if (matchesAny(text, ["усилие 5 км", "5км", "5 km", "5k", "z5"])) return "5k";
+  if (matchesAny(text, ["усилие 10 км", "10км", "10 km", "10k"])) return "10k";
+  if (matchesAny(text, ["порог", "threshold", "z4"])) return "threshold";
+  if (matchesAny(text, ["марафонск", "полумарафонск", "z3"])) return "threshold";
+  if (type === "interval" || type === "race") return "vo2";
+  if (type === "tempo") return "threshold";
+  if (type === "long") return "long";
+  if (type === "recovery" || matchesAny(text, ["z1", "восстанов", "очень легко"])) return "recovery";
+  return "easy";
 }
 
 function planTypeMatchesActual(plannedType, actualType, day = null, workout = null) {

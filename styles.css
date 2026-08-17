@@ -13,6 +13,14 @@
   --warn: #aa6a16;
   --bad: #b93232;
   --shadow: 0 16px 40px rgba(23, 33, 38, 0.08);
+  --tone-recovery: #67c7d0;
+  --tone-easy: #3f9b73;
+  --tone-long: #4f82b7;
+  --tone-threshold: #c48e2c;
+  --tone-10k: #d76f3d;
+  --tone-5k: #c84f68;
+  --tone-vo2: #7b5ac7;
+  --tone-sprint: #303844;
 }
 
 * {
@@ -638,21 +646,53 @@ textarea {
   min-height: 48px;
   padding: 10px;
   border: 1px solid var(--line);
+  border-top: 6px solid var(--tone-color);
   border-radius: 8px;
-  background: #f1f6f7;
+  background: var(--tone-bg);
   color: var(--ink);
   font-size: 13px;
   font-weight: 700;
   text-align: center;
 }
 
-.intensity-scale span:nth-child(4),
-.intensity-scale span:nth-child(5) {
-  background: #fff7df;
+.tone-recovery {
+  --tone-color: var(--tone-recovery);
+  --tone-bg: #f2fbfc;
 }
 
-.intensity-scale span:nth-child(n + 6) {
-  background: #fff0f0;
+.tone-easy {
+  --tone-color: var(--tone-easy);
+  --tone-bg: #f3faf6;
+}
+
+.tone-long {
+  --tone-color: var(--tone-long);
+  --tone-bg: #f2f7fc;
+}
+
+.tone-threshold {
+  --tone-color: var(--tone-threshold);
+  --tone-bg: #fff9eb;
+}
+
+.tone-10k {
+  --tone-color: var(--tone-10k);
+  --tone-bg: #fff5ef;
+}
+
+.tone-5k {
+  --tone-color: var(--tone-5k);
+  --tone-bg: #fff3f6;
+}
+
+.tone-vo2 {
+  --tone-color: var(--tone-vo2);
+  --tone-bg: #f7f4ff;
+}
+
+.tone-sprint {
+  --tone-color: var(--tone-sprint);
+  --tone-bg: #f3f4f6;
 }
 
 .reference-notes {
@@ -746,6 +786,52 @@ textarea {
 .plan-card.eval-missed {
   border-color: rgba(185, 50, 50, 0.48);
   background: #fff0f0;
+}
+
+.plan-card.upcoming[class*="plan-tone-"],
+.plan-card.today[class*="plan-tone-"] {
+  border-left-width: 6px;
+  border-left-color: var(--plan-tone);
+}
+
+.plan-card.upcoming.plan-tone-recovery {
+  --plan-tone: var(--tone-recovery);
+  background: #f2fbfc;
+}
+
+.plan-card.upcoming.plan-tone-easy {
+  --plan-tone: var(--tone-easy);
+  background: #f3faf6;
+}
+
+.plan-card.upcoming.plan-tone-long {
+  --plan-tone: var(--tone-long);
+  background: #f2f7fc;
+}
+
+.plan-card.upcoming.plan-tone-threshold {
+  --plan-tone: var(--tone-threshold);
+  background: #fff9eb;
+}
+
+.plan-card.upcoming.plan-tone-10k {
+  --plan-tone: var(--tone-10k);
+  background: #fff5ef;
+}
+
+.plan-card.upcoming.plan-tone-5k {
+  --plan-tone: var(--tone-5k);
+  background: #fff3f6;
+}
+
+.plan-card.upcoming.plan-tone-vo2 {
+  --plan-tone: var(--tone-vo2);
+  background: #f7f4ff;
+}
+
+.plan-card.upcoming.plan-tone-sprint {
+  --plan-tone: var(--tone-sprint);
+  background: #f3f4f6;
 }
 
 .plan-card time,
