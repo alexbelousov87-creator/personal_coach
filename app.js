@@ -1449,7 +1449,10 @@ function evaluatePlanDayExecution(day) {
 }
 
 function plannedTypeForDay(day) {
-  return planTypeFromFocus(day.focus) || planTypeFromAssignment(`${day.title || ""} ${day.plannedWorkout || day.details || ""}`) || "easy";
+  const assignmentType = planTypeFromAssignment(`${day.title || ""} ${day.intensity || ""} ${day.plannedWorkout || day.details || ""}`);
+  const focusType = planTypeFromFocus(day.focus);
+  if (assignmentType && !["recovery", "easy"].includes(assignmentType)) return assignmentType;
+  return focusType || assignmentType || "easy";
 }
 
 function planTypeMatchesActual(plannedType, actualType, day = null, workout = null) {
@@ -2520,12 +2523,42 @@ function planTypeFromAssignment(value) {
   if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
   if (matchesAny(text, ["полный отдых", "день отдыха", "без нагрузки"])) return "rest";
   if (matchesAny(text, ["без дополнительного бегового задания", "без бегового задания"])) return "recovery";
-  if (matchesAny(text, ["интервал", "vo2", "повтор", "400 м", "800 м", "1000 м"])) return "interval";
-  if (matchesAny(text, ["темповая работа", "темповый блок", "темповое включение", "порог", "threshold"])) return "tempo";
+  if (assignmentHasTempoStructure(text)) return "tempo";
+  if (assignmentHasIntervalStructure(text)) return "interval";
   if (matchesAny(text, ["длитель", "long"])) return "long";
   if (matchesAny(text, ["восстанов", "очень легко"])) return "recovery";
   if (matchesAny(text, ["легк", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"])) return "easy";
   return "";
+}
+
+function assignmentHasTempoStructure(text) {
+  if (matchesAny(text, ["темповая работа", "темповый блок", "темповое включение", "порог", "threshold"])) return true;
+  const hasTempoEffort = matchesAny(text, ["марафонск", "полумарафонск", "tempo"]);
+  if (!hasTempoEffort) return false;
+
+  const minuteBlocks = [...text.matchAll(/(\d{1,2})\s*[xх×]\s*(\d{1,3}(?:[.,]\d+)?)\s*(мин|минут|минуту)/gi)]
+    .map((match) => Number(String(match[2]).replace(",", ".")) || 0);
+  return minuteBlocks.some((minutes) => minutes >= 8);
+}
+
+function assignmentHasIntervalStructure(text) {
+  if (matchesAny(text, ["интервал", "vo2", "повтор", "отрез"])) return true;
+  if (matchesAny(text, ["400 м", "800 м", "1000 м"])) return true;
+
+  const repeatPattern = /(\d{1,2})\s*[xх×]\s*(\d{1,4}(?:[.,]\d+)?)\s*(сек|с|мин|минут|минуту|м|метр|км)/gi;
+  const blocks = [...text.matchAll(repeatPattern)].map((match) => ({
+    repeats: Number(match[1]) || 0,
+    value: Number(String(match[2]).replace(",", ".")) || 0,
+    unit: match[3],
+  }));
+  return blocks.some((block) => {
+    if (block.repeats < 3) return false;
+    if (block.unit.startsWith("сек") || block.unit === "с") return block.repeats >= 6 && block.value >= 30;
+    if (block.unit.startsWith("мин")) return block.value >= 1;
+    if (block.unit === "м" || block.unit.startsWith("метр")) return block.value >= 200;
+    if (block.unit === "км") return block.value >= 0.2;
+    return false;
+  });
 }
 
 function assignmentHasNoRun(value) {
