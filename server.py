@@ -64,6 +64,7 @@ DEFAULT_CONFIG = {
             "showTodayButton": True,
             "todayButtonText": "Получить план на сегодня",
             "pollCommands": True,
+            "clearMenu": True,
         },
     },
 }
@@ -426,6 +427,7 @@ def telegram_notification_config():
         "show_today_button": bool(telegram.get("showTodayButton", True)),
         "today_button_text": str(telegram.get("todayButtonText") or "Получить план на сегодня").strip() or "Получить план на сегодня",
         "poll_commands": bool(telegram.get("pollCommands", True)),
+        "clear_menu": bool(telegram.get("clearMenu", True)),
     }
 
 
@@ -433,6 +435,8 @@ def start_notification_worker():
     telegram = telegram_notification_config()
     if not telegram["enabled"]:
         return
+    if telegram["bot_token"] and telegram["clear_menu"]:
+        configure_telegram_bot_ui(telegram)
     thread = threading.Thread(target=notification_worker_loop, name="daily-notifications", daemon=True)
     thread.start()
     if telegram["bot_token"] and telegram["chat_id"] and telegram["poll_commands"]:
@@ -600,6 +604,46 @@ def telegram_reply_markup(telegram):
     if telegram.get("remove_keyboard"):
         return {"remove_keyboard": True}
     return None
+
+
+def configure_telegram_bot_ui(telegram):
+    try:
+        scopes = [
+            None,
+            {"type": "all_private_chats"},
+            {"type": "all_group_chats"},
+            {"type": "all_chat_administrators"},
+            {"type": "chat", "chat_id": telegram["chat_id"]},
+        ]
+        for scope in scopes:
+            for language_code in [None, "ru", "en"]:
+                delete_telegram_commands(telegram["bot_token"], scope, language_code)
+        set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"])
+    except Exception as exc:
+        print(f"Telegram menu cleanup error: {exc}")
+
+
+def delete_telegram_commands(bot_token, scope=None, language_code=None):
+    payload = {}
+    if scope:
+        payload["scope"] = scope
+    if language_code:
+        payload["language_code"] = language_code
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    url = f"https://api.telegram.org/bot{bot_token}/deleteMyCommands"
+    http_json(url, method="POST", data=data, headers=headers)
+
+
+def set_telegram_menu_button(bot_token, chat_id):
+    payload = {
+        "chat_id": chat_id,
+        "menu_button": {"type": "default"},
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    url = f"https://api.telegram.org/bot{bot_token}/setChatMenuButton"
+    http_json(url, method="POST", data=data, headers=headers)
 
 
 def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
