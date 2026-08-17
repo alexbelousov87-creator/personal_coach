@@ -2425,6 +2425,9 @@ function normalizedPlanTitle(day, fallbackDay, focus, details) {
   const title = day.title || fallbackDay?.title || "Тренировка";
   const focusType = planTypeFromFocus(focus);
   const titleType = planTypeFromFocus(title);
+  if (titleMentionsRun(title) && assignmentHasNoRun(details)) {
+    return defaultTitleForPlannedType(focusType || "recovery", details);
+  }
   if (focusType && titleType && focusType !== titleType) {
     return defaultTitleForPlannedType(focusType, details);
   }
@@ -2447,12 +2450,23 @@ function planTypeFromAssignment(value) {
   const text = String(value || "").toLowerCase();
   if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
   if (matchesAny(text, ["полный отдых", "день отдыха", "без нагрузки"])) return "rest";
+  if (matchesAny(text, ["без дополнительного бегового задания", "без бегового задания"])) return "recovery";
   if (matchesAny(text, ["интервал", "vo2", "повтор", "400 м", "800 м", "1000 м"])) return "interval";
   if (matchesAny(text, ["темповая работа", "темповый блок", "темповое включение", "порог", "threshold"])) return "tempo";
   if (matchesAny(text, ["длитель", "long"])) return "long";
   if (matchesAny(text, ["восстанов", "очень легко"])) return "recovery";
   if (matchesAny(text, ["легк", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"])) return "easy";
   return "";
+}
+
+function assignmentHasNoRun(value) {
+  const text = String(value || "").toLowerCase();
+  return matchesAny(text, ["без дополнительного бегового задания", "без бегового задания", "0 км дополнительно"]);
+}
+
+function titleMentionsRun(value) {
+  const text = String(value || "").toLowerCase();
+  return matchesAny(text, ["бег", "кросс", "run"]);
 }
 
 function focusForPlannedType(type) {
@@ -2469,6 +2483,8 @@ function focusForPlannedType(type) {
 
 function defaultTitleForPlannedType(type, details) {
   const text = String(details || "").toLowerCase();
+  if (assignmentHasNoRun(text) && matchesAny(text, ["мобилити", "офп", "растяж"])) return "Мобилити без бега";
+  if (assignmentHasNoRun(text)) return "Восстановительный день без бега";
   if (type === "easy" && matchesAny(text, ["ускорен", "strides"])) return "Легкий бег с ускорениями";
   return {
     race: "Старт",
