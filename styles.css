@@ -882,6 +882,31 @@ textarea {
   color: var(--good);
 }
 
+.plan-card.completed.eval-lighter .plan-status {
+  border-color: rgba(45, 111, 159, 0.35);
+  background: #f0f8fd;
+  color: var(--easy);
+}
+
+.plan-card.completed.eval-matched .plan-status {
+  border-color: rgba(36, 132, 90, 0.35);
+  background: #f3faf6;
+  color: var(--good);
+}
+
+.plan-card.completed.eval-harder .plan-status {
+  border-color: rgba(190, 143, 39, 0.38);
+  background: #fff8e8;
+  color: var(--warn);
+}
+
+.plan-card.completed.eval-overloaded .plan-status,
+.plan-card.completed.eval-mismatch .plan-status {
+  border-color: rgba(185, 50, 50, 0.35);
+  background: #fff3f3;
+  color: var(--bad);
+}
+
 .plan-card.upcoming .plan-status {
   border-color: rgba(17, 106, 123, 0.35);
   color: var(--accent-2);
