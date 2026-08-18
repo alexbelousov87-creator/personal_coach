@@ -286,12 +286,15 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
 
     def send_json(self, payload, status=200):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.add_cors_headers()
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(status)
+            self.add_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            return
 
     def send_html(self, html, status=200):
         data = html.encode("utf-8")
@@ -997,6 +1000,8 @@ def http_bytes(url, method="GET", data=None, headers=None):
     except error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
         raise AppError(f"{service_name} error {exc.code}: {details}", exc.code)
+    except TimeoutError:
+        raise AppError(f"{service_name} timeout after {timeout} seconds", 504)
     except error.URLError as exc:
         raise AppError(f"failed to connect to {service_name}: {exc.reason}", 502)
 
