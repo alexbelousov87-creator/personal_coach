@@ -2352,7 +2352,7 @@ function renderPlanDayDetails(day) {
         <span class="section-label">Факт</span>
         ${actualGroups.map((group) => `
           <div class="actual-group ${group.kind}">
-            <strong>${escapeHtml(group.label)}</strong>
+            ${group.label ? `<strong>${escapeHtml(group.label)}</strong>` : ""}
             <p>${group.workouts.map((workout) => escapeHtml(formatActualWorkout(workout))).join("<br>")}</p>
           </div>
         `).join("")}
@@ -2426,7 +2426,7 @@ function groupedActualWorkoutsForPlanDay(day) {
   if (primary.length) {
     groups.push({
       kind: additional.length ? "primary" : "single",
-      label: additional.length ? "Зачет задания" : "Факт",
+      label: additional.length ? "Зачет задания" : "",
       workouts: primary,
     });
   }
@@ -2820,9 +2820,10 @@ function evaluatePlanDayExecution(day) {
 }
 
 function plannedTypeForDay(day) {
-  const assignmentType = planTypeFromAssignment(`${day.title || ""} ${day.intensity || ""} ${day.plannedWorkout || day.details || ""}`);
+  const assignmentType = planTypeFromAssignment(`${day.intensity || ""} ${day.plannedWorkout || day.details || ""} ${day.targetDistance || ""}`);
   const focusType = planTypeFromFocus(day.focus);
   if (assignmentType && !["recovery", "easy"].includes(assignmentType)) return assignmentType;
+  if (assignmentType === "easy") return "easy";
   return focusType || assignmentType || "easy";
 }
 
@@ -4152,9 +4153,26 @@ function planTypeFromAssignment(value) {
   if (assignmentHasTempoStructure(text)) return "tempo";
   if (assignmentHasIntervalStructure(text)) return "interval";
   if (matchesAny(text, ["длитель", "long"])) return "long";
-  if (matchesAny(text, ["восстанов", "очень легко"])) return "recovery";
+  if (assignmentHasEasyRunVolume(text)) return "easy";
+  if (matchesAny(text, ["восстановительный бег", "очень легко", "z1"])) return "recovery";
   if (matchesAny(text, ["легк", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"])) return "easy";
   return "";
+}
+
+function assignmentHasEasyRunVolume(text) {
+  const hasEasyCue = matchesAny(text, ["легко", "легкий", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"]);
+  if (!hasEasyCue) return false;
+
+  const minuteRanges = [...text.matchAll(/(\d{1,3})\s*[-–]\s*(\d{1,3})\s*(?:мин|минут)/gi)]
+    .map((match) => Math.max(Number(match[1]) || 0, Number(match[2]) || 0));
+  const singleMinutes = [...text.matchAll(/(?:^|\s)(\d{2,3})\s*(?:мин|минут)/gi)]
+    .map((match) => Number(match[1]) || 0);
+  const kmRanges = [...text.matchAll(/(\d{1,2}(?:[.,]\d+)?)\s*[-–]\s*(\d{1,2}(?:[.,]\d+)?)\s*км/gi)]
+    .map((match) => Math.max(Number(String(match[1]).replace(",", ".")) || 0, Number(String(match[2]).replace(",", ".")) || 0));
+
+  return minuteRanges.some((minutes) => minutes >= 45)
+    || singleMinutes.some((minutes) => minutes >= 45)
+    || kmRanges.some((km) => km >= 8);
 }
 
 function assignmentHasTempoStructure(text) {
@@ -5291,7 +5309,7 @@ function classifyWorkout(workout) {
   const hrRatio = avgHr ? avgHr / maxHr : 0;
   const targetDistance = state.profile.targetDistance || "10k";
   const longMin = targetDistance === "42k" ? 100 : targetDistance === "21k" ? 85 : targetDistance === "10k" ? 70 : 60;
-  const longKm = targetDistance === "21k" ? 16 : targetDistance === "10k" ? 12 : targetDistance === "5k" ? 10 : Infinity;
+  const longKm = targetDistance === "21k" ? 18 : targetDistance === "10k" ? 14 : targetDistance === "5k" ? 11 : Infinity;
   const hasStrongSampleIntervals = hasStrongSampleIntervalPattern(intervalSignals, duration, longMin);
 
   if (matchesAny(notes, ["интервал", "interval", "повтор", "repeat", "vo2", "400", "800", "1000", "фартлек", "fartlek"])) {
