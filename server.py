@@ -66,8 +66,6 @@ DEFAULT_CONFIG = {
             "todayButtonText": TODAY_BUTTON_TEXT,
             "pollCommands": True,
             "clearMenu": True,
-            "proxyUrl": "",
-            "proxyUrlEnv": "TELEGRAM_PROXY_URL",
         },
     },
 }
@@ -426,7 +424,6 @@ def notification_status():
         "lastSentAt": load_state_value("dailyNotificationLastSentAt", ""),
         "hasTodayAssignment": bool(plan_day),
         "todayButton": telegram["today_button_text"] if telegram["show_today_button"] else "",
-        "proxyConfigured": bool(telegram["proxy_url"]),
     }
 
 
@@ -451,7 +448,6 @@ def telegram_notification_config():
         "today_button_text": clean_telegram_button_text(telegram.get("todayButtonText")),
         "poll_commands": bool(telegram.get("pollCommands", True)),
         "clear_menu": bool(telegram.get("clearMenu", True)),
-        "proxy_url": (telegram.get("proxyUrl") or os.environ.get(telegram.get("proxyUrlEnv", "TELEGRAM_PROXY_URL"), "")).strip(),
     }
 
 
@@ -510,7 +506,6 @@ def send_daily_assignment_notification(force=False):
         telegram["chat_id"],
         text,
         reply_markup=telegram_reply_markup(telegram),
-        proxy_url=telegram["proxy_url"],
     )
     if not force:
         mark_daily_assignment_sent()
@@ -642,13 +637,13 @@ def configure_telegram_bot_ui(telegram):
         ]
         for scope in scopes:
             for language_code in [None, "ru", "en"]:
-                delete_telegram_commands(telegram["bot_token"], scope, language_code, telegram["proxy_url"])
-        set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"], telegram["proxy_url"])
+                delete_telegram_commands(telegram["bot_token"], scope, language_code)
+        set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"])
     except Exception as exc:
         print(f"Telegram menu cleanup error: {exc}")
 
 
-def delete_telegram_commands(bot_token, scope=None, language_code=None, proxy_url=""):
+def delete_telegram_commands(bot_token, scope=None, language_code=None):
     payload = {}
     if scope:
         payload["scope"] = scope
@@ -657,10 +652,10 @@ def delete_telegram_commands(bot_token, scope=None, language_code=None, proxy_ur
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/deleteMyCommands"
-    http_json(url, method="POST", data=data, headers=headers, proxy_url=proxy_url)
+    http_json(url, method="POST", data=data, headers=headers)
 
 
-def set_telegram_menu_button(bot_token, chat_id, proxy_url=""):
+def set_telegram_menu_button(bot_token, chat_id):
     payload = {
         "chat_id": chat_id,
         "menu_button": {"type": "default"},
@@ -668,10 +663,10 @@ def set_telegram_menu_button(bot_token, chat_id, proxy_url=""):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/setChatMenuButton"
-    http_json(url, method="POST", data=data, headers=headers, proxy_url=proxy_url)
+    http_json(url, method="POST", data=data, headers=headers)
 
 
-def send_telegram_message(bot_token, chat_id, text, reply_markup=None, proxy_url=""):
+def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -682,7 +677,7 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None, proxy_url
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    http_json(url, method="POST", data=data, headers=headers, proxy_url=proxy_url)
+    http_json(url, method="POST", data=data, headers=headers)
 
 
 def poll_telegram_updates():
@@ -699,7 +694,7 @@ def poll_telegram_updates():
     if offset:
         params["offset"] = offset
     url = f"https://api.telegram.org/bot{telegram['bot_token']}/getUpdates?{urlencode(params)}"
-    payload = http_json(url, proxy_url=telegram["proxy_url"])
+    payload = http_json(url)
     updates = payload.get("result") if isinstance(payload, dict) else []
     if not isinstance(updates, list):
         return
@@ -742,7 +737,6 @@ def handle_telegram_update(update, telegram):
         telegram["chat_id"],
         response,
         reply_markup=telegram_reply_markup(telegram),
-        proxy_url=telegram["proxy_url"],
     )
 
 
@@ -996,21 +990,19 @@ def basic_auth_token(client_id, client_secret):
     return base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
 
 
-def http_json(url, method="GET", data=None, headers=None, proxy_url=""):
-    raw = http_bytes(url, method=method, data=data, headers=headers, proxy_url=proxy_url)
+def http_json(url, method="GET", data=None, headers=None):
+    raw = http_bytes(url, method=method, data=data, headers=headers)
     if not raw:
         return {}
     return json.loads(raw.decode("utf-8"))
 
 
-def http_bytes(url, method="GET", data=None, headers=None, proxy_url=""):
+def http_bytes(url, method="GET", data=None, headers=None):
     timeout = int(POLAR_CONFIG.get("timeoutSeconds", 45))
     req = request.Request(url, data=data, method=method, headers=headers or {})
     service_name = "Telegram API" if "api.telegram.org" in url else "Polar API"
     try:
-        opener = request.build_opener(request.ProxyHandler({"http": proxy_url, "https": proxy_url})) if proxy_url else None
-        open_request = opener.open if opener else request.urlopen
-        with open_request(req, timeout=timeout) as response:
+        with request.urlopen(req, timeout=timeout) as response:
             return response.read()
     except error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")

@@ -23,23 +23,5 @@
     "jsonMode": true,
     "siteUrl": "http://127.0.0.1:8765",
     "appName": "Training Coach"
-  },
-  "notifications": {
-    "telegram": {
-      "enabled": false,
-      "botToken": "",
-      "botTokenEnv": "TELEGRAM_BOT_TOKEN",
-      "chatId": "",
-      "chatIdEnv": "TELEGRAM_CHAT_ID",
-      "dailyTime": "08:00",
-      "sendOnRestDays": true,
-      "removeKeyboard": true,
-      "showTodayButton": true,
-      "todayButtonText": "Получить план на сегодня",
-      "pollCommands": true,
-      "clearMenu": true,
-      "proxyUrl": "",
-      "proxyUrlEnv": "TELEGRAM_PROXY_URL"
-    }
   }
 }
