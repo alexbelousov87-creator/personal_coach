@@ -420,6 +420,7 @@ def notification_status():
         "enabled": telegram["enabled"],
         "configured": bool(telegram["bot_token"] and telegram["chat_id"]),
         "dailyTime": telegram["daily_time"],
+        "automaticDaily": False,
         "lastSent": load_state_value("dailyNotificationLastSent", ""),
         "lastSentAt": load_state_value("dailyNotificationLastSentAt", ""),
         "hasTodayAssignment": bool(plan_day),
@@ -457,20 +458,9 @@ def start_notification_worker():
         return
     if telegram["bot_token"] and telegram["clear_menu"]:
         configure_telegram_bot_ui(telegram)
-    thread = threading.Thread(target=notification_worker_loop, name="daily-notifications", daemon=True)
-    thread.start()
     if telegram["bot_token"] and telegram["chat_id"] and telegram["poll_commands"]:
         command_thread = threading.Thread(target=telegram_command_worker_loop, name="telegram-commands", daemon=True)
         command_thread.start()
-
-
-def notification_worker_loop():
-    while True:
-        try:
-            send_daily_assignment_notification()
-        except Exception as exc:
-            print(f"Daily notification error: {exc}")
-        time.sleep(60)
 
 
 def telegram_command_worker_loop():
