@@ -19,6 +19,8 @@
   --tone-threshold: #c48e2c;
   --tone-10k: #d76f3d;
   --tone-5k: #c84f68;
+  --tone-3k: #b94c93;
+  --tone-1k: #9548b8;
   --tone-vo2: #7b5ac7;
   --tone-sprint: #303844;
 }
@@ -363,7 +365,7 @@ p {
 
 .goal-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
 }
 
@@ -1250,6 +1252,16 @@ textarea {
   --tone-bg: #fff3f6;
 }
 
+.tone-3k {
+  --tone-color: var(--tone-3k);
+  --tone-bg: #fff1fa;
+}
+
+.tone-1k {
+  --tone-color: var(--tone-1k);
+  --tone-bg: #f9f1ff;
+}
+
 .tone-vo2 {
   --tone-color: var(--tone-vo2);
   --tone-bg: #f7f4ff;
@@ -1600,6 +1612,14 @@ textarea {
   --plan-tone: var(--tone-5k);
 }
 
+.plan-card.plan-tone-3k {
+  --plan-tone: var(--tone-3k);
+}
+
+.plan-card.plan-tone-1k {
+  --plan-tone: var(--tone-1k);
+}
+
 .plan-card.plan-tone-vo2 {
   --plan-tone: var(--tone-vo2);
 }
@@ -1630,6 +1650,14 @@ textarea {
 
 .plan-card.upcoming.plan-tone-5k {
   background: #fff3f6;
+}
+
+.plan-card.upcoming.plan-tone-3k {
+  background: #fff1fa;
+}
+
+.plan-card.upcoming.plan-tone-1k {
+  background: #f9f1ff;
 }
 
 .plan-card.upcoming.plan-tone-vo2 {

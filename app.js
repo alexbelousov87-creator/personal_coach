@@ -32,6 +32,8 @@ const state = {
     name: "",
     goal: "Поддержание формы",
     targetDistance: "10k",
+    athleteLevel: "intermediate",
+    ageGroup: "adult",
     prepPhase: "auto",
     raceDate: "",
     raceDistance: "",
@@ -215,6 +217,8 @@ function wireForms() {
       name: data.get("name").trim(),
       goal: data.get("goal"),
       targetDistance: data.get("targetDistance") || "10k",
+      athleteLevel: data.get("athleteLevel") || "intermediate",
+      ageGroup: data.get("ageGroup") || "adult",
       prepPhase: data.get("prepPhase") || "auto",
       raceDate: data.get("raceDate") || "",
       raceDistance: data.get("raceDistance") || "",
@@ -335,6 +339,8 @@ function parseTcx(text, fileName) {
   return activities.map((activity, index) => {
     const laps = descendants(activity, "Lap");
     const lapSignals = analyzeTcxLaps(laps);
+    const maxHr = maxTcxLapHeartRate(laps);
+    const lapLoad = estimateTcxLapLoad(laps);
     const durationSec = sumNodes(laps, "TotalTimeSeconds");
     const distanceM = sumNodes(laps, "DistanceMeters");
     const avgHr = average(
@@ -370,9 +376,36 @@ function parseTcx(text, fileName) {
       maxSpeed: maxSpeed || null,
       lapSignals,
       avgHr: avgHr ? Math.round(avgHr) : null,
+      hrMax: maxHr || null,
+      load: lapLoad || null,
+      loadSource: lapLoad ? "trimp-laps" : "",
       notes: `TCX #${index + 1}`,
     });
   });
+}
+
+function maxTcxLapHeartRate(laps) {
+  return Math.max(
+    0,
+    ...laps
+      .map((lap) => {
+        const hrBlock = firstDescendant(lap, "MaximumHeartRateBpm");
+        return hrBlock ? numberOrNull(textOf(hrBlock, "Value")) : null;
+      })
+      .filter(Boolean)
+  );
+}
+
+function estimateTcxLapLoad(laps, hrMax = state.profile.maxHr || 185) {
+  const segments = laps
+    .map((lap) => {
+      const durationSec = numberOrNull(textOf(lap, "TotalTimeSeconds")) || 0;
+      const hrBlock = firstDescendant(lap, "AverageHeartRateBpm");
+      const avgHr = hrBlock ? numberOrNull(textOf(hrBlock, "Value")) : null;
+      return { durationMin: durationSec / 60, avgHr };
+    })
+    .filter((segment) => segment.durationMin > 0 && segment.avgHr > 0);
+  return estimateSegmentedTrimpFromHr(segments, hrMax);
 }
 
 function parseGpx(text, fileName) {
@@ -431,10 +464,12 @@ function parseCsv(text, fileName) {
   const sampleHeaderIndex = lines.findIndex((line, index) => index > 0 && looksLikeCsvHeader(splitCsvLine(line, delimiter)));
   const workoutLines = sampleHeaderIndex > -1 ? lines.slice(1, sampleHeaderIndex) : lines.slice(1);
   const intervalSignals = sampleHeaderIndex > -1 ? analyzeCsvSamples(lines.slice(sampleHeaderIndex), delimiter) : null;
+  const sampleLoad = intervalSignals?.segmentedLoad || null;
 
   for (const line of workoutLines) {
     const values = splitCsvLine(line, delimiter);
     const row = Object.fromEntries(headers.map((header, index) => [header, values[index]]));
+    const importedLoad = numberOrNull(pick(row, ["training load", "cardio load", "cardio load (trimp)", "trimp", "load", "кардионагрузка", "тренировочная нагрузка"]));
     workouts.push(normalizeWorkout({
       source: fileName,
       date: dateFromCsvRow(row),
@@ -447,7 +482,8 @@ function parseCsv(text, fileName) {
       avgHr: numberOrNull(pick(row, ["avg hr", "average heart rate", "average heart rate (bpm)", "avg_hr", "hr (bpm)", "средний пульс"])),
       hrMax: numberOrNull(pick(row, ["hr max", "max hr", "maximum heart rate", "maximum heart rate (bpm)", "hr_max"])),
       hrRest: numberOrNull(pick(row, ["hr sit", "hr rest", "rest hr", "resting heart rate", "resting heart rate (bpm)", "hr_rest"])),
-      load: numberOrNull(pick(row, ["training load", "cardio load", "cardio load (trimp)", "trimp", "load", "кардионагрузка", "тренировочная нагрузка"])),
+      load: importedLoad || sampleLoad,
+      loadSource: importedLoad ? "" : sampleLoad ? "trimp-samples" : "",
       rpe: numberOrNull(pick(row, ["rpe", "effort"])),
       notes: pick(row, ["notes", "comment", "заметки"]) || "CSV импорт",
       intervalSignals,
@@ -561,6 +597,7 @@ function workoutRichnessScore(workout) {
     workout?.lapSignals ? 2 : 0,
     workout?.paceSource ? 1 : 0,
     workout?.loadSource === "imported" ? 2 : 0,
+    String(workout?.loadSource || "").startsWith("trimp-") ? 2 : 0,
   ].reduce((sum, value) => sum + value, 0);
 }
 
@@ -574,12 +611,14 @@ function normalizeWorkout(input) {
   const maxSpeed = numberOrNull(input.maxSpeed);
   const hrMax = numberOrNull(input.hrMax) || state.profile.maxHr || 185;
   const hrRest = numberOrNull(input.hrRest) || state.profile.restHr || 50;
-  const importedLoad = numberOrNull(input.load);
+  const trimpHrMax = state.profile.maxHr || hrMax;
+  const providedLoad = numberOrNull(input.load);
+  const providedLoadSource = String(input.loadSource || "").trim();
   const intervalSignals = input.intervalSignals || null;
   const lapSignals = input.lapSignals || null;
-  const trimp = estimateTrimp(durationMin, avgHr, hrMax, hrRest);
-  const load = Math.round(importedLoad || trimp || durationMin);
-  const loadSource = importedLoad ? "imported" : trimp ? "trimp" : "duration";
+  const trimp = estimateTrimp(durationMin, avgHr, trimpHrMax, hrRest);
+  const load = Math.round(providedLoad || trimp || durationMin);
+  const loadSource = providedLoad ? (providedLoadSource || "imported") : trimp ? "trimp" : "duration";
   const paceFromImportedDistance = paceFromDistanceDuration(distanceKm, durationMin);
   const paceFromImportedSpeed = paceFromSpeed(avgSpeed);
   const paceMinPerKm = input.paceMinPerKm || paceFromImportedDistance || paceFromImportedSpeed || null;
@@ -633,6 +672,16 @@ function estimateTrimp(durationMin, avgHr, hrMax, hrRest) {
   return estimateTrimpFromHrr(durationMin, hrReserveRatio);
 }
 
+function estimateSegmentedTrimpFromHr(segments, hrMax = state.profile.maxHr || 185, hrRest = state.profile.restHr || 50) {
+  if (!Array.isArray(segments) || !segments.length || !hrMax || hrMax <= hrRest) return 0;
+  return segments.reduce((sum, segment) => {
+    const durationMin = Number(segment.durationMin) || 0;
+    const avgHr = Number(segment.avgHr) || 0;
+    if (!durationMin || !avgHr) return sum;
+    return sum + estimateTrimp(durationMin, avgHr, hrMax, hrRest);
+  }, 0);
+}
+
 function estimateTrimpFromHrr(durationMin, hrReserveRatio) {
   if (!durationMin || !hrReserveRatio) return 0;
   if (hrReserveRatio <= 0) return 0;
@@ -680,6 +729,8 @@ function renderGoalCenter() {
   const target = getTargetDistanceProfile();
   const phase = getPreparationPhase(selectedWeekStartDate());
   const planningMode = getPlanningModeProfile();
+  const athleteLevel = getAthleteLevelProfile();
+  const ageGroup = getAgeGroupProfile();
   const race = getRaceSummary();
   const readiness = getReadiness();
   const raceLine = race
@@ -709,6 +760,11 @@ function renderGoalCenter() {
         <span class="section-label">Режим</span>
         <strong>${escapeHtml(planningMode.label)} · ${Number(state.profile.daysPerWeek) || 4} дн./нед. · ${escapeHtml(readiness.label)}</strong>
         <p>${escapeHtml(planningMode.description)} ${escapeHtml(constraints)}</p>
+      </div>
+      <div>
+        <span class="section-label">Спортсмен</span>
+        <strong>${escapeHtml(athleteLevel.label)} · ${escapeHtml(ageGroup.label)}</strong>
+        <p>${escapeHtml(athleteLevel.description)} ${escapeHtml(ageGroup.guidance)}</p>
       </div>
     </div>
     ${renderHeartRateZoneStrip()}
@@ -2847,8 +2903,10 @@ function plannedIntensityTone(day) {
   const type = plannedTypeForDay(day);
   if (type === "rest" || assignmentHasNoRun(text)) return "recovery";
   if (matchesAny(text, ["спринт", "sprint", "максимальн"])) return "sprint";
-  if (matchesAny(text, ["vo2", "vo₂", "z5"])) return "vo2";
+  if (matchesAny(text, ["усилие 1 км", "усилие 1-3 км", "1-3 км", "1км", "1 km", "1k"])) return "1k";
+  if (matchesAny(text, ["усилие 3 км", "3км", "3 km", "3k", "усилие 3-5 км"])) return "3k";
   if (matchesAny(text, ["усилие 5 км", "5км", "5 km", "5k", "z5"])) return "5k";
+  if (matchesAny(text, ["vo2", "vo₂", "z5"])) return "vo2";
   if (matchesAny(text, ["усилие 10 км", "10км", "10 km", "10k"])) return "10k";
   if (matchesAny(text, ["порог", "threshold", "z4"])) return "threshold";
   if (matchesAny(text, ["марафонск", "полумарафонск", "z3"])) return "threshold";
@@ -2924,6 +2982,9 @@ function planDayComparableText(day) {
 }
 
 function plannedLoadScoreForDay(day) {
+  const segmentedLoad = plannedSegmentedLoadScore(day);
+  if (segmentedLoad) return Math.round(segmentedLoad);
+
   const durationFromStructure = plannedDurationMinutes(day);
   const durationFromDistance = plannedDurationFromDistance(day);
   const duration = Math.max(durationFromStructure || 0, durationFromDistance || 0) || null;
@@ -2940,6 +3001,133 @@ function plannedLoadScoreForDay(day) {
   if (load.includes("низк")) return 45;
   if (load.includes("без")) return 15;
   return 70;
+}
+
+function plannedSegmentedLoadScore(day) {
+  const segments = plannedWorkoutSegments(day);
+  if (segments.length < 2) return null;
+
+  const structureDuration = segments.reduce((sum, segment) => sum + segment.duration, 0);
+  if (structureDuration < 20) return null;
+
+  const distanceDuration = plannedDurationFromDistance(day) || 0;
+  const extraEasyDuration = Math.max(0, distanceDuration - structureDuration);
+  const load = segments.reduce((sum, segment) => sum + estimateTrimpFromHrr(segment.duration, segment.hrr), 0);
+  return load + estimateTrimpFromHrr(extraEasyDuration, plannedEasyHrReserveRatio(day));
+}
+
+function plannedWorkoutSegments(day) {
+  const rawText = `${day.title || ""} ${day.plannedWorkout || day.details || ""} ${day.intensity || ""}`.toLowerCase();
+  let text = rawText
+    .replace(/при признаках усталости[\s\S]*$/i, "")
+    .replace(/при усталости[\s\S]*$/i, "")
+    .replace(/каждые\s+\d{1,3}\s*[-–—]?\s*\d{0,3}\s*мин\w*/gi, "");
+  const segments = [];
+
+  const addSegment = (duration, hrr, kind) => {
+    if (!duration || duration <= 0 || !hrr) return;
+    segments.push({ duration, hrr, kind });
+  };
+
+  const addNamedDuration = (pattern, hrr, kind) => {
+    text.replace(pattern, (match, fromMinutes, toMinutes) => {
+      addSegment(averageRange(fromMinutes, toMinutes), hrr, kind);
+      return match;
+    });
+  };
+
+  addNamedDuration(/размин\w*\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин\w*/gi, plannedEasyHrReserveRatio(day), "warmup");
+  addNamedDuration(/замин\w*\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин\w*/gi, plannedRecoveryHrReserveRatio(day), "cooldown");
+
+  const repeatPattern = /(\d{1,2})(?:\s*[-–—]\s*(\d{1,2}))?\s*[xх×]\s*(\d{1,4}(?:[.,]\d+)?)(?:\s*[-–—]\s*(\d{1,4}(?:[.,]\d+)?))?\s*(мин\w*|сек\w*|с|м|метр\w*|км)/gi;
+  text.replace(repeatPattern, (match, fromRepeats, toRepeats, fromValue, toValue, unit, offset) => {
+    const repeats = averageRange(fromRepeats, toRepeats);
+    const value = averageRange(String(fromValue).replace(",", "."), toValue ? String(toValue).replace(",", ".") : toValue);
+    const workDuration = plannedRepeatWorkDuration(value, unit, repeats, day);
+    const workHrr = plannedWorkHrReserveRatio(day);
+
+    addSegment(workDuration, workHrr, "work");
+
+    const after = text.slice(offset + match.length, offset + match.length + 170);
+    const recoveryDuration = plannedRecoveryDurationAfterRepeat(after, repeats, day);
+    if (recoveryDuration) addSegment(recoveryDuration, plannedRecoveryHrReserveRatio(day), "recovery");
+    return match;
+  });
+
+  const explicitTotal = plannedTotalDurationMinutes(text);
+  const totalFromParts = segments.reduce((sum, segment) => sum + segment.duration, 0);
+  if (explicitTotal && totalFromParts && explicitTotal > totalFromParts) {
+    addSegment(explicitTotal - totalFromParts, plannedEasyHrReserveRatio(day), "easy");
+  }
+
+  return segments;
+}
+
+function plannedRepeatWorkDuration(value, unit, repeats, day) {
+  if (!value || !repeats) return 0;
+  if (unit.startsWith("сек") || unit === "с") return (repeats * value) / 60;
+  if (unit.startsWith("мин")) return repeats * value;
+
+  const distanceKm = unit === "км"
+    ? value
+    : value / 1000;
+  const pace = recentReliablePace() || 5;
+  return repeats * distanceKm * pace * plannedFastPaceFactor(day);
+}
+
+function plannedRecoveryDurationAfterRepeat(text, repeats, day) {
+  const nextRepeatIndex = text.search(/\d{1,2}(?:\s*[-–—]\s*\d{1,2})?\s*[xх×]\s*\d{1,4}/i);
+  const recoveryIndex = text.search(/(?:восстанов\w*|трусц\w*|через)/i);
+  if (nextRepeatIndex >= 0 && recoveryIndex > nextRepeatIndex) return 0;
+
+  const minuteMatch = text.match(/(?:восстанов\w*|трусц\w*|через)\D{0,35}(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин\w*/i);
+  if (minuteMatch) return repeats * averageRange(minuteMatch[1], minuteMatch[2]);
+
+  const distanceMatch = text.match(/(?:восстанов\w*|трусц\w*|через)\D{0,35}(\d{2,4})(?:\s*[-–—]\s*(\d{2,4}))?\s*м/i);
+  if (distanceMatch) {
+    const meters = averageRange(distanceMatch[1], distanceMatch[2]);
+    const easyPace = (recentReliablePace() || 5) * 1.15;
+    return repeats * (meters / 1000) * easyPace;
+  }
+
+  return 0;
+}
+
+function plannedEasyHrReserveRatio(day) {
+  const text = planDayComparableText(day);
+  if (matchesAny(text, ["z1", "очень легко", "восстанов"])) return 0.55;
+  if (matchesAny(text, ["z3", "steady", "умеренн"])) return 0.76;
+  return 0.68;
+}
+
+function plannedRecoveryHrReserveRatio(day) {
+  const text = planDayComparableText(day);
+  if (matchesAny(text, ["z2"])) return 0.62;
+  return 0.55;
+}
+
+function plannedWorkHrReserveRatio(day) {
+  const text = planDayComparableText(day);
+  if (matchesAny(text, ["спринт", "sprint"])) return 0.92;
+  if (matchesAny(text, ["усилие 1 км", "усилие 1-3 км", "1-3 км", "1км", "1 km", "1k"])) return 0.92;
+  if (matchesAny(text, ["vo2", "vo₂", "z5", "усилие 3-5 км", "усилие 3 км", "3км", "3 km", "3k", "усилие 5 км", "5км", "5 km", "5k"])) return 0.9;
+  if (matchesAny(text, ["усилие 10 км", "10км", "10 km", "10k"])) return 0.86;
+  if (matchesAny(text, ["порог", "threshold", "z4"])) return 0.84;
+  if (matchesAny(text, ["полумарафонск"])) return 0.8;
+  if (matchesAny(text, ["марафонск"])) return 0.76;
+  if (plannedTypeForDay(day) === "tempo") return 0.82;
+  return plannedHrReserveRatio(day);
+}
+
+function plannedFastPaceFactor(day) {
+  const text = planDayComparableText(day);
+  if (matchesAny(text, ["спринт", "sprint"])) return 0.65;
+  if (matchesAny(text, ["усилие 1 км", "усилие 1-3 км", "1-3 км", "1км", "1 km", "1k"])) return 0.68;
+  if (matchesAny(text, ["vo2", "vo₂", "усилие 3-5 км", "усилие 3 км", "3км", "3 km", "3k", "усилие 5 км", "5км", "5 km", "5k"])) return 0.78;
+  if (matchesAny(text, ["усилие 10 км", "10км", "10 km", "10k"])) return 0.85;
+  if (matchesAny(text, ["порог", "threshold"])) return 0.9;
+  if (matchesAny(text, ["марафонск", "полумарафонск"])) return 0.95;
+  return 0.88;
 }
 
 function plannedDurationMinutes(day) {
@@ -3058,7 +3246,7 @@ function plannedTypeLabel(type) {
     long: "длительная",
     recovery: "восстановление",
     easy: "кросс",
-    cross: "кросс",
+    cross: "кросс-тренинг/ОФП",
     race: "гонка",
     rest: "отдых",
   }[type] || "тренировка";
@@ -3186,6 +3374,17 @@ function buildPlan(weekStart = selectedWeekStartDate()) {
   const phaseGuidance = getPhaseGuidance(phase.id, target);
   const caution = getPlanCaution(readiness);
   const race = getRaceForWeek(weekStart);
+  const athleteLevel = getAthleteLevelProfile();
+  const ageGroup = getAgeGroupProfile();
+
+  if (ageGroup.isChild) {
+    return adaptPlanToCompletedWorkouts(buildChildPlan(weekStart, target, athleteLevel, ageGroup, readiness, race), weekStart, target, caution);
+  }
+
+  if (athleteLevel.id === "beginner" && !race) {
+    return adaptPlanToCompletedWorkouts(buildBeginnerPlan(weekStart, target, phaseGuidance, readiness), weekStart, target, caution);
+  }
+
   if (phase.id === "recovery" && !race) {
     return adaptPlanToCompletedWorkouts(buildRecoveryWeekPlan(weekStart, target, phaseGuidance), weekStart, target, caution);
   }
@@ -3196,12 +3395,12 @@ function buildPlan(weekStart = selectedWeekStartDate()) {
 
   const plan = [
     monday,
-    planDay(addDays(weekStart, 1), "Интервалы", phaseGuidance.intervalTitle || target.intervalTitle, `${phaseGuidance.intervalDetails || target.intervalDetails} ${caution.quality} ${phaseGuidance.quality}`, phaseGuidance.qualityLoad || caution.qualityLoad),
+    planDay(addDays(weekStart, 1), "Интервалы", phaseGuidance.intervalTitle || target.intervalTitle, `${phaseGuidance.intervalDetails || target.intervalDetails} ${caution.quality} ${phaseGuidance.quality} ${athleteLevel.qualityGuidance}`, phaseGuidance.qualityLoad || caution.qualityLoad),
     planDay(addDays(weekStart, 2), "Кросс", target.easyTitle, `${target.easyDetails} ${caution.easy} ${phaseGuidance.easy}`, phaseGuidance.easyLoad || "умеренная нагрузка"),
     planDay(addDays(weekStart, 3), "Кросс", target.secondEasyTitle, `${target.secondEasyDetails} ${caution.easy} ${phaseGuidance.easy}`, phaseGuidance.easyLoad || "умеренная нагрузка"),
     planDay(addDays(weekStart, 4), "Кросс", target.easyTitle, `${target.easyDetails} ${caution.easy} ${phaseGuidance.easy}`, phaseGuidance.easyLoad || "умеренная нагрузка"),
-    planDay(addDays(weekStart, 5), "Темпо", phaseGuidance.tempoTitle || target.tempoTitle, `${phaseGuidance.tempoDetails || target.tempoDetails} ${caution.quality} На следующий день запланирована длительная, поэтому не добирайте лишний объем сверх задания. ${phaseGuidance.quality}`, phaseGuidance.qualityLoad || caution.qualityLoad),
-    planDay(addDays(weekStart, 6), "Длительная", phaseGuidance.longTitle || target.longTitle, `${phaseGuidance.longDetails || target.longDetails} ${caution.long} ${phaseGuidance.long}`, phaseGuidance.longLoad || caution.longLoad),
+    planDay(addDays(weekStart, 5), "Темпо", phaseGuidance.tempoTitle || target.tempoTitle, `${phaseGuidance.tempoDetails || target.tempoDetails} ${caution.quality} На следующий день запланирована длительная, поэтому не добирайте лишний объем сверх задания. ${phaseGuidance.quality} ${athleteLevel.qualityGuidance}`, phaseGuidance.qualityLoad || caution.qualityLoad),
+    planDay(addDays(weekStart, 6), "Длительная", phaseGuidance.longTitle || target.longTitle, `${phaseGuidance.longDetails || target.longDetails} ${caution.long} ${phaseGuidance.long} ${athleteLevel.volumeGuidance}`, phaseGuidance.longLoad || caution.longLoad),
   ];
 
   if (race) {
@@ -3218,7 +3417,7 @@ function getPreparationPhase(weekStart = selectedWeekStartDate()) {
   const race = getRaceSummary();
   if (!race) {
     const target = state.profile.targetDistance || "10k";
-    return preparationPhaseById(target === "5k" || target === "10k" ? "speed" : "base");
+    return preparationPhaseById(["1k", "3k", "5k", "10k"].includes(target) ? "speed" : "base");
   }
 
   const raceDate = dateFromAny(race.date);
@@ -3258,6 +3457,63 @@ function getPlanningModeProfile() {
     },
   };
   return modes[state.profile.planningMode] || modes.normal;
+}
+
+function getAthleteLevelProfile() {
+  const levels = {
+    beginner: {
+      id: "beginner",
+      label: "начинающий",
+      description: "приоритет регулярности, техники и восстановления; нагрузка растет осторожно.",
+      qualityGuidance: "не больше одного выраженного интенсивного бегового стимула в неделю; интервалы короткие и контролируемые",
+      volumeGuidance: "выбирай нижнюю границу длительности и километража, если история тренировок небольшая",
+    },
+    intermediate: {
+      id: "intermediate",
+      label: "средний уровень",
+      description: "сбалансированная неделя с развивающими стимулами по готовности.",
+      qualityGuidance: "допустимы 1-2 качественные беговые работы, если восстановление стабильное",
+      volumeGuidance: "используй средний диапазон объема и повышай нагрузку постепенно",
+    },
+    advanced: {
+      id: "advanced",
+      label: "высокий уровень",
+      description: "можно точнее дозировать специфические работы, но без игнорирования усталости.",
+      qualityGuidance: "допустимы более специфичные блоки и верхняя часть диапазона, если данные подтверждают переносимость",
+      volumeGuidance: "верхняя граница объема допустима только при стабильной предыдущей нагрузке",
+    },
+  };
+  return levels[state.profile.athleteLevel] || levels.intermediate;
+}
+
+function getAgeGroupProfile() {
+  const groups = {
+    adult: {
+      id: "adult",
+      label: "взрослый",
+      guidance: "Можно использовать обычную структуру микроцикла с учетом уровня и восстановления.",
+      isChild: false,
+    },
+    youth: {
+      id: "youth",
+      label: "15-17 лет",
+      guidance: "Нагрузка должна расти постепенно; техника, сон и восстановление важнее добора объема.",
+      isChild: false,
+    },
+    teen: {
+      id: "teen",
+      label: "11-14 лет",
+      guidance: "Приоритет техники, координации и общей подготовки; меньше монотонного объема и жестких работ.",
+      isChild: true,
+    },
+    child8: {
+      id: "child8",
+      label: "8-10 лет",
+      guidance: "План должен быть игровым и техническим: короткие ускорения, ОФП, координация, много восстановления, без взрослых объемов.",
+      isChild: true,
+    },
+  };
+  return groups[state.profile.ageGroup] || groups.adult;
 }
 
 function preparationPhaseById(id) {
@@ -3359,6 +3615,59 @@ function getPhaseGuidance(phaseId, target) {
   return base;
 }
 
+function buildBeginnerPlan(weekStart, target, phaseGuidance, readiness) {
+  const qualityDetails = target.beginnerQualityDetails || phaseGuidance.intervalDetails || target.intervalDetails;
+  const qualityTitle = target.beginnerQualityTitle || phaseGuidance.intervalTitle || target.intervalTitle;
+  const easy = readiness.level === "bad"
+    ? "20-30 минут очень легко или ходьба. Если есть усталость, лучше полный отдых."
+    : target.beginnerEasyDetails || target.recoveryDetails;
+
+  return [
+    planDay(weekStart, "Восстановление", "Отдых или очень легко", "Полный отдых, прогулка или 15-25 минут очень легко. Главная цель - начать неделю свежим.", "без нагрузки"),
+    planDay(addDays(weekStart, 1), "Кросс", target.easyTitle, `${easy} Не добирайте объем любой ценой.`, "низкая нагрузка"),
+    planDay(addDays(weekStart, 2), "Восстановление", "ОФП и мобилити", "15-25 минут легкой ОФП: корпус, стопа, тазобедренные, баланс. Без работы до отказа.", "низкая нагрузка"),
+    planDay(addDays(weekStart, 3), "Интервалы", qualityTitle, `${qualityDetails} Выполняйте с большим запасом; если техника распадается, остановите быстрые отрезки.`, "средняя нагрузка"),
+    planDay(addDays(weekStart, 4), "Отдых", "День восстановления", "Полный отдых или 20 минут прогулки. Сон и восстановление важнее дополнительной тренировки.", "без нагрузки"),
+    planDay(addDays(weekStart, 5), "Кросс", target.secondEasyTitle, `${target.beginnerEasyDetails || target.easyDetails} Ровно, разговорно, без ускорения в конце.`, "низкая нагрузка"),
+    planDay(addDays(weekStart, 6), "Длительная", target.beginnerLongTitle || target.longTitle, `${target.beginnerLongDetails || target.longDetails} Нижняя граница диапазона предпочтительнее, если неделя была тяжелой.`, "средняя нагрузка"),
+  ];
+}
+
+function buildChildPlan(weekStart, target, athleteLevel, ageGroup, readiness, race = null) {
+  const isYoungChild = ageGroup.id === "child8";
+  const quality = isYoungChild
+    ? "Разминка 10 минут в игровой форме, затем 6-8 x 20 секунд быстро и расслабленно с полным восстановлением шагом/легким бегом 90-120 секунд, затем 5-10 минут легко. Это не тест и не бег до отказа."
+    : target.childQualityDetails || "Разминка 10-12 минут, затем 6 x 1 минута бодро с 2 минутами очень легко, заминка 8-10 минут. Усилие контролируемое, без максимума.";
+  const easy = isYoungChild
+    ? "20-30 минут легко или игровая аэробная активность. Можно заменить подвижной игрой, если сохраняется легкая интенсивность."
+    : "30-40 минут легко в разговорном усилии. В конце 4 x 15 секунд свободно только при свежих ногах.";
+  const long = isYoungChild
+    ? "30-40 минут очень легко или длительная прогулка/игровая активность. Без контроля темпа и без соревновательного финиша."
+    : target.childLongDetails || "40-55 минут легко, без темпового финиша. Главная цель - привычка к ровной аэробной работе, а не взрослый объем под длинную дистанцию.";
+
+  const plan = [
+    planDay(weekStart, "Восстановление", "Отдых и подвижность", "Полный отдых, прогулка или 10-15 минут легкой мобилити. Никакой обязательной беговой нагрузки.", "без нагрузки"),
+    planDay(addDays(weekStart, 1), "Кросс", "Легкий бег и техника", `${easy} После бега 5-8 минут простых беговых упражнений: стопа, координация, мягкие ускорения.`, "низкая нагрузка"),
+    planDay(addDays(weekStart, 2), "ОФП", "Координация и общая подготовка", "15-25 минут: баланс, корпус, прыжки на месте малого объема, упражнения на стопу. Все легко, без отказа и боли.", "низкая нагрузка"),
+    planDay(addDays(weekStart, 3), "Интервалы", target.childQualityTitle || "Игровая скорость и техника", `${quality} ${athleteLevel.qualityGuidance}`, "средняя нагрузка"),
+    planDay(addDays(weekStart, 4), "Отдых", "Свободный день", "Полный отдых или обычная активность без тренировки. Если есть усталость, бег не добавлять.", "без нагрузки"),
+    planDay(addDays(weekStart, 5), "Кросс", "Легкая аэробная активность", easy, "низкая нагрузка"),
+    planDay(addDays(weekStart, 6), "Длительная", "Самая длинная легкая активность недели", long, "низкая-средняя нагрузка"),
+  ];
+
+  if (race) {
+    plan[race.dayIndex] = planDay(
+      race.date,
+      "Гонка",
+      race.name,
+      `${race.distanceLabel}. Старт только как возрастной контрольный забег: хорошая разминка, без давления на результат и без продолжения при боли или сильной усталости. После финиша 5-10 минут очень легко.`,
+      "соревновательная нагрузка"
+    );
+  }
+
+  return plan;
+}
+
 function buildRecoveryWeekPlan(weekStart, target, phaseGuidance) {
   return [
     planDay(weekStart, "Восстановление", "Отдых или очень легкая активность", "Полный отдых, ходьба или 20-30 минут очень легко. Цель недели - восстановить свежесть.", "без нагрузки"),
@@ -3433,6 +3742,8 @@ function buildRaceWeekPlan(weekStart, race, target, caution, readiness) {
 
 function raceDistanceLabel(value) {
   const labels = {
+    "1k": "1 км",
+    "3k": "3 км",
     "5k": "5 км",
     "10k": "10 км",
     "21k": "21 км",
@@ -3453,6 +3764,8 @@ function raceDayDetails(race) {
 }
 
 function raceTuneUpTitle(race) {
+  if (race.distance === "1k") return "Короткая активация под 1 км";
+  if (race.distance === "3k") return "Короткая активация под 3 км";
   if (race.distance === "5k") return "Короткая активация под 5 км";
   if (race.distance === "10k") return "Короткая активация под 10 км";
   if (race.distance === "21k") return "Активация под полумарафон";
@@ -3460,6 +3773,8 @@ function raceTuneUpTitle(race) {
 }
 
 function raceTuneUpDetails(race) {
+  if (race.distance === "1k") return "Разминка 12-15 минут, затем 4 x 30 секунд в усилии 1 км с полным легким восстановлением, заминка 8-10 минут.";
+  if (race.distance === "3k") return "Разминка 15 минут, затем 4 x 1 минута в усилии 3 км с 2 минутами легко, заминка 10 минут.";
   if (race.distance === "5k") return "Разминка 15 минут, затем 5 x 1 минута в усилии 5 км с полным легким восстановлением, заминка 10 минут.";
   if (race.distance === "10k") return "Разминка 15 минут, затем 4 x 2 минуты в усилии 10 км с 2 минутами легко, заминка 10 минут.";
   if (race.distance === "21k") return "Разминка 15 минут, затем 3 x 5 минут в усилии полумарафона с 3 минутами легко, заминка 10 минут.";
@@ -3469,6 +3784,52 @@ function raceTuneUpDetails(race) {
 function getTargetDistanceProfile() {
   const value = state.profile.targetDistance || "10k";
   const profiles = {
+    "1k": {
+      label: "1 км",
+      intervalTitle: "Скорость и техника под 1 км",
+      intervalDetails: "Разминка 15 минут, затем 8 x 200 м в усилии 1-3 км с 200 м очень легко, заминка 10 минут. Отрезки быстрые, но без спринта до отказа.",
+      tempoTitle: "Короткая темповая устойчивость",
+      tempoDetails: "Разминка 12-15 минут, затем 2 x 6 минут в пороговом усилии с 4 минутами легко, заминка 8-10 минут.",
+      longTitle: "Легкая аэробная поддержка",
+      longDetails: "45-60 минут легко. Без добора объема и без финишного ускорения.",
+      easyTitle: "Легкий бег и техника",
+      easyDetails: "30-40 минут легко в Z1-Z2, затем 4-6 x 15 секунд strides при свежих ногах.",
+      secondEasyTitle: "Кросс с координацией",
+      secondEasyDetails: "25-35 минут легко, затем 8-10 минут беговых упражнений и мобилити.",
+      recoveryTitle: "Восстановление",
+      recoveryDetails: "20-30 минут очень легко или ходьба, без ускорений.",
+      beginnerQualityTitle: "Короткая скорость без максимума",
+      beginnerQualityDetails: "Разминка 10-12 минут, затем 6 x 20 секунд быстро и расслабленно с 90-120 секундами легко, заминка 8 минут.",
+      beginnerEasyDetails: "20-30 минут легко, разговорно, без контроля темпа.",
+      beginnerLongTitle: "Самый длинный легкий бег недели",
+      beginnerLongDetails: "35-45 минут очень легко, можно чередовать бег и ходьбу.",
+      childQualityTitle: "Игровая скорость под 1 км",
+      childQualityDetails: "Разминка 10 минут, затем 6 x 15-20 секунд быстро и расслабленно с полным восстановлением, заминка 5-8 минут. Не соревноваться на тренировке.",
+      childLongDetails: "25-35 минут легкой игровой активности или бег/ходьба, без темпа.",
+    },
+    "3k": {
+      label: "3 км",
+      intervalTitle: "Интервалы под 3 км",
+      intervalDetails: "Разминка 15 минут, затем 6 x 400 м в усилии 3-5 км с 200 м трусцы, заминка 10 минут.",
+      tempoTitle: "Пороговая поддержка для 3 км",
+      tempoDetails: "Разминка 15 минут, затем 2 x 8 минут в пороговом усилии с 4 минутами легко, заминка 10 минут.",
+      longTitle: "Аэробная база для 3 км",
+      longDetails: "50-65 минут легко, без темпового финиша. В конце можно 4 x 15 секунд свободно при свежих ногах.",
+      easyTitle: "Легкий кросс под 3 км",
+      easyDetails: "35-45 минут легко в Z2, ровно и без гонки за темпом.",
+      secondEasyTitle: "Кросс с техникой",
+      secondEasyDetails: "30-40 минут легко, затем 6 коротких беговых упражнений или strides по 15 секунд.",
+      recoveryTitle: "Восстановительный бег",
+      recoveryDetails: "25-35 минут очень легко в Z1-Z2, без ускорений.",
+      beginnerQualityTitle: "Контролируемый фартлек",
+      beginnerQualityDetails: "Разминка 10-12 минут, затем 8 x 1 минута бодро с 90 секундами очень легко, заминка 8-10 минут.",
+      beginnerEasyDetails: "25-35 минут легко, с запасом по дыханию.",
+      beginnerLongTitle: "Легкая аэробная база",
+      beginnerLongDetails: "40-50 минут легко, без ускорения в конце.",
+      childQualityTitle: "Игровые отрезки под 3 км",
+      childQualityDetails: "Разминка 10 минут, затем 6 x 45 секунд бодро с 2 минутами легко, заминка 8 минут. Усилие контролируемое.",
+      childLongDetails: "30-45 минут легко или игровая аэробная активность, без соревновательного финиша.",
+    },
     "5k": {
       label: "5 км",
       intervalTitle: "Интервалы под 5 км",
@@ -3678,6 +4039,8 @@ function buildAiRequest() {
     workoutTypeSource: workout.workoutTypeOverride ? "manual" : "auto",
   }));
   const planningMode = getPlanningModeProfile();
+  const athleteLevel = getAthleteLevelProfile();
+  const ageGroup = getAgeGroupProfile();
 
   return {
     system:
@@ -3703,6 +4066,8 @@ function buildAiRequest() {
       weeklyPlanningGuidelines: [
         "Планируй неделю как набор тренировочных стимулов, а не как фиксированный шаблон вторник-суббота-воскресенье.",
         `Режим генерации: ${planningMode.label}. ${planningMode.loadGuidance}. ${planningMode.qualityGuidance}. ${planningMode.progressionGuidance}.`,
+        `Уровень спортсмена: ${athleteLevel.label}. ${athleteLevel.qualityGuidance}. ${athleteLevel.volumeGuidance}.`,
+        `Возрастная группа: ${ageGroup.label}. ${ageGroup.guidance}`,
         "В нормальной развивающей неделе обычно нужны: один скоростной/интервальный стимул, один темповый/пороговый/специфический стимул, одна длительная, легкие кроссы и восстановление.",
         "Длительная чаще всего удобна в воскресенье, но ее можно перенести, если это лучше по гонке, восстановлению или фактически выполненным тренировкам.",
         "Темповая + длительная в соседние дни допустимы как специфическая связка, но не обязательны каждую неделю.",
@@ -3728,6 +4093,9 @@ function buildAiRequest() {
         "кросс-тренинг",
       ],
       hardSafetyRules: [
+        "Для начинающего спортсмена не ставь две тяжелые беговые работы на неделе, если история тренировок не показывает устойчивую переносимость.",
+        "Для детей 8-10 лет не используй взрослые объемы, марафонские длительные, жесткие темповые блоки и тренировки до отказа; приоритет - игра, техника, координация, короткие ускорения и восстановление.",
+        "Для возраста 11-14 лет ограничивай монотонный объем и жесткие анаэробные работы; делай акцент на технике, ОФП и контролируемых коротких стимулах.",
         "Не ставь больше двух тяжелых беговых работ в неделю плюс длительную, если данные не показывают очень хорошую переносимость.",
         "Между тяжелыми беговыми стимулами желательно минимум 48 часов; если меньше, объясни связку и снизь объем.",
         "Силовую и прыжковые упражнения не ставь накануне тяжелой беговой работы или длительной при признаках усталости.",
@@ -3960,8 +4328,15 @@ function buildPlanningWeek() {
 
 function profileForPlanning() {
   const { photoDataUrl, ...profile } = state.profile || {};
+  const athleteLevel = getAthleteLevelProfile();
+  const ageGroup = getAgeGroupProfile();
   return {
     ...profile,
+    targetDistanceLabel: getTargetDistanceProfile().label,
+    athleteLevelLabel: athleteLevel.label,
+    athleteLevelGuidance: `${athleteLevel.qualityGuidance}. ${athleteLevel.volumeGuidance}`,
+    ageGroupLabel: ageGroup.label,
+    ageGroupGuidance: ageGroup.guidance,
     heartRateZones: heartRateZonesBpm(state.profile).map((zone) => ({
       zone: zone.label,
       range: zone.range,
@@ -4015,6 +4390,8 @@ function buildTrainingState() {
     completedWorkoutTypesThisWeek: [...completedThisWeek],
     recommendedApproach: chooseTrainingApproach(load7, avg7From28, rampRate, hoursSinceLast),
     targetDistance: getTargetDistanceProfile().label,
+    athleteLevel: getAthleteLevelProfile(),
+    ageGroup: getAgeGroupProfile(),
     preparationPhase: getPreparationPhase(weekStart),
     planningMode: getPlanningModeProfile(),
     race: getRaceSummary(),
@@ -4152,6 +4529,7 @@ function planTypeFromFocus(value) {
   if (matchesAny(text, ["темпо", "порог", "threshold"])) return "tempo";
   if (matchesAny(text, ["длитель", "long"])) return "long";
   if (matchesAny(text, ["восстанов", "recovery"])) return "recovery";
+  if (matchesAny(text, ["офп", "мобилити", "силов", "координац"])) return "cross";
   if (matchesAny(text, ["кросс", "легк", "аэроб"])) return "easy";
   return "";
 }
@@ -4164,6 +4542,7 @@ function planTypeFromAssignment(value) {
   if (assignmentHasTempoStructure(text)) return "tempo";
   if (assignmentHasIntervalStructure(text)) return "interval";
   if (matchesAny(text, ["длитель", "long"])) return "long";
+  if (matchesAny(text, ["офп", "мобилити", "силов", "координац", "баланс"])) return "cross";
   if (assignmentHasEasyRunVolume(text)) return "easy";
   if (matchesAny(text, ["восстановительный бег", "очень легко", "z1"])) return "recovery";
   if (matchesAny(text, ["легк", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"])) return "easy";
@@ -4447,6 +4826,8 @@ function hydrateProfile() {
   settingsForm.elements.name.value = state.profile.name || "";
   settingsForm.elements.goal.value = state.profile.goal || "Поддержание формы";
   settingsForm.elements.targetDistance.value = state.profile.targetDistance || "10k";
+  settingsForm.elements.athleteLevel.value = state.profile.athleteLevel || "intermediate";
+  settingsForm.elements.ageGroup.value = state.profile.ageGroup || "adult";
   settingsForm.elements.prepPhase.value = state.profile.prepPhase || "auto";
   settingsForm.elements.planningMode.value = state.profile.planningMode || "normal";
   settingsForm.elements.raceDate.value = state.profile.raceDate || "";
@@ -4708,10 +5089,12 @@ async function enrichKnownCsvWorkouts() {
 
   for (const workout of candidates) {
     const sourceName = fileNameFromSource(workout.source);
-    if (!sourceName || !sourceName.toLowerCase().endsWith(".csv")) continue;
+    if (!sourceName || !/\.(csv|tcx)$/i.test(sourceName)) continue;
 
     if (!parsedBySource.has(sourceName)) {
-      parsedBySource.set(sourceName, await fetchKnownCsvWorkouts(sourceName));
+      parsedBySource.set(sourceName, sourceName.toLowerCase().endsWith(".tcx")
+        ? await fetchKnownTcxWorkouts(sourceName)
+        : await fetchKnownCsvWorkouts(sourceName));
     }
 
     const parsedWorkouts = parsedBySource.get(sourceName);
@@ -4722,7 +5105,15 @@ async function enrichKnownCsvWorkouts() {
         parsedBySource.set(tcxSourceName, await fetchKnownTcxWorkouts(tcxSourceName));
       }
       const tcxParsed = findMatchingParsedWorkout(parsedBySource.get(tcxSourceName), workout);
-      if (tcxParsed) parsed = { ...(parsed || {}), lapSignals: tcxParsed.lapSignals, maxSpeed: parsed?.maxSpeed || tcxParsed.maxSpeed };
+      if (tcxParsed) {
+        parsed = {
+          ...(parsed || {}),
+          lapSignals: tcxParsed.lapSignals,
+          maxSpeed: parsed?.maxSpeed || tcxParsed.maxSpeed,
+          load: parsed?.load || tcxParsed.load,
+          loadSource: parsed?.loadSource || tcxParsed.loadSource,
+        };
+      }
     }
     if (!parsed) continue;
 
@@ -4743,7 +5134,7 @@ function needsWorkoutEnrichment(workout) {
   return Boolean(
       workout &&
       workout.source &&
-      (!workout.intervalSignals || !workout.lapSignals || !workout.avgSpeed || !workout.maxSpeed || !workout.loadSource || !workout.workoutType)
+      (!workout.intervalSignals || !workout.lapSignals || !workout.avgSpeed || !workout.maxSpeed || !workout.loadSource || workout.loadSource === "trimp" || !workout.workoutType)
   );
 }
 
@@ -4795,19 +5186,31 @@ function mergeWorkoutEnrichment(workout, parsed) {
     }
   }
 
-  if (parsed.load && (!enriched.loadSource || parsed.loadSource === "imported")) {
+  const parsedLoadSource = String(parsed.loadSource || "");
+  const currentLoadSource = String(enriched.loadSource || "");
+  const canUseParsedLoad =
+    parsed.load &&
+    currentLoadSource !== "imported" &&
+    (
+      !currentLoadSource ||
+      currentLoadSource === "duration" ||
+      parsedLoadSource === "imported" ||
+      parsedLoadSource.startsWith("trimp-")
+    );
+  if (canUseParsedLoad) {
     enriched.load = parsed.load;
-    enriched.loadSource = parsed.loadSource || "trimp";
+    enriched.loadSource = parsedLoadSource || "trimp";
     changed = true;
   }
 
   const trimp = estimateTrimp(
     Number(enriched.durationMin) || 0,
     Number(enriched.avgHr) || 0,
-    numberOrNull(enriched.hrMax) || state.profile.maxHr || 185,
+    state.profile.maxHr || numberOrNull(enriched.hrMax) || 185,
     numberOrNull(enriched.hrRest) || state.profile.restHr || 50
   );
-  if (enriched.loadSource !== "imported" && trimp && Math.round(trimp) !== enriched.load) {
+  const hasSegmentedTrimp = String(enriched.loadSource || "").startsWith("trimp-");
+  if (enriched.loadSource !== "imported" && !hasSegmentedTrimp && trimp && Math.round(trimp) !== enriched.load) {
     enriched.load = Math.round(trimp);
     enriched.loadSource = "trimp";
     changed = true;
@@ -5053,12 +5456,13 @@ function analyzeCsvSamples(lines, delimiter) {
         hr: numberOrNull(pick(row, ["hr", "hr (bpm)", "heart rate", "пульс"])),
       };
     })
-    .filter((point) => Number.isFinite(point.seconds) && point.speed && point.speed > 3);
+    .filter((point) => Number.isFinite(point.seconds) && ((point.speed && point.speed > 0) || point.hr));
 
   if (points.length < 30) return null;
 
   const buckets = buildSampleBuckets(points, 30);
-  const speeds = buckets.map((bucket) => bucket.speed).filter((speed) => speed > 3);
+  const speedBuckets = buckets.filter((bucket) => bucket.speed > 3);
+  const speeds = speedBuckets.map((bucket) => bucket.speed);
   const hrs = buckets.map((bucket) => bucket.hr).filter(Boolean);
   if (speeds.length < 6) return null;
 
@@ -5069,11 +5473,16 @@ function analyzeCsvSamples(lines, delimiter) {
   const p85 = percentile(speeds, 0.85);
   const highThreshold = Math.max(p85, avgSpeed * 1.12);
   const lowThreshold = Math.max(5, p50 * 0.92);
-  const fastSegments = countSegments(buckets, (bucket) => bucket.speed >= highThreshold, 2);
-  const recoverySegments = countSegments(buckets, (bucket) => bucket.speed <= lowThreshold, 2);
+  const fastSegments = countSegments(speedBuckets, (bucket) => bucket.speed >= highThreshold, 2);
+  const recoverySegments = countSegments(speedBuckets, (bucket) => bucket.speed <= lowThreshold, 2);
   const hrRange = hrs.length ? Math.max(...hrs) - Math.min(...hrs) : 0;
   const speedRange = p85 - p20;
   const speedSurgeRatio = avgSpeed ? maxSpeed / avgSpeed : 0;
+  const segmentedLoad = estimateSegmentedTrimpFromHr(
+    buckets
+      .filter((bucket) => bucket.hr > 0)
+      .map((bucket) => ({ durationMin: 30 / 60, avgHr: bucket.hr }))
+  );
   const hasIntervalPattern =
     fastSegments >= 3 &&
     recoverySegments >= 2 &&
@@ -5089,6 +5498,7 @@ function analyzeCsvSamples(lines, delimiter) {
     speedRange: round(speedRange, 2),
     speedSurgeRatio: round(speedSurgeRatio, 2),
     hrRange: Math.round(hrRange),
+    segmentedLoad: segmentedLoad ? Math.round(segmentedLoad) : null,
   };
 }
 
@@ -5104,10 +5514,10 @@ function buildSampleBuckets(points, bucketSeconds) {
   return [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, bucket]) => ({
-      speed: average(bucket.speeds),
+      speed: bucket.speeds.length ? average(bucket.speeds) : null,
       hr: bucket.hrs.length ? average(bucket.hrs) : null,
     }))
-    .filter((bucket) => bucket.speed > 3);
+    .filter((bucket) => bucket.speed || bucket.hr);
 }
 
 function countSegments(items, predicate, minLength) {
@@ -5319,8 +5729,8 @@ function classifyWorkout(workout) {
   const maxHr = numberOrNull(workout.hrMax) || state.profile.maxHr || 185;
   const hrRatio = avgHr ? avgHr / maxHr : 0;
   const targetDistance = state.profile.targetDistance || "10k";
-  const longMin = targetDistance === "42k" ? 100 : targetDistance === "21k" ? 85 : targetDistance === "10k" ? 70 : 60;
-  const longKm = targetDistance === "21k" ? 18 : targetDistance === "10k" ? 14 : targetDistance === "5k" ? 11 : Infinity;
+  const longMin = targetDistance === "42k" ? 100 : targetDistance === "21k" ? 85 : targetDistance === "10k" ? 70 : targetDistance === "5k" ? 60 : targetDistance === "3k" ? 55 : 45;
+  const longKm = targetDistance === "42k" ? 24 : targetDistance === "21k" ? 18 : targetDistance === "10k" ? 14 : targetDistance === "5k" ? 11 : targetDistance === "3k" ? 9 : 7;
   const hasStrongSampleIntervals = hasStrongSampleIntervalPattern(intervalSignals, duration, longMin);
 
   if (matchesAny(notes, ["интервал", "interval", "повтор", "repeat", "vo2", "400", "800", "1000", "фартлек", "fartlek"])) {
