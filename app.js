@@ -1770,6 +1770,9 @@ function weeklyProgressLevel(ratio) {
 function renderPlanControl(summary) {
   const warnings = summary.warnings || [];
   const correctionNotes = summary.correctionNotes || [];
+  const correctionTitle = ["снизить", "перестроить", "можно добавить"].includes(summary.adjustmentLevel)
+    ? "Почему корректировать"
+    : "Контроль выполнения";
   return `
     <div class="plan-control-grid">
       <div class="plan-control-card ${summary.monotony.level}">
@@ -1782,7 +1785,7 @@ function renderPlanControl(summary) {
         ${warnings.length ? `<ul>${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>Критичных конфликтов по текущей неделе не видно.</p>"}
       </div>
       <div class="plan-control-card ${summary.adjustmentClass}">
-        <span class="section-label">Почему корректировать</span>
+        <span class="section-label">${correctionTitle}</span>
         ${correctionNotes.length ? `<ul>${correctionNotes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>Пока достаточно наблюдать за фактом и не менять план заранее.</p>"}
       </div>
     </div>
@@ -2488,7 +2491,7 @@ function buildWeekExecutionSummary(plan) {
   let adjustmentLevel = "наблюдать";
   let adjustmentReason = "неделя только началась или факта пока мало";
   let adjustmentClass = "watch";
-  if (heavyDays || (loadRatio && loadRatio > 1.25 && elapsedCompletedDays > 0)) {
+  if (loadRatio && loadRatio > 1.25 && elapsedCompletedDays > 0) {
     adjustmentLevel = "снизить";
     adjustmentReason = "фактическая нагрузка выше плана на уже выполненную часть недели";
     adjustmentClass = "warn";
@@ -2500,6 +2503,10 @@ function buildWeekExecutionSummary(plan) {
     adjustmentLevel = "можно добавить";
     adjustmentReason = "фактическая нагрузка заметно ниже плана на прошедшие дни";
     adjustmentClass = "cool";
+  } else if (heavyDays && elapsedCompletedDays > 0) {
+    adjustmentLevel = "не нужна";
+    adjustmentReason = "суммарная нагрузка близка к плану, хотя отдельные дни были тяжелее задания";
+    adjustmentClass = "ok";
   } else if (elapsedCompletedDays > 0) {
     adjustmentLevel = "не нужна";
     adjustmentReason = "выполнение идет близко к текущей части плана";
@@ -2641,7 +2648,11 @@ function buildCorrectionNotes(context) {
     notes.push(`Предыдущая календарная неделя: ${context.previousWeekLoad} TRIMP, текущая неделя сейчас: ${context.actualLoad} TRIMP.`);
   }
   if (context.heavyDays) {
-    notes.push("Следующие легкие дни лучше не усиливать: фактическая нагрузка уже выше задания.");
+    if (context.loadRatio && context.loadRatio <= 1.15) {
+      notes.push("Отдельные дни были тяжелее задания, но суммарная нагрузка прошедшей части недели близка к плану; легкие дни лучше не усиливать.");
+    } else {
+      notes.push("Следующие легкие дни лучше не усиливать: фактическая нагрузка выше плана на прошедшую часть недели.");
+    }
   }
   if (context.missedPastDays || context.mismatchDays) {
     notes.push("Коррекция нужна не только по TRIMP, но и по структуре: часть плановых стимулов не закрыта нужным типом работы.");
