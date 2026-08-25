@@ -1,0 +1,18 @@
+[Unit]
+Description=Runflow Training Coach product
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aliveco
+Group=aliveco
+WorkingDirectory=/home/aliveco/runflow/product
+ExecStart=/usr/bin/python3 /home/aliveco/runflow/product/server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/aliveco/runflow/logs/product.log
+StandardError=append:/home/aliveco/runflow/logs/product.log
+
+[Install]
+WantedBy=multi-user.target

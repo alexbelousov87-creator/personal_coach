@@ -1,0 +1,18 @@
+[Unit]
+Description=Runflow Training Coach staging
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aliveco
+Group=aliveco
+WorkingDirectory=/home/aliveco/runflow/staging
+ExecStart=/usr/bin/python3 /home/aliveco/runflow/staging/server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/aliveco/runflow/logs/staging.log
+StandardError=append:/home/aliveco/runflow/logs/staging.log
+
+[Install]
+WantedBy=multi-user.target
