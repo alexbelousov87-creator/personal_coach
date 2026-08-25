@@ -13,6 +13,7 @@ import mimetypes
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import threading
 import time
@@ -73,8 +74,9 @@ DEFAULT_CONFIG = {
             "removeKeyboard": True,
             "showTodayButton": True,
             "todayButtonText": TODAY_BUTTON_TEXT,
-            "pollCommands": True,
-            "clearMenu": True,
+            "pollCommands": True,            "clearMenu": True,
+            "timeoutSeconds": 45,
+            "forceIPv4": True,
         },
     },
     "auth": {
@@ -116,6 +118,8 @@ PORT = int(SERVER_CONFIG["port"])
 DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite3")).resolve()
 LOG_PATH = (ROOT / LOGGING_CONFIG.get("file", "data/logs/training_coach.log")).resolve()
 SESSIONS = {}
+ORIGINAL_GETADDRINFO = socket.getaddrinfo
+GETADDRINFO_LOCK = threading.Lock()
 SESSION_COOKIE = "training_coach_session"
 DEFAULT_ATHLETE_ID = "athlete-belousov-aleksey"
 
@@ -974,7 +978,8 @@ def telegram_notification_config():
         "today_button_text": clean_telegram_button_text(telegram.get("todayButtonText")),
         "poll_commands": bool(telegram.get("pollCommands", True)),
         "clear_menu": bool(telegram.get("clearMenu", True)),
-        "timeout_seconds": int(telegram.get("timeoutSeconds", 20) or 20),
+        "timeout_seconds": int(telegram.get("timeoutSeconds", 45) or 45),
+        "force_ipv4": bool(telegram.get("forceIPv4", True)),
     }
 
 
@@ -1655,10 +1660,15 @@ def http_json(url, method="GET", data=None, headers=None):
 
 
 def http_bytes(url, method="GET", data=None, headers=None):
-    timeout = int(POLAR_CONFIG.get("timeoutSeconds", 45))
+    is_telegram = "api.telegram.org" in url
+    telegram = telegram_notification_config() if is_telegram else {}
+    service_name = "Telegram API" if is_telegram else "Polar API"
+    timeout = telegram.get("timeout_seconds", 45) if is_telegram else int(POLAR_CONFIG.get("timeoutSeconds", 45))
     req = request.Request(url, data=data, method=method, headers=headers or {})
-    service_name = "Telegram API" if "api.telegram.org" in url else "Polar API"
+    force_ipv4 = is_telegram and telegram.get("force_ipv4", True)
     try:
+        if force_ipv4:
+            return urlopen_ipv4(req, timeout)
         with request.urlopen(req, timeout=timeout) as response:
             return response.read()
     except error.HTTPError as exc:
@@ -1669,6 +1679,21 @@ def http_bytes(url, method="GET", data=None, headers=None):
     except error.URLError as exc:
         raise AppError(f"failed to connect to {service_name}: {exc.reason}", 502)
 
+
+def urlopen_ipv4(req, timeout):
+    def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+        results = ORIGINAL_GETADDRINFO(host, port, family, type, proto, flags)
+        ipv4_results = [item for item in results if item[0] == socket.AF_INET]
+        return ipv4_results or results
+
+    with GETADDRINFO_LOCK:
+        original = socket.getaddrinfo
+        socket.getaddrinfo = getaddrinfo_ipv4
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                return response.read()
+        finally:
+            socket.getaddrinfo = original
 
 def polar_callback_html(payload):
     if payload.get("ok"):
