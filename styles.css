@@ -36,6 +36,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--ink);
   font-family: Inter, "Segoe UI", Arial, sans-serif;
@@ -89,6 +90,7 @@ textarea {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   min-height: 100vh;
+  min-width: 0;
 }
 
 .sidebar {
@@ -267,6 +269,7 @@ textarea {
 
 .view.active {
   display: block;
+  min-width: 0;
 }
 
 .page-head {
@@ -2148,21 +2151,59 @@ textarea {
   }
 
   .sidebar {
-    position: sticky;
+    position: relative;
     top: 0;
     z-index: 2;
-    gap: 14px;
-    padding: 14px;
+    gap: 12px;
+    width: 100%;
+    padding: 12px;
+  }
+
+  .brand {
+    gap: 10px;
+  }
+
+  .brand-mark {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .brand span {
+    font-size: 12px;
+  }
+
+  .sidebar-profile-photo {
+    width: 84px;
+    max-height: 100px;
   }
 
   .nav {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    display: flex;
+    gap: 8px;
+    margin: 0 -12px;
+    padding: 0 12px 4px;
     overflow-x: auto;
+    scrollbar-width: thin;
   }
 
   .nav-item {
-    min-width: 92px;
+    flex: 0 0 auto;
+    min-width: 86px;
+    min-height: 38px;
+    padding: 0 12px;
     text-align: center;
+  }
+
+  .role-panel {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .role-field select,
+  .role-panel .ghost-btn,
+  .sidebar-logout {
+    min-height: 38px;
   }
 
   .side-note {
@@ -2170,16 +2211,47 @@ textarea {
   }
 
   .main {
-    padding: 18px;
+    width: 100%;
+    padding: 16px 12px 24px;
   }
 
   .page-head {
     display: grid;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  h1 {
+    font-size: 34px;
+    line-height: 1.05;
+  }
+
+  h2 {
+    font-size: 17px;
+  }
+
+  p {
+    max-width: 100%;
+  }
+
+  .button-row {
+    justify-content: flex-start;
+  }
+
+  .button-row .primary-btn,
+  .button-row .ghost-btn {
+    flex: 1 1 150px;
+  }
+
+  .primary-btn,
+  .ghost-btn {
+    min-height: 40px;
   }
 
   .adjust-choice {
     justify-content: flex-start;
     flex-wrap: wrap;
+    margin: 0 0 14px;
   }
 
   .metric-grid,
@@ -2207,5 +2279,196 @@ textarea {
 
   .profile-photo-field {
     grid-template-columns: 1fr;
+  }
+
+  .metric,
+  .panel,
+  .dropzone {
+    box-shadow: 0 8px 24px rgba(23, 33, 38, 0.06);
+  }
+
+  .metric,
+  .panel {
+    padding: 14px;
+  }
+
+  .metric {
+    min-height: 112px;
+  }
+
+  .metric strong {
+    font-size: 26px;
+  }
+
+  .panel-head {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .week-switcher {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 14px;
+  }
+
+  .week-switcher strong {
+    order: -1;
+    min-width: 100%;
+    text-align: left;
+  }
+
+  .week-switcher .ghost-btn {
+    flex: 1 1 auto;
+  }
+
+  .chart-bars {
+    grid-template-columns: repeat(14, minmax(22px, 1fr));
+    gap: 5px;
+    overflow-x: auto;
+    min-height: 150px;
+    padding-bottom: 4px;
+  }
+
+  .bar-value {
+    font-size: 9px;
+  }
+
+  .bar-date {
+    font-size: 10px;
+  }
+
+  .workout-row {
+    grid-template-columns: 1fr;
+  }
+
+  .workout-type-control {
+    width: 100%;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .workout-type-control select,
+  .workout-feedback select,
+  .workout-feedback textarea,
+  .workout-feedback .ghost-btn {
+    width: 100%;
+  }
+
+  .dropzone {
+    min-height: 180px;
+    padding: 18px;
+  }
+
+  .dropzone strong {
+    font-size: 18px;
+  }
+
+  .dropzone .primary-btn {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .import-issues article {
+    gap: 6px;
+  }
+
+  .plan-card {
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .plan-card-head {
+    display: grid;
+  }
+
+  .plan-edit-btn {
+    justify-self: start;
+  }
+
+  .plan-section {
+    padding: 10px;
+  }
+
+  .plan-legend {
+    gap: 14px;
+  }
+
+  .tone-legend,
+  .eval-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .plan-change-log,
+  .week-comparison,
+  .import-diagnostics-columns,
+  .load-charts,
+  .template-library-grid,
+  .reference-grid {
+    overflow-wrap: anywhere;
+  }
+
+  table,
+  pre,
+  code {
+    max-width: 100%;
+  }
+
+  pre {
+    overflow-x: auto;
+  }
+
+  .intensity-scale {
+    grid-template-columns: repeat(8, minmax(82px, 1fr));
+  }
+
+  .intensity-scale span {
+    min-height: 42px;
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .modal-panel {
+    width: 100%;
+    max-height: calc(100vh - 20px);
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 420px) {
+  .main {
+    padding-inline: 10px;
+  }
+
+  h1 {
+    font-size: 30px;
+  }
+
+  .brand strong {
+    font-size: 15px;
+  }
+
+  .nav-item {
+    min-width: 78px;
+    padding-inline: 10px;
+    font-size: 13px;
+  }
+
+  .role-panel {
+    font-size: 13px;
+  }
+
+  .metric strong {
+    font-size: 24px;
+  }
+
+  .plan-status {
+    white-space: normal;
+    line-height: 1.25;
   }
 }
