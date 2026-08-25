@@ -6,6 +6,7 @@ import base64
 import hmac
 from datetime import date, datetime, time as datetime_time, timedelta
 import gzip
+import hashlib
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -83,6 +84,10 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "coachPassword": "",
         "coachPasswordEnv": "TRAINING_COACH_PASSWORD",
+        "defaultCoachLogin": "coach",
+        "allowCoachRegistration": True,
+        "coachRegistrationCode": "",
+        "coachRegistrationCodeEnv": "TRAINING_COACH_REGISTRATION_CODE",
         "sessionTtlHours": 24,
     },
 }
@@ -121,7 +126,21 @@ SESSIONS = {}
 ORIGINAL_GETADDRINFO = socket.getaddrinfo
 GETADDRINFO_LOCK = threading.Lock()
 SESSION_COOKIE = "training_coach_session"
+DEFAULT_COACH_ID = "coach-belousov-aleksey"
 DEFAULT_ATHLETE_ID = "athlete-belousov-aleksey"
+COACHES_KEY = "coaches"
+STATE_KEYS = {
+    "workouts",
+    "profile",
+    "plans",
+    "plansByWeek",
+    "activePlanSource",
+    "selectedWeekStart",
+    "coachProfile",
+    "athletes",
+    "activeAthleteId",
+    "currentRole",
+}
 
 
 PLAN_SCHEMA = {
@@ -189,7 +208,7 @@ def setup_logging():
 def is_self_student_session(session):
     if not auth_enabled():
         return True
-    return session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID
+    return session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID and (session.get("coach_id") or DEFAULT_COACH_ID) == DEFAULT_COACH_ID
 
 class TrainingCoachHandler(BaseHTTPRequestHandler):
     server_version = "TrainingCoach/0.1"
@@ -239,7 +258,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             session = self.require_session()
             if session is None:
                 return
-            self.send_json(notification_status())
+            self.send_json(notification_status(session))
             return
         if clean_path == "/api/polar/connect":
             session = self.require_polar_session()
@@ -267,6 +286,18 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json()
                 auth_payload, cookie = login_response(payload)
+                self.send_json(auth_payload, headers={"Set-Cookie": cookie})
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                logging.exception("Unexpected server error on %s", clean_path)
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/auth/register-coach":
+            try:
+                payload = self.read_json()
+                auth_payload, cookie = register_coach_response(self, payload)
                 self.send_json(auth_payload, headers={"Set-Cookie": cookie})
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
@@ -315,7 +346,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             if session is None:
                 return
             try:
-                result = send_daily_assignment_notification(force=True)
+                result = send_daily_assignment_notification(force=True, coach_id=session.get("coach_id") or DEFAULT_COACH_ID)
                 self.send_json(result)
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
@@ -330,7 +361,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = self.read_json()
-                result = send_daily_assignment_notification(force=True, athlete_id=str(payload.get("athleteId") or ""))
+                result = send_daily_assignment_notification(force=True, athlete_id=str(payload.get("athleteId") or ""), coach_id=session.get("coach_id") or DEFAULT_COACH_ID)
                 self.send_json(result)
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
@@ -521,81 +552,88 @@ def init_db():
         )
 
 
-def load_state():
+def scoped_state_key(key, coach_id=DEFAULT_COACH_ID):
+    coach_id = str(coach_id or DEFAULT_COACH_ID).strip()
+    if key not in STATE_KEYS or coach_id == DEFAULT_COACH_ID:
+        return key
+    return f"coach:{coach_id}:{key}"
+
+
+def load_state(coach_id=DEFAULT_COACH_ID):
     return {
-        "workouts": load_state_value("workouts", []),
-        "profile": load_state_value("profile", None),
-        "plans": load_state_value("plans", {}),
-        "plansByWeek": load_state_value("plansByWeek", {}),
-        "activePlanSource": load_state_value("activePlanSource", ""),
-        "selectedWeekStart": load_state_value("selectedWeekStart", ""),
-        "coachProfile": load_state_value("coachProfile", {}),
-        "athletes": load_state_value("athletes", []),
-        "activeAthleteId": load_state_value("activeAthleteId", ""),
-        "currentRole": load_state_value("currentRole", ""),
+        "workouts": load_state_value("workouts", [], coach_id=coach_id),
+        "profile": load_state_value("profile", None, coach_id=coach_id),
+        "plans": load_state_value("plans", {}, coach_id=coach_id),
+        "plansByWeek": load_state_value("plansByWeek", {}, coach_id=coach_id),
+        "activePlanSource": load_state_value("activePlanSource", "", coach_id=coach_id),
+        "selectedWeekStart": load_state_value("selectedWeekStart", "", coach_id=coach_id),
+        "coachProfile": load_state_value("coachProfile", {}, coach_id=coach_id),
+        "athletes": load_state_value("athletes", [], coach_id=coach_id),
+        "activeAthleteId": load_state_value("activeAthleteId", "", coach_id=coach_id),
+        "currentRole": load_state_value("currentRole", "", coach_id=coach_id),
     }
 
 
-def save_state(payload):
+def save_state(payload, coach_id=DEFAULT_COACH_ID):
     if not isinstance(payload, dict):
         raise AppError("state payload must be an object", 400)
     if "workouts" in payload:
         workouts = payload["workouts"]
         if not isinstance(workouts, list):
             raise AppError("workouts must be an array", 400)
-        save_state_value("workouts", workouts)
+        save_state_value("workouts", workouts, coach_id=coach_id)
     if "profile" in payload:
         profile = payload["profile"]
         if profile is not None and not isinstance(profile, dict):
             raise AppError("profile must be an object", 400)
-        save_state_value("profile", profile)
+        save_state_value("profile", profile, coach_id=coach_id)
     if "plans" in payload:
         plans = payload["plans"]
         if plans is not None and not isinstance(plans, dict):
             raise AppError("plans must be an object", 400)
-        save_state_value("plans", plans or {})
+        save_state_value("plans", plans or {}, coach_id=coach_id)
     if "activePlanSource" in payload:
         active_plan_source = payload["activePlanSource"]
         if active_plan_source is not None and not isinstance(active_plan_source, str):
             raise AppError("activePlanSource must be a string", 400)
-        save_state_value("activePlanSource", active_plan_source or "")
+        save_state_value("activePlanSource", active_plan_source or "", coach_id=coach_id)
     if "plansByWeek" in payload:
         plans_by_week = payload["plansByWeek"]
         if plans_by_week is not None and not isinstance(plans_by_week, dict):
             raise AppError("plansByWeek must be an object", 400)
-        save_state_value("plansByWeek", plans_by_week or {})
+        save_state_value("plansByWeek", plans_by_week or {}, coach_id=coach_id)
     if "selectedWeekStart" in payload:
         selected_week_start = payload["selectedWeekStart"]
         if selected_week_start is not None and not isinstance(selected_week_start, str):
             raise AppError("selectedWeekStart must be a string", 400)
-        save_state_value("selectedWeekStart", selected_week_start or "")
+        save_state_value("selectedWeekStart", selected_week_start or "", coach_id=coach_id)
     if "coachProfile" in payload:
         coach_profile = payload["coachProfile"]
         if coach_profile is not None and not isinstance(coach_profile, dict):
             raise AppError("coachProfile must be an object", 400)
-        save_state_value("coachProfile", coach_profile or {})
+        save_state_value("coachProfile", coach_profile or {}, coach_id=coach_id)
     if "athletes" in payload:
         athletes = payload["athletes"]
         if athletes is not None and not isinstance(athletes, list):
             raise AppError("athletes must be an array", 400)
-        save_state_value("athletes", sanitize_athletes_for_storage(athletes or []))
+        save_state_value("athletes", sanitize_athletes_for_storage(athletes or []), coach_id=coach_id)
     if "activeAthleteId" in payload:
         active_athlete_id = payload["activeAthleteId"]
         if active_athlete_id is not None and not isinstance(active_athlete_id, str):
             raise AppError("activeAthleteId must be a string", 400)
-        save_state_value("activeAthleteId", active_athlete_id or "")
+        save_state_value("activeAthleteId", active_athlete_id or "", coach_id=coach_id)
     if "currentRole" in payload:
         current_role = payload["currentRole"]
         if current_role is not None and not isinstance(current_role, str):
             raise AppError("currentRole must be a string", 400)
-        save_state_value("currentRole", current_role or "")
+        save_state_value("currentRole", current_role or "", coach_id=coach_id)
 
 
-def save_state_from_coach(payload):
+def save_state_from_coach(payload, coach_id=DEFAULT_COACH_ID):
     if not isinstance(payload, dict):
         raise AppError("state payload must be an object", 400)
 
-    current = load_state()
+    current = load_state(coach_id)
     current_athletes = current.get("athletes") if isinstance(current.get("athletes"), list) else []
     workouts_by_id = {
         str(athlete.get("id") or ""): athlete.get("workouts") or []
@@ -636,11 +674,12 @@ def save_state_from_coach(payload):
             safe_athletes.append(safe_athlete)
         safe_payload["athletes"] = safe_athletes
 
-    save_state(safe_payload)
+    save_state(safe_payload, coach_id=coach_id)
 
 
-def load_state_value(key, fallback):
+def load_state_value(key, fallback, coach_id=DEFAULT_COACH_ID):
     init_db()
+    key = scoped_state_key(key, coach_id)
     with sqlite3.connect(DB_PATH) as connection:
         row = connection.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
     if not row:
@@ -733,8 +772,9 @@ def filter_student_workouts_for_storage(athlete_id, workouts, athletes):
     ]
 
 
-def save_state_value(key, value):
+def save_state_value(key, value, coach_id=DEFAULT_COACH_ID):
     init_db()
+    key = scoped_state_key(key, coach_id)
     raw = json.dumps(value, ensure_ascii=False)
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute(
@@ -761,9 +801,154 @@ def coach_password():
     return os.environ.get(env_name, "").strip() if env_name else ""
 
 
+def coach_registration_code():
+    value = str(AUTH_CONFIG.get("coachRegistrationCode") or "").strip()
+    if value:
+        return value
+    env_name = str(AUTH_CONFIG.get("coachRegistrationCodeEnv") or "TRAINING_COACH_REGISTRATION_CODE").strip()
+    return os.environ.get(env_name, "").strip() if env_name else ""
+
+
+def normalize_coach_login(value):
+    return re.sub(r"[^a-z0-9_.@-]+", "", str(value or "").strip().lower())[:80]
+
+
+def password_hash(password):
+    salt = secrets.token_hex(16)
+    rounds = 120000
+    digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt.encode("utf-8"), rounds).hex()
+    return f"pbkdf2_sha256${rounds}${salt}${digest}"
+
+
+def verify_password(stored_hash, password):
+    parts = str(stored_hash or "").split("$")
+    if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+        return False
+    try:
+        rounds = int(parts[1])
+    except ValueError:
+        return False
+    salt, expected = parts[2], parts[3]
+    digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt.encode("utf-8"), rounds).hex()
+    return hmac.compare_digest(digest, expected)
+
+
+def default_coach_record():
+    profile = load_state_value("coachProfile", {}) or {}
+    login = normalize_coach_login(AUTH_CONFIG.get("defaultCoachLogin") or "coach") or "coach"
+    password = coach_password()
+    return {
+        "id": DEFAULT_COACH_ID,
+        "login": login,
+        "name": profile.get("name") or "Белоусов Алексей",
+        "passwordHash": password_hash(password) if password else "",
+        "createdAt": datetime.now().isoformat(timespec="seconds"),
+        "updatedAt": datetime.now().isoformat(timespec="seconds"),
+        "isDefault": True,
+    }
+
+
+def load_saved_coaches():
+    coaches = load_state_value(COACHES_KEY, [], coach_id="")
+    return [coach for coach in coaches if isinstance(coach, dict)] if isinstance(coaches, list) else []
+
+
+def load_coaches():
+    coaches = load_saved_coaches()
+    if coaches:
+        return coaches
+    return [default_coach_record()]
+
+
+def save_coaches(coaches):
+    clean = []
+    seen = set()
+    for coach in coaches:
+        if not isinstance(coach, dict):
+            continue
+        coach_id = str(coach.get("id") or "").strip()
+        login = normalize_coach_login(coach.get("login"))
+        if not coach_id or not login or coach_id in seen:
+            continue
+        seen.add(coach_id)
+        clean.append({
+            "id": coach_id,
+            "login": login,
+            "name": str(coach.get("name") or login).strip() or login,
+            "passwordHash": str(coach.get("passwordHash") or ""),
+            "createdAt": str(coach.get("createdAt") or datetime.now().isoformat(timespec="seconds")),
+            "updatedAt": str(coach.get("updatedAt") or datetime.now().isoformat(timespec="seconds")),
+            "isDefault": bool(coach.get("isDefault")),
+        })
+    save_state_value(COACHES_KEY, clean, coach_id="")
+
+
+def coach_by_id(coach_id):
+    coach_id = str(coach_id or DEFAULT_COACH_ID).strip()
+    return next((coach for coach in load_coaches() if str(coach.get("id") or "") == coach_id), None)
+
+
+def coach_by_login(login):
+    login = normalize_coach_login(login)
+    coaches = load_coaches()
+    if not login:
+        return next((coach for coach in coaches if coach.get("id") == DEFAULT_COACH_ID), coaches[0] if coaches else None)
+    return next((coach for coach in coaches if normalize_coach_login(coach.get("login")) == login), None)
+
+
+def coach_registration_allowed():
+    return bool(AUTH_CONFIG.get("allowCoachRegistration", False)) or not load_saved_coaches()
+
+
+def register_coach_response(handler, payload):
+    if not isinstance(payload, dict):
+        raise AppError("registration payload must be an object", 400)
+    current = current_session(handler)
+    current_is_coach = bool(current and current.get("role") == "coach")
+    if auth_enabled() and not coach_registration_allowed() and not current_is_coach:
+        raise AppError("Coach registration is disabled.", 403)
+    expected_code = coach_registration_code()
+    provided_code = str(payload.get("registrationCode") or "").strip()
+    if expected_code and not current_is_coach and not hmac.compare_digest(provided_code, expected_code):
+        raise AppError("Invalid coach registration code.", 401)
+
+    login = normalize_coach_login(payload.get("coachLogin") or payload.get("login"))
+    name = str(payload.get("coachName") or payload.get("name") or "").strip()
+    password = str(payload.get("password") or "")
+    if len(login) < 3:
+        raise AppError("Логин тренера должен быть не короче 3 символов.", 400)
+    if len(password) < 4:
+        raise AppError("Пароль тренера должен быть не короче 4 символов.", 400)
+    coaches = load_coaches()
+    if any(normalize_coach_login(coach.get("login")) == login for coach in coaches):
+        raise AppError("Тренер с таким логином уже существует.", 409)
+
+    coach_id = f"coach-{secrets.token_urlsafe(8).lower().replace('_', '-') }"
+    now = datetime.now().isoformat(timespec="seconds")
+    coach = {
+        "id": coach_id,
+        "login": login,
+        "name": name or login,
+        "passwordHash": password_hash(password),
+        "createdAt": now,
+        "updatedAt": now,
+        "isDefault": False,
+    }
+    coaches.append(coach)
+    save_coaches(coaches)
+    save_state({
+        "coachProfile": {"id": coach_id, "name": coach["name"]},
+        "athletes": [],
+        "activeAthleteId": "",
+        "currentRole": "coach",
+    }, coach_id=coach_id)
+    session, cookie = create_session("coach", "", coach_id=coach_id)
+    return auth_login_payload(session, enabled=auth_enabled()), cookie
+
+
 def current_session(handler):
     if not auth_enabled():
-        return {"role": "coach", "athlete_id": load_state_value("activeAthleteId", "")}
+        return {"role": "coach", "athlete_id": load_state_value("activeAthleteId", ""), "coach_id": DEFAULT_COACH_ID}
     session_id = handler.session_id_from_cookie()
     if not session_id:
         return None
@@ -776,12 +961,13 @@ def current_session(handler):
     return session
 
 
-def create_session(role, athlete_id=""):
+def create_session(role, athlete_id="", coach_id=DEFAULT_COACH_ID):
     session_id = secrets.token_urlsafe(32)
     ttl_hours = int(AUTH_CONFIG.get("sessionTtlHours", 24) or 24)
     SESSIONS[session_id] = {
         "role": role,
         "athlete_id": athlete_id or "",
+        "coach_id": coach_id or DEFAULT_COACH_ID,
         "created_at": int(time.time()),
         "expires_at": int(time.time() + ttl_hours * 3600),
     }
@@ -792,54 +978,68 @@ def create_session(role, athlete_id=""):
 def auth_status_response(handler):
     enabled = auth_enabled()
     session = current_session(handler)
+    coach = coach_by_id(session.get("coach_id")) if session else None
     return {
         "enabled": enabled,
         "authenticated": bool(session),
         "role": session.get("role", "") if session else "",
         "athleteId": session.get("athlete_id", "") if session else "",
-        "coachConfigured": bool(coach_password()) if enabled else True,
+        "coachId": session.get("coach_id", "") if session else "",
+        "coachName": coach.get("name", "") if coach else "",
+        "coachConfigured": bool(coach_password() or load_saved_coaches()) if enabled else True,
+        "coachRegistrationAllowed": coach_registration_allowed(),
+        "coachRegistrationRequiresCode": bool(coach_registration_code()),
     }
 
 
 def auth_login_payload(session, enabled=True):
+    coach = coach_by_id(session.get("coach_id")) if session else None
     return {
         "ok": True,
         "enabled": bool(enabled),
         "authenticated": True,
         "role": session.get("role", ""),
         "athleteId": session.get("athlete_id", ""),
-        "coachConfigured": bool(coach_password()) if enabled else True,
+        "coachId": session.get("coach_id", ""),
+        "coachName": coach.get("name", "") if coach else "",
+        "coachConfigured": bool(coach_password() or load_saved_coaches()) if enabled else True,
+        "coachRegistrationAllowed": coach_registration_allowed(),
+        "coachRegistrationRequiresCode": bool(coach_registration_code()),
     }
 
 
 def login_response(payload):
     if not auth_enabled():
-        session, cookie = create_session("coach", load_state_value("activeAthleteId", ""))
+        session, cookie = create_session("coach", load_state_value("activeAthleteId", ""), coach_id=DEFAULT_COACH_ID)
         return auth_login_payload(session, enabled=False), cookie
     if not isinstance(payload, dict):
         raise AppError("login payload must be an object", 400)
 
     role = str(payload.get("role") or "").strip().lower()
     if role == "coach":
-        expected = coach_password()
-        if not expected:
-            raise AppError("Coach password is not configured. Add auth.coachPassword to conf.json.", 500)
         provided = str(payload.get("password") or "")
-        if not hmac.compare_digest(provided, expected):
-            raise AppError("Неверный пароль тренера.", 401)
-        session, cookie = create_session("coach", load_state_value("activeAthleteId", ""))
+        login = normalize_coach_login(payload.get("coachLogin") or payload.get("login"))
+        coach = coach_by_login(login)
+        if not coach:
+            raise AppError("Неверный логин или пароль тренера.", 401)
+        saved_coaches = load_saved_coaches()
+        legacy_default = not saved_coaches and coach.get("id") == DEFAULT_COACH_ID and coach_password()
+        password_ok = hmac.compare_digest(provided, coach_password()) if legacy_default else verify_password(coach.get("passwordHash"), provided)
+        if not password_ok:
+            raise AppError("Неверный логин или пароль тренера.", 401)
+        coach_id = coach.get("id") or DEFAULT_COACH_ID
+        session, cookie = create_session("coach", load_state_value("activeAthleteId", "", coach_id=coach_id), coach_id=coach_id)
         return auth_login_payload(session, enabled=True), cookie
 
     if role == "student":
         code = normalize_access_code(payload.get("accessCode") or payload.get("password"))
-        athlete = athlete_by_access_code(code)
+        athlete, coach_id = athlete_by_access_code(code)
         if not athlete:
             raise AppError("Неверный код ученика.", 401)
-        session, cookie = create_session("student", str(athlete.get("id") or ""))
+        session, cookie = create_session("student", str(athlete.get("id") or ""), coach_id=coach_id)
         return auth_login_payload(session, enabled=True), cookie
 
     raise AppError("Unknown role.", 400)
-
 
 def normalize_access_code(value):
     return str(value or "").strip().upper().replace(" ", "")
@@ -855,12 +1055,21 @@ def athlete_access_code(athlete):
 
 def athlete_by_access_code(code):
     if not code:
-        return None
-    return next((athlete for athlete in telegram_athletes() if athlete_access_code(athlete) == code), None)
+        return None, ""
+    for coach in load_coaches():
+        coach_id = coach.get("id") or DEFAULT_COACH_ID
+        athlete = next((athlete for athlete in telegram_athletes(coach_id) if athlete_access_code(athlete) == code), None)
+        if athlete:
+            return athlete, coach_id
+    return None, ""
 
 
 def state_for_session(session):
-    state = load_state()
+    coach_id = session.get("coach_id") or DEFAULT_COACH_ID
+    state = load_state(coach_id)
+    coach = coach_by_id(coach_id)
+    if coach and not state.get("coachProfile"):
+        state["coachProfile"] = {"id": coach_id, "name": coach.get("name") or "Тренер"}
     if not auth_enabled() or session.get("role") == "coach":
         state["currentRole"] = "coach"
         return state
@@ -889,7 +1098,7 @@ def state_for_session(session):
         "plansByWeek": athlete.get("plansByWeek") or {},
         "activePlanSource": athlete.get("activePlanSource") or "json",
         "selectedWeekStart": athlete.get("selectedWeekStart") or "",
-        "coachProfile": state.get("coachProfile") or {},
+        "coachProfile": state.get("coachProfile") or ({"id": coach_id, "name": coach.get("name") or "Тренер"} if coach else {}),
         "athletes": [athlete],
         "activeAthleteId": athlete_id,
         "currentRole": "student",
@@ -897,17 +1106,18 @@ def state_for_session(session):
 
 
 def save_state_for_session(payload, session):
+    coach_id = session.get("coach_id") or DEFAULT_COACH_ID
     if not auth_enabled():
-        save_state(payload)
+        save_state(payload, coach_id=coach_id)
         return
     if session.get("role") == "coach":
-        save_state_from_coach(payload)
+        save_state_from_coach(payload, coach_id=coach_id)
         return
 
     if not isinstance(payload, dict):
         raise AppError("state payload must be an object", 400)
     athlete_id = session.get("athlete_id", "")
-    athletes = telegram_athletes()
+    athletes = telegram_athletes(coach_id)
     index = next((idx for idx, item in enumerate(athletes) if str(item.get("id") or "") == athlete_id), -1)
     if index < 0:
         raise AppError("Athlete not found.", 404)
@@ -931,13 +1141,14 @@ def save_state_for_session(payload, session):
         athlete["selectedWeekStart"] = selected_week
     athlete["updatedAt"] = datetime.now().isoformat(timespec="seconds")
     athletes[index] = athlete
-    save_telegram_athletes(athletes)
+    save_telegram_athletes(athletes, coach_id=coach_id)
 
 
-def notification_status():
+def notification_status(session=None):
     telegram = telegram_notification_config()
-    athletes = telegram_athletes()
-    plan_day = get_today_plan_day()
+    coach_id = session.get("coach_id") if isinstance(session, dict) else DEFAULT_COACH_ID
+    athletes = telegram_athletes(coach_id or DEFAULT_COACH_ID)
+    plan_day = get_today_plan_day(default_telegram_athlete(coach_id or DEFAULT_COACH_ID))
     return {
         "provider": "telegram",
         "enabled": telegram["enabled"],
@@ -1004,21 +1215,21 @@ def telegram_command_worker_loop():
             time.sleep(10)
 
 
-def send_daily_assignment_notification(force=False, athlete_id=""):
+def send_daily_assignment_notification(force=False, athlete_id="", coach_id=DEFAULT_COACH_ID):
     telegram = telegram_notification_config()
     if not force and not telegram["enabled"]:
         return {"ok": False, "skipped": "notifications disabled"}
     if not telegram["bot_token"]:
         raise AppError("Telegram notifications are not configured. Add notifications.telegram.botToken to conf.json.", 500)
 
-    athlete = telegram_athlete_by_id(athlete_id) if athlete_id else default_telegram_athlete()
+    athlete = telegram_athlete_by_id(athlete_id, coach_id=coach_id) if athlete_id else default_telegram_athlete(coach_id=coach_id)
     chat_id = athlete_chat_id(athlete) or telegram["chat_id"]
     if not chat_id:
         raise AppError("Telegram chat is not linked. Generate a student code and ask the student to send it to the bot.", 400)
     if not force and not notification_time_reached(telegram["daily_time"]):
         return {"ok": False, "skipped": "not time yet"}
 
-    sent_key = athlete.get("id") or str(chat_id)
+    sent_key = f"{coach_id}:{athlete.get('id') or str(chat_id)}"
     if not force and daily_assignment_sent_today(sent_key):
         return {"ok": False, "skipped": "already sent today"}
 
@@ -1071,33 +1282,34 @@ def notification_time_reached(value):
     return now >= target
 
 
-def telegram_athletes():
-    athletes = load_state_value("athletes", [])
+def telegram_athletes(coach_id=DEFAULT_COACH_ID):
+    athletes = load_state_value("athletes", [], coach_id=coach_id)
     if isinstance(athletes, list) and athletes:
         return [athlete for athlete in athletes if isinstance(athlete, dict)]
-    profile = load_state_value("profile", {}) or {}
+    if coach_id != DEFAULT_COACH_ID:
+        return []
+    profile = load_state_value("profile", {}, coach_id=coach_id) or {}
     return [
         {
             "id": "athlete-belousov-aleksey",
             "name": profile.get("name") or "Белоусов Алексей",
             "isSelf": True,
             "profile": profile,
-            "plansByWeek": load_state_value("plansByWeek", {}),
-            "activePlanSource": load_state_value("activePlanSource", ""),
+            "plansByWeek": load_state_value("plansByWeek", {}, coach_id=coach_id),
+            "activePlanSource": load_state_value("activePlanSource", "", coach_id=coach_id),
         }
     ]
 
 
-def save_telegram_athletes(athletes):
+def save_telegram_athletes(athletes, coach_id=DEFAULT_COACH_ID):
     athletes = sanitize_athletes_for_storage(athletes)
-    save_state_value("athletes", athletes)
-    active_id = load_state_value("activeAthleteId", "")
+    save_state_value("athletes", athletes, coach_id=coach_id)
+    active_id = load_state_value("activeAthleteId", "", coach_id=coach_id)
     active = next((athlete for athlete in athletes if athlete.get("id") == active_id), None)
     if active:
-        save_state_value("profile", active.get("profile") or {})
-        save_state_value("plansByWeek", active.get("plansByWeek") or {})
-        save_state_value("activePlanSource", active.get("activePlanSource") or "")
-
+        save_state_value("profile", active.get("profile") or {}, coach_id=coach_id)
+        save_state_value("plansByWeek", active.get("plansByWeek") or {}, coach_id=coach_id)
+        save_state_value("activePlanSource", active.get("activePlanSource") or "", coach_id=coach_id)
 
 def athlete_chat_id(athlete):
     telegram = athlete.get("telegram") if isinstance(athlete, dict) and isinstance(athlete.get("telegram"), dict) else {}
@@ -1109,15 +1321,15 @@ def athlete_bind_code(athlete):
     return str(telegram.get("bindCode") or "").strip().upper()
 
 
-def default_telegram_athlete():
-    athletes = telegram_athletes()
+def default_telegram_athlete(coach_id=DEFAULT_COACH_ID):
+    athletes = telegram_athletes(coach_id)
     if not athletes:
         return {}
     return next((athlete for athlete in athletes if athlete.get("isSelf")), athletes[0])
 
 
-def telegram_athlete_by_id(athlete_id):
-    athlete = next((item for item in telegram_athletes() if str(item.get("id") or "") == str(athlete_id or "")), None)
+def telegram_athlete_by_id(athlete_id, coach_id=DEFAULT_COACH_ID):
+    athlete = next((item for item in telegram_athletes(coach_id) if str(item.get("id") or "") == str(athlete_id or "")), None)
     if not athlete:
         raise AppError("Athlete not found.", 404)
     return athlete
@@ -1127,11 +1339,12 @@ def telegram_athlete_by_chat(chat_id, telegram):
     chat_id = str(chat_id or "").strip()
     if not chat_id:
         return None
-    athlete = next((item for item in telegram_athletes() if athlete_chat_id(item) == chat_id), None)
-    if athlete:
-        return athlete
+    for coach in load_coaches():
+        athlete = next((item for item in telegram_athletes(coach.get("id") or DEFAULT_COACH_ID) if athlete_chat_id(item) == chat_id), None)
+        if athlete:
+            return athlete
     if telegram.get("chat_id") and chat_id == str(telegram["chat_id"]):
-        return default_telegram_athlete()
+        return default_telegram_athlete(DEFAULT_COACH_ID)
     return None
 
 
@@ -1139,25 +1352,27 @@ def bind_telegram_chat(bind_code, chat):
     normalized_code = str(bind_code or "").strip().upper().replace(" ", "")
     if not normalized_code:
         return None
-    athletes = telegram_athletes()
-    for index, athlete in enumerate(athletes):
-        if athlete_bind_code(athlete) != normalized_code:
-            continue
-        telegram_data = athlete.get("telegram") if isinstance(athlete.get("telegram"), dict) else {}
-        telegram_data.update(
-            {
-                "chatId": str(chat.get("id") or ""),
-                "username": str(chat.get("username") or ""),
-                "firstName": str(chat.get("first_name") or ""),
-                "lastName": str(chat.get("last_name") or ""),
-                "linkedAt": datetime.now().isoformat(timespec="seconds"),
-                "bindCode": "",
-            }
-        )
-        athlete["telegram"] = telegram_data
-        athletes[index] = athlete
-        save_telegram_athletes(athletes)
-        return athlete
+    for coach in load_coaches():
+        coach_id = coach.get("id") or DEFAULT_COACH_ID
+        athletes = telegram_athletes(coach_id)
+        for index, athlete in enumerate(athletes):
+            if athlete_bind_code(athlete) != normalized_code:
+                continue
+            telegram_data = athlete.get("telegram") if isinstance(athlete.get("telegram"), dict) else {}
+            telegram_data.update(
+                {
+                    "chatId": str(chat.get("id") or ""),
+                    "username": str(chat.get("username") or ""),
+                    "firstName": str(chat.get("first_name") or ""),
+                    "lastName": str(chat.get("last_name") or ""),
+                    "linkedAt": datetime.now().isoformat(timespec="seconds"),
+                    "bindCode": "",
+                }
+            )
+            athlete["telegram"] = telegram_data
+            athletes[index] = athlete
+            save_telegram_athletes(athletes, coach_id=coach_id)
+            return athlete
     return None
 
 

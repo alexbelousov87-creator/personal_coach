@@ -54,10 +54,16 @@ const state = {
     authenticated: false,
     role: "",
     athleteId: "",
+    coachId: "",
+    coachName: "",
+    coachRegistrationAllowed: false,
+    coachRegistrationRequiresCode: false,
   },
   planReview: null,
   profile: loadJson(PROFILE_KEY, defaultAthleteProfile()),
 };
+
+let authRegisterMode = false;
 
 function defaultAthleteProfile(name = "") {
   return {
@@ -437,20 +443,25 @@ function wireAuth() {
     event.preventDefault();
     const data = new FormData(authForm);
     const role = data.get("role") || "coach";
+    const coachLogin = data.get("coachLogin") || "";
     const password = data.get("password") || "";
     const accessCode = data.get("accessCode") || "";
+    const coachName = data.get("coachName") || "";
+    const registrationCode = data.get("registrationCode") || "";
     const status = document.querySelector("#authStatus");
-    if (status) status.textContent = "Проверяем доступ...";
+    if (status) status.textContent = authRegisterMode ? "Регистрируем тренера..." : "Проверяем доступ...";
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+      const endpoint = authRegisterMode ? "/api/auth/register-coach" : "/api/auth/login";
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role, password, accessCode }),
+        body: JSON.stringify({ role, coachLogin, password, accessCode, coachName, registrationCode }),
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "не удалось войти");
+      if (!response.ok) throw new Error(payload.error || (authRegisterMode ? "не удалось зарегистрировать тренера" : "не удалось войти"));
       saveJson(AUTH_ROLE_KEY, role);
+      authRegisterMode = false;
       applyAuthState(payload.enabled === undefined ? await loadAuthStatus() : payload);
       if (authGate) authGate.hidden = true;
       resetRuntimeStateForAuthLoad();
@@ -468,7 +479,12 @@ function wireAuth() {
   });
 
   authForm?.addEventListener("change", updateAuthFormMode);
+  authForm?.querySelector("[data-toggle-coach-register]")?.addEventListener("click", () => {
+    authRegisterMode = !authRegisterMode;
+    updateAuthFormMode();
+  });
 }
+
 
 async function loadAuthStatus() {
   try {
@@ -486,13 +502,18 @@ function applyAuthState(payload = {}) {
     authenticated: !payload.enabled || Boolean(payload.authenticated),
     role: payload.role || (payload.enabled ? "" : "coach"),
     athleteId: payload.athleteId || "",
+    coachId: payload.coachId || "",
+    coachName: payload.coachName || "",
     coachConfigured: payload.coachConfigured !== false,
+    coachRegistrationAllowed: Boolean(payload.coachRegistrationAllowed),
+    coachRegistrationRequiresCode: Boolean(payload.coachRegistrationRequiresCode),
   };
   if (state.auth.role) {
     state.currentRole = state.auth.role === "student" ? "student" : "coach";
     saveJson(CURRENT_ROLE_KEY, state.currentRole);
   }
 }
+
 
 function resetRuntimeStateForAuthLoad() {
   if (!state.auth.enabled || !state.auth.authenticated) return;
@@ -521,6 +542,7 @@ function showAuthGate() {
   }
 }
 
+
 function hideAuthGate() {
   document.body.classList.remove("auth-pending", "auth-required");
   if (authGate) authGate.hidden = true;
@@ -531,9 +553,30 @@ function updateAuthFormMode() {
   const role = authForm.elements.role?.value || loadJson(AUTH_ROLE_KEY, "coach");
   authForm.elements.role.value = role;
   const isStudent = role === "student";
-  authForm.querySelector("[data-coach-login]").hidden = isStudent;
-  authForm.querySelector("[data-student-login]").hidden = !isStudent;
+  if (isStudent) authRegisterMode = false;
+
+  authForm.querySelectorAll("[data-coach-login]").forEach((element) => {
+    element.hidden = isStudent;
+  });
+  authForm.querySelectorAll("[data-student-login]").forEach((element) => {
+    element.hidden = !isStudent;
+  });
+  authForm.querySelectorAll("[data-coach-register]").forEach((element) => {
+    element.hidden = isStudent || !authRegisterMode;
+  });
+  authForm.querySelectorAll("[data-registration-code]").forEach((element) => {
+    element.hidden = !state.auth.coachRegistrationRequiresCode;
+  });
+
+  const submit = authForm.querySelector("#authSubmit");
+  if (submit) submit.textContent = authRegisterMode ? "Зарегистрироваться" : "Войти";
+  const toggle = authForm.querySelector("[data-toggle-coach-register]");
+  if (toggle) {
+    toggle.hidden = isStudent || !state.auth.coachRegistrationAllowed;
+    toggle.textContent = authRegisterMode ? "Уже есть аккаунт" : "Зарегистрировать тренера";
+  }
 }
+
 
 async function logout() {
   try {
@@ -1189,11 +1232,13 @@ function renderUserContext() {
 function renderRolePanel() {
   if (!rolePanel) return;
   const athlete = activeAthlete();
+  const coachName = state.auth.coachName || state.coachProfile?.name || "Тренер";
   const athleteOptions = state.athletes
     .map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.activeAthleteId ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
     .join("");
 
   rolePanel.innerHTML = `
+    <div class="context-eyebrow">Контекст</div>
     <div class="role-field">
       <span>Роль</span>
       ${state.auth.enabled
@@ -1204,6 +1249,10 @@ function renderRolePanel() {
           </select>`}
     </div>
     <div class="role-field">
+      <span>Тренер</span>
+      <strong>${escapeHtml(coachName)}</strong>
+    </div>
+    <div class="role-field">
       <span>Спортсмен</span>
       ${isCoachRole()
         ? `<select data-athlete-select>${athleteOptions}</select>`
@@ -1212,6 +1261,7 @@ function renderRolePanel() {
     ${isCoachRole() ? `<button class="ghost-btn" data-add-student type="button">Добавить ученика</button>` : ""}
   `;
 }
+
 
 function renderStudentManager() {
   if (!studentManager) return;

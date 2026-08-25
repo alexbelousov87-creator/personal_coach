@@ -79,6 +79,15 @@ body.auth-required .app-shell {
   color: var(--muted);
 }
 
+.auth-register-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-toggle {
+  width: 100%;
+}
+
 button,
 input,
 select,
@@ -96,7 +105,7 @@ textarea {
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 20px;
   padding: 24px;
   background: #111a1f;
   color: #f8fbfc;
@@ -204,14 +213,23 @@ textarea {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.context-eyebrow {
+  color: #aebbc1;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .role-field {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .role-field span {
@@ -2198,6 +2216,10 @@ textarea {
   .role-panel {
     gap: 8px;
     padding: 10px;
+  }
+
+  .context-eyebrow {
+    font-size: 10px;
   }
 
   .role-field select,
