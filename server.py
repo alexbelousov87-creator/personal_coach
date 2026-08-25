@@ -494,7 +494,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
     def log_message(self, format, *args):
-        print("%s - %s" % (self.address_string(), format % args))
+        logging.info("%s - %s", self.address_string(), format % args)
 
 
 class AppError(Exception):
