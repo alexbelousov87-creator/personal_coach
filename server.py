@@ -7,6 +7,8 @@ import hmac
 from datetime import date, datetime, time as datetime_time, timedelta
 import gzip
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import mimetypes
 import os
 import re
@@ -27,6 +29,12 @@ DEFAULT_CONFIG = {
     },
     "storage": {
         "databasePath": "data/training_coach.sqlite3",
+    },
+    "logging": {
+        "file": "data/logs/training_coach.log",
+        "level": "INFO",
+        "maxBytes": 1048576,
+        "backupCount": 5,
     },
     "llm": {
         "provider": "openrouter",
@@ -98,6 +106,7 @@ def deep_merge(base, override):
 CONFIG = load_config()
 SERVER_CONFIG = CONFIG["server"]
 STORAGE_CONFIG = CONFIG.get("storage", DEFAULT_CONFIG["storage"])
+LOGGING_CONFIG = CONFIG.get("logging", DEFAULT_CONFIG["logging"])
 LLM_CONFIG = CONFIG.get("llm", CONFIG.get("openai", DEFAULT_CONFIG["llm"]))
 POLAR_CONFIG = CONFIG.get("polar", DEFAULT_CONFIG["polar"])
 NOTIFICATIONS_CONFIG = CONFIG.get("notifications", DEFAULT_CONFIG["notifications"])
@@ -105,6 +114,7 @@ AUTH_CONFIG = CONFIG.get("auth", DEFAULT_CONFIG["auth"])
 HOST = SERVER_CONFIG["host"]
 PORT = int(SERVER_CONFIG["port"])
 DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite3")).resolve()
+LOG_PATH = (ROOT / LOGGING_CONFIG.get("file", "data/logs/training_coach.log")).resolve()
 SESSIONS = {}
 SESSION_COOKIE = "training_coach_session"
 DEFAULT_ATHLETE_ID = "athlete-belousov-aleksey"
@@ -154,6 +164,28 @@ PLAN_SCHEMA = {
     },
 }
 
+def setup_logging():
+    level_name = str(LOGGING_CONFIG.get("level", "INFO") or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    max_bytes = int(LOGGING_CONFIG.get("maxBytes", 1048576) or 1048576)
+    backup_count = int(LOGGING_CONFIG.get("backupCount", 5) or 5)
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handlers = [
+        RotatingFileHandler(LOG_PATH, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"),
+        logging.StreamHandler(),
+    ]
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+
+def is_self_student_session(session):
+    if not auth_enabled():
+        return True
+    return session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID
 
 class TrainingCoachHandler(BaseHTTPRequestHandler):
     server_version = "TrainingCoach/0.1"
@@ -235,6 +267,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
             except Exception as exc:
+                logging.exception("Unexpected server error on %s", clean_path)
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
@@ -283,6 +316,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
             except Exception as exc:
+                logging.exception("Unexpected server error on %s", clean_path)
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
@@ -297,6 +331,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
             except Exception as exc:
+                logging.exception("Unexpected server error on %s", clean_path)
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
@@ -353,7 +388,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             session = self.require_session()
             if session is None:
                 return
-            if clean_path.lower().startswith("workouts/") and session.get("role") != "coach":
+            if clean_path.lower().startswith("workouts/") and not is_self_student_session(session):
                 self.send_error(403)
                 return
         if not target.exists() or not target.is_file():
@@ -406,8 +441,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             return None
         if not auth_enabled():
             return session
-        is_student_self = session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID
-        if not is_student_self:
+        if not is_self_student_session(session):
             self.send_json({"error": "forbidden"}, status=403)
             return None
         return session
@@ -418,8 +452,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             return None
         if not auth_enabled():
             return session
-        is_student_self = session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID
-        if not is_student_self:
+        if not is_self_student_session(session):
             self.send_json({"error": "forbidden"}, status=403)
             return None
         return session
@@ -914,6 +947,11 @@ def notification_status():
         "linkedAthletes": len([athlete for athlete in athletes if athlete_chat_id(athlete)]),
     }
 
+def mask_secret(value):
+    text = str(value or "")
+    if len(text) <= 4:
+        return "***"
+    return "***" + text[-4:]
 
 def clean_telegram_button_text(value):
     text = str(value or "").strip()
@@ -936,16 +974,18 @@ def telegram_notification_config():
         "today_button_text": clean_telegram_button_text(telegram.get("todayButtonText")),
         "poll_commands": bool(telegram.get("pollCommands", True)),
         "clear_menu": bool(telegram.get("clearMenu", True)),
+        "timeout_seconds": int(telegram.get("timeoutSeconds", 20) or 20),
     }
 
 
 def start_notification_worker():
     telegram = telegram_notification_config()
-    if not telegram["enabled"]:
+    if not telegram["bot_token"]:
         return
-    if telegram["bot_token"] and telegram["clear_menu"]:
-        configure_telegram_bot_ui(telegram)
-    if telegram["bot_token"] and telegram["poll_commands"]:
+    if telegram["clear_menu"]:
+        menu_thread = threading.Thread(target=configure_telegram_bot_ui, args=(telegram,), name="telegram-menu", daemon=True)
+        menu_thread.start()
+    if telegram["poll_commands"]:
         command_thread = threading.Thread(target=telegram_command_worker_loop, name="telegram-commands", daemon=True)
         command_thread.start()
 
@@ -955,7 +995,7 @@ def telegram_command_worker_loop():
         try:
             poll_telegram_updates()
         except Exception as exc:
-            print(f"Telegram command error: {exc}")
+            logging.warning("Telegram command error: %s", exc)
             time.sleep(10)
 
 
@@ -984,6 +1024,7 @@ def send_daily_assignment_notification(force=False, athlete_id=""):
         return {"ok": False, "skipped": "rest day"}
 
     text = format_daily_assignment_message(plan_day)
+    logging.info("Telegram send assignment: athlete=%s chat=%s force=%s", athlete.get("id") or "", mask_secret(str(chat_id)), force)
     send_telegram_message(
         telegram["bot_token"],
         chat_id,
@@ -1236,7 +1277,7 @@ def configure_telegram_bot_ui(telegram):
         if telegram.get("chat_id"):
             set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"])
     except Exception as exc:
-        print(f"Telegram menu cleanup error: {exc}")
+        logging.warning("Telegram menu cleanup error: %s", exc)
 
 
 def delete_telegram_commands(bot_token, scope=None, language_code=None):
@@ -1278,7 +1319,7 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
 
 def poll_telegram_updates():
     telegram = telegram_notification_config()
-    if not telegram["enabled"] or not telegram["poll_commands"] or not telegram["bot_token"]:
+    if not telegram["poll_commands"] or not telegram["bot_token"]:
         time.sleep(10)
         return
 
@@ -1480,6 +1521,7 @@ def sync_polar_workouts():
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
+    logging.info("Polar sync started")
     exercises = http_json("https://www.polaraccesslink.com/v3/exercises?zones=true", headers=headers)
     if not isinstance(exercises, list):
         exercises = []
@@ -2032,11 +2074,13 @@ def load_api_key():
 
 
 def main():
+    setup_logging()
     init_db()
     start_notification_worker()
-    print(f"Training Coach: http://{HOST}:{PORT}")
-    print(f"Config: {CONF_FILE}")
-    print(f"Database: {DB_PATH}")
+    logging.info("Training Coach: http://%s:%s", HOST, PORT)
+    logging.info("Config: %s", CONF_FILE)
+    logging.info("Database: %s", DB_PATH)
+    logging.info("Log: %s", LOG_PATH)
     ThreadingHTTPServer((HOST, PORT), TrainingCoachHandler).serve_forever()
 
 

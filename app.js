@@ -348,20 +348,33 @@ async function init() {
   if (state.auth.role) state.currentRole = state.auth.role;
   if (!state.auth.enabled) saveBackendState();
   dedupeStoredWorkouts();
-  setAiStatus("Идет проверка новых тренировок...", "");
-  await syncWorkoutFolderChanges({ render: false });
-  await refreshPolarStatus();
-  await syncPolarWorkouts({ automatic: true, render: false });
-  setAiStatus("Идет уточнение данных тренировок...", "");
-  await enrichKnownCsvWorkouts();
   hydrateProfile();
   renderAll();
   restoreCurrentPlanOrGenerate();
   hideAuthGate();
+
+  runStartupBackgroundSync();
   setInterval(() => syncWorkoutFolderChanges(), WORKOUT_SYNC_INTERVAL_MS);
   setInterval(() => syncPolarWorkouts({ automatic: true }), POLAR_SYNC_INTERVAL_MS);
 }
 
+async function runStartupBackgroundSync() {
+  try {
+    setAiStatus("Идет фоновая проверка новых тренировок...", "");
+    const folderAccepted = await syncWorkoutFolderChanges({ render: false });
+    await refreshPolarStatus();
+    const polarAccepted = await syncPolarWorkouts({ automatic: true, render: false });
+    setAiStatus("Идет уточнение данных тренировок...", "");
+    await enrichKnownCsvWorkouts();
+    hydrateProfile();
+    renderAll();
+    restoreCurrentPlanOrGenerate();
+    const added = folderAccepted + polarAccepted;
+    setAiStatus(added ? `Данные обновлены: добавлено ${added} тренировок.` : "", added ? "ok" : "");
+  } catch (error) {
+    setAiStatus(`Фоновая загрузка тренировок: ${error.message}`, "error");
+  }
+}
 function dedupeStoredWorkouts() {
   const before = state.workouts.length;
   state.workouts = dedupeWorkouts(state.workouts).sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -714,6 +727,20 @@ function showView(viewId) {
   hideAdjustChoice();
   views.forEach((view) => view.classList.toggle("active", view.id === viewId));
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.view === viewId));
+  if (viewId === "import") {
+    refreshImportViewStatus();
+  }
+}
+
+async function refreshImportViewStatus() {
+  renderImportDiagnostics();
+  if (!canUsePolar()) {
+    updatePolarUi({ configured: false, connected: false, unavailable: false });
+    return;
+  }
+  if (polarStatus) polarStatus.textContent = "Проверяем подключение Polar Flow...";
+  if (polarHint) polarHint.textContent = "Статус обновляется отдельно от фоновой синхронизации.";
+  await refreshPolarStatus();
 }
 
 async function handleFiles(files) {
@@ -5857,7 +5884,7 @@ async function loadBackendState() {
 }
 
 async function syncWorkoutFolderChanges(options = {}) {
-  if (!canUsePolar()) return 0;
+  if (!canImportWorkouts()) return 0;
   const accepted = await autoImportKnownWorkoutFiles();
   if (!accepted) return 0;
 
@@ -5952,6 +5979,7 @@ async function syncPolarWorkouts(options = {}) {
 
   if (!options.automatic && polarStatus) {
     polarStatus.textContent = "Синхронизация Polar Flow...";
+    if (polarHint) polarHint.textContent = "Получаем новые тренировки и обновляем локальную БД...";
   }
   if (syncPolarButton) syncPolarButton.disabled = true;
 
@@ -5964,13 +5992,14 @@ async function syncPolarWorkouts(options = {}) {
     const folderAccepted = await autoImportKnownWorkoutFiles();
     await enrichKnownCsvWorkouts();
 
-    if (summary.parsed || folderAccepted || payload.savedTcx?.length) {
+    const hasSyncChanges = summary.accepted || folderAccepted || payload.savedTcx?.length;
+    if (hasSyncChanges) {
       persistWorkouts();
-      if (options.render !== false) {
-        autoAdjustActiveLocalPlanIfNeeded();
-        renderAll();
-        restoreCurrentPlanOrGenerate();
-      }
+    }
+    if (options.render !== false) {
+      autoAdjustActiveLocalPlanIfNeeded();
+      renderAll();
+      restoreCurrentPlanOrGenerate();
     }
 
     if (!options.automatic) {
