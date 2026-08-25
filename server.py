@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib import request, error
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 import base64
+import hmac
 from datetime import date, datetime, time as datetime_time, timedelta
 import gzip
 import json
@@ -68,6 +69,12 @@ DEFAULT_CONFIG = {
             "clearMenu": True,
         },
     },
+    "auth": {
+        "enabled": False,
+        "coachPassword": "",
+        "coachPasswordEnv": "TRAINING_COACH_PASSWORD",
+        "sessionTtlHours": 24,
+    },
 }
 
 
@@ -94,9 +101,13 @@ STORAGE_CONFIG = CONFIG.get("storage", DEFAULT_CONFIG["storage"])
 LLM_CONFIG = CONFIG.get("llm", CONFIG.get("openai", DEFAULT_CONFIG["llm"]))
 POLAR_CONFIG = CONFIG.get("polar", DEFAULT_CONFIG["polar"])
 NOTIFICATIONS_CONFIG = CONFIG.get("notifications", DEFAULT_CONFIG["notifications"])
+AUTH_CONFIG = CONFIG.get("auth", DEFAULT_CONFIG["auth"])
 HOST = SERVER_CONFIG["host"]
 PORT = int(SERVER_CONFIG["port"])
 DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite3")).resolve()
+SESSIONS = {}
+SESSION_COOKIE = "training_coach_session"
+DEFAULT_ATHLETE_ID = "athlete-belousov-aleksey"
 
 
 PLAN_SCHEMA = {
@@ -167,19 +178,37 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if clean_path == "/api/auth/status":
+            self.send_json(auth_status_response(self))
+            return
         if clean_path == "/api/state":
-            self.send_json(load_state())
+            session = self.require_session()
+            if session is None:
+                return
+            self.send_json(state_for_session(session))
             return
         if clean_path == "/api/workout-files":
+            session = self.require_workout_file_import_session()
+            if session is None:
+                return
             self.send_json({"files": list_workout_files()})
             return
         if clean_path == "/api/polar/status":
+            session = self.require_polar_session()
+            if session is None:
+                return
             self.send_json(polar_status())
             return
         if clean_path == "/api/notifications/status":
+            session = self.require_session()
+            if session is None:
+                return
             self.send_json(notification_status())
             return
         if clean_path == "/api/polar/connect":
+            session = self.require_polar_session()
+            if session is None:
+                return
             try:
                 self.redirect(polar_authorization_url())
             except AppError as exc:
@@ -198,10 +227,32 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         clean_path = self.path.split("?", 1)[0]
-        if clean_path == "/api/state":
+        if clean_path == "/api/auth/login":
             try:
                 payload = self.read_json()
-                save_state(payload)
+                auth_payload, cookie = login_response(payload)
+                self.send_json(auth_payload, headers={"Set-Cookie": cookie})
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/auth/logout":
+            cookie = f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+            session_id = self.session_id_from_cookie()
+            if session_id:
+                SESSIONS.pop(session_id, None)
+            self.send_json({"ok": True}, headers={"Set-Cookie": cookie})
+            return
+
+        if clean_path == "/api/state":
+            session = self.require_session()
+            if session is None:
+                return
+            try:
+                payload = self.read_json()
+                save_state_for_session(payload, session)
                 self.send_json({"ok": True})
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
@@ -210,6 +261,9 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             return
 
         if clean_path == "/api/polar/sync":
+            session = self.require_polar_session()
+            if session is None:
+                return
             try:
                 result = sync_polar_workouts()
                 self.send_json(result)
@@ -220,6 +274,9 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             return
 
         if clean_path == "/api/notifications/test":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
             try:
                 result = send_daily_assignment_notification(force=True)
                 self.send_json(result)
@@ -229,7 +286,24 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
+        if clean_path == "/api/notifications/send":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
+            try:
+                payload = self.read_json()
+                result = send_daily_assignment_notification(force=True, athlete_id=str(payload.get("athleteId") or ""))
+                self.send_json(result)
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
         if clean_path == "/api/plan/review":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
             try:
                 payload = self.read_json()
                 review = create_ai_plan_review(payload)
@@ -244,6 +318,9 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "unknown endpoint"}, status=404)
             return
 
+        session = self.require_session(roles={"coach"})
+        if session is None:
+            return
         try:
             payload = self.read_json()
             plan = create_ai_plan(payload)
@@ -260,6 +337,25 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         if ROOT not in target.parents and target != ROOT:
             self.send_error(403)
             return
+        private_roots = {ROOT / "data", ROOT / ".git", ROOT / "__pycache__"}
+        if target.name == CONF_FILE.name or any(root in target.parents or target == root for root in private_roots):
+            self.send_error(403)
+            return
+        public_files = {
+            "index.html",
+            "app.js",
+            "styles.css",
+            "AvaBotTrainingPlan.png",
+            "favicon.ico",
+            "favicon.png",
+        }
+        if auth_enabled() and clean_path not in public_files:
+            session = self.require_session()
+            if session is None:
+                return
+            if clean_path.lower().startswith("workouts/") and session.get("role") != "coach":
+                self.send_error(403)
+                return
         if not target.exists() or not target.is_file():
             self.send_error(404)
             return
@@ -284,12 +380,59 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8")
         return json.loads(raw)
 
-    def send_json(self, payload, status=200):
+    def session_id_from_cookie(self):
+        cookie = self.headers.get("Cookie", "")
+        for part in cookie.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == SESSION_COOKIE:
+                return value
+        return ""
+
+    def require_session(self, roles=None):
+        session = current_session(self)
+        if not auth_enabled():
+            return session
+        if not session:
+            self.send_json({"error": "auth required"}, status=401)
+            return None
+        if roles and session.get("role") not in roles:
+            self.send_json({"error": "forbidden"}, status=403)
+            return None
+        return session
+
+    def require_polar_session(self):
+        session = self.require_session()
+        if session is None:
+            return None
+        if not auth_enabled():
+            return session
+        is_student_self = session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID
+        if not is_student_self:
+            self.send_json({"error": "forbidden"}, status=403)
+            return None
+        return session
+
+    def require_workout_file_import_session(self):
+        session = self.require_session()
+        if session is None:
+            return None
+        if not auth_enabled():
+            return session
+        is_student_self = session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID
+        if not is_student_self:
+            self.send_json({"error": "forbidden"}, status=403)
+            return None
+        return session
+
+    def send_json(self, payload, status=200, headers=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         try:
             self.send_response(status)
             self.add_cors_headers()
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -349,6 +492,10 @@ def load_state():
         "plansByWeek": load_state_value("plansByWeek", {}),
         "activePlanSource": load_state_value("activePlanSource", ""),
         "selectedWeekStart": load_state_value("selectedWeekStart", ""),
+        "coachProfile": load_state_value("coachProfile", {}),
+        "athletes": load_state_value("athletes", []),
+        "activeAthleteId": load_state_value("activeAthleteId", ""),
+        "currentRole": load_state_value("currentRole", ""),
     }
 
 
@@ -385,6 +532,74 @@ def save_state(payload):
         if selected_week_start is not None and not isinstance(selected_week_start, str):
             raise AppError("selectedWeekStart must be a string", 400)
         save_state_value("selectedWeekStart", selected_week_start or "")
+    if "coachProfile" in payload:
+        coach_profile = payload["coachProfile"]
+        if coach_profile is not None and not isinstance(coach_profile, dict):
+            raise AppError("coachProfile must be an object", 400)
+        save_state_value("coachProfile", coach_profile or {})
+    if "athletes" in payload:
+        athletes = payload["athletes"]
+        if athletes is not None and not isinstance(athletes, list):
+            raise AppError("athletes must be an array", 400)
+        save_state_value("athletes", sanitize_athletes_for_storage(athletes or []))
+    if "activeAthleteId" in payload:
+        active_athlete_id = payload["activeAthleteId"]
+        if active_athlete_id is not None and not isinstance(active_athlete_id, str):
+            raise AppError("activeAthleteId must be a string", 400)
+        save_state_value("activeAthleteId", active_athlete_id or "")
+    if "currentRole" in payload:
+        current_role = payload["currentRole"]
+        if current_role is not None and not isinstance(current_role, str):
+            raise AppError("currentRole must be a string", 400)
+        save_state_value("currentRole", current_role or "")
+
+
+def save_state_from_coach(payload):
+    if not isinstance(payload, dict):
+        raise AppError("state payload must be an object", 400)
+
+    current = load_state()
+    current_athletes = current.get("athletes") if isinstance(current.get("athletes"), list) else []
+    workouts_by_id = {
+        str(athlete.get("id") or ""): athlete.get("workouts") or []
+        for athlete in current_athletes
+        if isinstance(athlete, dict)
+    }
+
+    safe_payload = dict(payload)
+    safe_payload.pop("workouts", None)
+
+    athletes = payload.get("athletes")
+    if isinstance(athletes, list):
+        current_by_id = {
+            str(athlete.get("id") or ""): athlete
+            for athlete in current_athletes
+            if isinstance(athlete, dict)
+        }
+        submitted_by_id = {
+            str(athlete.get("id") or ""): athlete
+            for athlete in athletes
+            if isinstance(athlete, dict) and str(athlete.get("id") or "")
+        }
+        ordered_ids = []
+        for athlete in current_athletes:
+            if isinstance(athlete, dict) and str(athlete.get("id") or ""):
+                ordered_ids.append(str(athlete.get("id") or ""))
+        for athlete in athletes:
+            if isinstance(athlete, dict) and str(athlete.get("id") or ""):
+                ordered_ids.append(str(athlete.get("id") or ""))
+
+        safe_athletes = []
+        for athlete_id in unique_items(ordered_ids):
+            athlete = submitted_by_id.get(athlete_id) or current_by_id.get(athlete_id)
+            if not isinstance(athlete, dict):
+                continue
+            safe_athlete = dict(athlete)
+            safe_athlete["workouts"] = workouts_by_id.get(athlete_id, [])
+            safe_athletes.append(safe_athlete)
+        safe_payload["athletes"] = safe_athletes
+
+    save_state(safe_payload)
 
 
 def load_state_value(key, fallback):
@@ -397,6 +612,88 @@ def load_state_value(key, fallback):
         return json.loads(row[0])
     except json.JSONDecodeError:
         return fallback
+
+
+def sanitize_athletes_for_storage(athletes):
+    if not isinstance(athletes, list):
+        return []
+    normalized = [athlete for athlete in athletes if isinstance(athlete, dict)]
+    self_athlete = next((athlete for athlete in normalized if athlete.get("id") == DEFAULT_ATHLETE_ID), None)
+    self_fingerprint = workouts_fingerprint(self_athlete.get("workouts") if isinstance(self_athlete, dict) else [])
+    for athlete in normalized:
+        is_self = athlete.get("id") == DEFAULT_ATHLETE_ID
+        athlete["isSelf"] = is_self
+        if not is_self and self_fingerprint and workouts_fingerprint(athlete.get("workouts")) == self_fingerprint:
+            athlete["workouts"] = []
+    return normalized
+
+
+def workouts_fingerprint(workouts):
+    if not isinstance(workouts, list) or not workouts:
+        return ""
+    parts = []
+    for workout in workouts:
+        if not isinstance(workout, dict):
+            continue
+        parts.append(
+            "|".join(
+                str(workout.get(key) or "")
+                for key in ["date", "source", "durationMin", "distanceKm", "load"]
+            )
+        )
+    return json.dumps(sorted(parts), ensure_ascii=False)
+
+
+def workout_identity(workout):
+    if not isinstance(workout, dict):
+        return ""
+    return "|".join(
+        str(workout.get(key) or "")
+        for key in ["date", "source", "durationMin", "distanceKm", "load"]
+    )
+
+
+def merge_student_workout_feedback(existing_workouts, submitted_workouts):
+    if not isinstance(existing_workouts, list):
+        existing_workouts = []
+    if not isinstance(submitted_workouts, list):
+        return existing_workouts
+
+    submitted_by_key = {
+        workout_identity(workout): workout
+        for workout in submitted_workouts
+        if isinstance(workout, dict) and workout_identity(workout)
+    }
+    merged = []
+    for workout in existing_workouts:
+        if not isinstance(workout, dict):
+            continue
+        updated = dict(workout)
+        submitted = submitted_by_key.get(workout_identity(workout))
+        feedback = submitted.get("feedback") if isinstance(submitted, dict) else None
+        if isinstance(feedback, dict):
+            updated["feedback"] = feedback
+        merged.append(updated)
+    return merged
+
+
+def filter_student_workouts_for_storage(athlete_id, workouts, athletes):
+    if not isinstance(workouts, list):
+        return []
+    if athlete_id == DEFAULT_ATHLETE_ID:
+        return workouts
+
+    self_athlete = next((item for item in athletes if isinstance(item, dict) and item.get("id") == DEFAULT_ATHLETE_ID), None)
+    self_workouts = self_athlete.get("workouts") if isinstance(self_athlete, dict) else []
+    self_identities = {
+        workout_identity(workout)
+        for workout in self_workouts
+        if workout_identity(workout)
+    }
+    return [
+        workout for workout in workouts
+        if not workout_identity(workout) or workout_identity(workout) not in self_identities
+    ]
 
 
 def save_state_value(key, value):
@@ -415,19 +712,206 @@ def save_state_value(key, value):
         )
 
 
+def auth_enabled():
+    return bool(AUTH_CONFIG.get("enabled", False))
+
+
+def coach_password():
+    value = str(AUTH_CONFIG.get("coachPassword") or "").strip()
+    if value:
+        return value
+    env_name = str(AUTH_CONFIG.get("coachPasswordEnv") or "TRAINING_COACH_PASSWORD").strip()
+    return os.environ.get(env_name, "").strip() if env_name else ""
+
+
+def current_session(handler):
+    if not auth_enabled():
+        return {"role": "coach", "athlete_id": load_state_value("activeAthleteId", "")}
+    session_id = handler.session_id_from_cookie()
+    if not session_id:
+        return None
+    session = SESSIONS.get(session_id)
+    if not session:
+        return None
+    if session.get("expires_at", 0) < time.time():
+        SESSIONS.pop(session_id, None)
+        return None
+    return session
+
+
+def create_session(role, athlete_id=""):
+    session_id = secrets.token_urlsafe(32)
+    ttl_hours = int(AUTH_CONFIG.get("sessionTtlHours", 24) or 24)
+    SESSIONS[session_id] = {
+        "role": role,
+        "athlete_id": athlete_id or "",
+        "created_at": int(time.time()),
+        "expires_at": int(time.time() + ttl_hours * 3600),
+    }
+    cookie = f"{SESSION_COOKIE}={session_id}; Path=/; Max-Age={ttl_hours * 3600}; HttpOnly; SameSite=Lax"
+    return SESSIONS[session_id], cookie
+
+
+def auth_status_response(handler):
+    enabled = auth_enabled()
+    session = current_session(handler)
+    return {
+        "enabled": enabled,
+        "authenticated": bool(session),
+        "role": session.get("role", "") if session else "",
+        "athleteId": session.get("athlete_id", "") if session else "",
+        "coachConfigured": bool(coach_password()) if enabled else True,
+    }
+
+
+def auth_login_payload(session, enabled=True):
+    return {
+        "ok": True,
+        "enabled": bool(enabled),
+        "authenticated": True,
+        "role": session.get("role", ""),
+        "athleteId": session.get("athlete_id", ""),
+        "coachConfigured": bool(coach_password()) if enabled else True,
+    }
+
+
+def login_response(payload):
+    if not auth_enabled():
+        session, cookie = create_session("coach", load_state_value("activeAthleteId", ""))
+        return auth_login_payload(session, enabled=False), cookie
+    if not isinstance(payload, dict):
+        raise AppError("login payload must be an object", 400)
+
+    role = str(payload.get("role") or "").strip().lower()
+    if role == "coach":
+        expected = coach_password()
+        if not expected:
+            raise AppError("Coach password is not configured. Add auth.coachPassword to conf.json.", 500)
+        provided = str(payload.get("password") or "")
+        if not hmac.compare_digest(provided, expected):
+            raise AppError("Неверный пароль тренера.", 401)
+        session, cookie = create_session("coach", load_state_value("activeAthleteId", ""))
+        return auth_login_payload(session, enabled=True), cookie
+
+    if role == "student":
+        code = normalize_access_code(payload.get("accessCode") or payload.get("password"))
+        athlete = athlete_by_access_code(code)
+        if not athlete:
+            raise AppError("Неверный код ученика.", 401)
+        session, cookie = create_session("student", str(athlete.get("id") or ""))
+        return auth_login_payload(session, enabled=True), cookie
+
+    raise AppError("Unknown role.", 400)
+
+
+def normalize_access_code(value):
+    return str(value or "").strip().upper().replace(" ", "")
+
+
+def athlete_auth_data(athlete):
+    return athlete.get("auth") if isinstance(athlete, dict) and isinstance(athlete.get("auth"), dict) else {}
+
+
+def athlete_access_code(athlete):
+    return normalize_access_code(athlete_auth_data(athlete).get("accessCode"))
+
+
+def athlete_by_access_code(code):
+    if not code:
+        return None
+    return next((athlete for athlete in telegram_athletes() if athlete_access_code(athlete) == code), None)
+
+
+def state_for_session(session):
+    state = load_state()
+    if not auth_enabled() or session.get("role") == "coach":
+        state["currentRole"] = "coach"
+        return state
+
+    athlete_id = session.get("athlete_id", "")
+    athletes = state.get("athletes") if isinstance(state.get("athletes"), list) else []
+    athlete = next((item for item in athletes if isinstance(item, dict) and str(item.get("id") or "") == athlete_id), None)
+    if not athlete:
+        return {
+            "workouts": [],
+            "profile": None,
+            "plans": {},
+            "plansByWeek": {},
+            "activePlanSource": "",
+            "selectedWeekStart": "",
+            "coachProfile": {},
+            "athletes": [],
+            "activeAthleteId": "",
+            "currentRole": "student",
+        }
+
+    return {
+        "workouts": athlete.get("workouts") or [],
+        "profile": athlete.get("profile") or {},
+        "plans": athlete.get("plans") or {},
+        "plansByWeek": athlete.get("plansByWeek") or {},
+        "activePlanSource": athlete.get("activePlanSource") or "json",
+        "selectedWeekStart": athlete.get("selectedWeekStart") or "",
+        "coachProfile": state.get("coachProfile") or {},
+        "athletes": [athlete],
+        "activeAthleteId": athlete_id,
+        "currentRole": "student",
+    }
+
+
+def save_state_for_session(payload, session):
+    if not auth_enabled():
+        save_state(payload)
+        return
+    if session.get("role") == "coach":
+        save_state_from_coach(payload)
+        return
+
+    if not isinstance(payload, dict):
+        raise AppError("state payload must be an object", 400)
+    athlete_id = session.get("athlete_id", "")
+    athletes = telegram_athletes()
+    index = next((idx for idx, item in enumerate(athletes) if str(item.get("id") or "") == athlete_id), -1)
+    if index < 0:
+        raise AppError("Athlete not found.", 404)
+
+    athlete = athletes[index]
+    submitted_athlete = {}
+    submitted_athletes = payload.get("athletes")
+    if isinstance(submitted_athletes, list):
+        submitted_athlete = next((item for item in submitted_athletes if isinstance(item, dict) and str(item.get("id") or "") == athlete_id), submitted_athletes[0] if submitted_athletes else {})
+
+    profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else submitted_athlete.get("profile")
+    workouts = payload.get("workouts") if isinstance(payload.get("workouts"), list) else submitted_athlete.get("workouts")
+    selected_week = payload.get("selectedWeekStart") or submitted_athlete.get("selectedWeekStart")
+
+    if isinstance(profile, dict):
+        athlete["profile"] = profile
+        athlete["name"] = profile.get("name") or athlete.get("name") or "Спортсмен"
+    if isinstance(workouts, list):
+        athlete["workouts"] = filter_student_workouts_for_storage(athlete_id, workouts, athletes)
+    if isinstance(selected_week, str):
+        athlete["selectedWeekStart"] = selected_week
+    athlete["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+    athletes[index] = athlete
+    save_telegram_athletes(athletes)
+
+
 def notification_status():
     telegram = telegram_notification_config()
+    athletes = telegram_athletes()
     plan_day = get_today_plan_day()
     return {
         "provider": "telegram",
         "enabled": telegram["enabled"],
-        "configured": bool(telegram["bot_token"] and telegram["chat_id"]),
+        "configured": bool(telegram["bot_token"]),
         "dailyTime": telegram["daily_time"],
         "automaticDaily": False,
         "lastSent": load_state_value("dailyNotificationLastSent", ""),
         "lastSentAt": load_state_value("dailyNotificationLastSentAt", ""),
         "hasTodayAssignment": bool(plan_day),
         "todayButton": telegram["today_button_text"] if telegram["show_today_button"] else "",
+        "linkedAthletes": len([athlete for athlete in athletes if athlete_chat_id(athlete)]),
     }
 
 
@@ -461,7 +945,7 @@ def start_notification_worker():
         return
     if telegram["bot_token"] and telegram["clear_menu"]:
         configure_telegram_bot_ui(telegram)
-    if telegram["bot_token"] and telegram["chat_id"] and telegram["poll_commands"]:
+    if telegram["bot_token"] and telegram["poll_commands"]:
         command_thread = threading.Thread(target=telegram_command_worker_loop, name="telegram-commands", daemon=True)
         command_thread.start()
 
@@ -475,19 +959,25 @@ def telegram_command_worker_loop():
             time.sleep(10)
 
 
-def send_daily_assignment_notification(force=False):
+def send_daily_assignment_notification(force=False, athlete_id=""):
     telegram = telegram_notification_config()
     if not force and not telegram["enabled"]:
         return {"ok": False, "skipped": "notifications disabled"}
-    if not telegram["bot_token"] or not telegram["chat_id"]:
-        raise AppError("Telegram notifications are not configured. Add notifications.telegram.botToken and chatId to conf.json.", 500)
+    if not telegram["bot_token"]:
+        raise AppError("Telegram notifications are not configured. Add notifications.telegram.botToken to conf.json.", 500)
+
+    athlete = telegram_athlete_by_id(athlete_id) if athlete_id else default_telegram_athlete()
+    chat_id = athlete_chat_id(athlete) or telegram["chat_id"]
+    if not chat_id:
+        raise AppError("Telegram chat is not linked. Generate a student code and ask the student to send it to the bot.", 400)
     if not force and not notification_time_reached(telegram["daily_time"]):
         return {"ok": False, "skipped": "not time yet"}
 
-    if not force and daily_assignment_sent_today():
+    sent_key = athlete.get("id") or str(chat_id)
+    if not force and daily_assignment_sent_today(sent_key):
         return {"ok": False, "skipped": "already sent today"}
 
-    plan_day = get_today_plan_day()
+    plan_day = get_today_plan_day(athlete)
     if not plan_day:
         raise AppError("No saved plan assignment for today.", 404)
     if not telegram["send_on_rest_days"] and is_rest_assignment(plan_day):
@@ -496,22 +986,33 @@ def send_daily_assignment_notification(force=False):
     text = format_daily_assignment_message(plan_day)
     send_telegram_message(
         telegram["bot_token"],
-        telegram["chat_id"],
+        chat_id,
         text,
         reply_markup=telegram_reply_markup(telegram),
     )
     if not force:
-        mark_daily_assignment_sent()
-    return {"ok": True, "message": text}
+        mark_daily_assignment_sent(sent_key)
+    return {"ok": True, "message": text, "athleteId": athlete.get("id") or "", "chatId": str(chat_id)}
 
 
-def daily_assignment_sent_today():
-    return load_state_value("dailyNotificationLastSent", "") == date.today().isoformat()
+def daily_assignment_sent_today(key="default"):
+    today = date.today().isoformat()
+    sent_by_athlete = load_state_value("dailyNotificationSentByAthlete", {})
+    if isinstance(sent_by_athlete, dict) and sent_by_athlete.get(str(key)) == today:
+        return True
+    return key == "default" and load_state_value("dailyNotificationLastSent", "") == today
 
 
-def mark_daily_assignment_sent():
-    save_state_value("dailyNotificationLastSent", date.today().isoformat())
-    save_state_value("dailyNotificationLastSentAt", datetime.now().isoformat(timespec="seconds"))
+def mark_daily_assignment_sent(key="default"):
+    now = datetime.now().isoformat(timespec="seconds")
+    today = date.today().isoformat()
+    sent_by_athlete = load_state_value("dailyNotificationSentByAthlete", {})
+    if not isinstance(sent_by_athlete, dict):
+        sent_by_athlete = {}
+    sent_by_athlete[str(key)] = today
+    save_state_value("dailyNotificationSentByAthlete", sent_by_athlete)
+    save_state_value("dailyNotificationLastSent", today)
+    save_state_value("dailyNotificationLastSentAt", now)
 
 
 def notification_time_reached(value):
@@ -524,16 +1025,116 @@ def notification_time_reached(value):
     return now >= target
 
 
-def get_today_plan_day():
+def telegram_athletes():
+    athletes = load_state_value("athletes", [])
+    if isinstance(athletes, list) and athletes:
+        return [athlete for athlete in athletes if isinstance(athlete, dict)]
+    profile = load_state_value("profile", {}) or {}
+    return [
+        {
+            "id": "athlete-belousov-aleksey",
+            "name": profile.get("name") or "Белоусов Алексей",
+            "isSelf": True,
+            "profile": profile,
+            "plansByWeek": load_state_value("plansByWeek", {}),
+            "activePlanSource": load_state_value("activePlanSource", ""),
+        }
+    ]
+
+
+def save_telegram_athletes(athletes):
+    athletes = sanitize_athletes_for_storage(athletes)
+    save_state_value("athletes", athletes)
+    active_id = load_state_value("activeAthleteId", "")
+    active = next((athlete for athlete in athletes if athlete.get("id") == active_id), None)
+    if active:
+        save_state_value("profile", active.get("profile") or {})
+        save_state_value("plansByWeek", active.get("plansByWeek") or {})
+        save_state_value("activePlanSource", active.get("activePlanSource") or "")
+
+
+def athlete_chat_id(athlete):
+    telegram = athlete.get("telegram") if isinstance(athlete, dict) and isinstance(athlete.get("telegram"), dict) else {}
+    return str(telegram.get("chatId") or "").strip()
+
+
+def athlete_bind_code(athlete):
+    telegram = athlete.get("telegram") if isinstance(athlete, dict) and isinstance(athlete.get("telegram"), dict) else {}
+    return str(telegram.get("bindCode") or "").strip().upper()
+
+
+def default_telegram_athlete():
+    athletes = telegram_athletes()
+    if not athletes:
+        return {}
+    return next((athlete for athlete in athletes if athlete.get("isSelf")), athletes[0])
+
+
+def telegram_athlete_by_id(athlete_id):
+    athlete = next((item for item in telegram_athletes() if str(item.get("id") or "") == str(athlete_id or "")), None)
+    if not athlete:
+        raise AppError("Athlete not found.", 404)
+    return athlete
+
+
+def telegram_athlete_by_chat(chat_id, telegram):
+    chat_id = str(chat_id or "").strip()
+    if not chat_id:
+        return None
+    athlete = next((item for item in telegram_athletes() if athlete_chat_id(item) == chat_id), None)
+    if athlete:
+        return athlete
+    if telegram.get("chat_id") and chat_id == str(telegram["chat_id"]):
+        return default_telegram_athlete()
+    return None
+
+
+def bind_telegram_chat(bind_code, chat):
+    normalized_code = str(bind_code or "").strip().upper().replace(" ", "")
+    if not normalized_code:
+        return None
+    athletes = telegram_athletes()
+    for index, athlete in enumerate(athletes):
+        if athlete_bind_code(athlete) != normalized_code:
+            continue
+        telegram_data = athlete.get("telegram") if isinstance(athlete.get("telegram"), dict) else {}
+        telegram_data.update(
+            {
+                "chatId": str(chat.get("id") or ""),
+                "username": str(chat.get("username") or ""),
+                "firstName": str(chat.get("first_name") or ""),
+                "lastName": str(chat.get("last_name") or ""),
+                "linkedAt": datetime.now().isoformat(timespec="seconds"),
+                "bindCode": "",
+            }
+        )
+        athlete["telegram"] = telegram_data
+        athletes[index] = athlete
+        save_telegram_athletes(athletes)
+        return athlete
+    return None
+
+
+def bind_code_from_text(text):
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    match = re.search(r"(?:/start|/bind)?\s*([A-Za-zА-Яа-я0-9_-]{5,16})", normalized, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def get_today_plan_day(athlete=None):
     today = date.today()
     week_key = monday_of_week(today).isoformat()
-    plans_by_week = load_state_value("plansByWeek", {})
+    plans_by_week = athlete.get("plansByWeek") if isinstance(athlete, dict) else None
+    if not isinstance(plans_by_week, dict):
+        plans_by_week = load_state_value("plansByWeek", {})
     bucket = plans_by_week.get(week_key) if isinstance(plans_by_week, dict) else None
     if not isinstance(bucket, dict):
         return None
 
     sources = bucket.get("sources") if isinstance(bucket.get("sources"), dict) else {}
-    active_source = bucket.get("activePlanSource") or load_state_value("activePlanSource", "")
+    active_source = bucket.get("activePlanSource") or (athlete.get("activePlanSource") if isinstance(athlete, dict) else "") or load_state_value("activePlanSource", "")
     ordered_sources = unique_items([active_source, "json", "ai", "local", *sources.keys()])
     for source in ordered_sources:
         plan = sources.get(source)
@@ -626,12 +1227,14 @@ def configure_telegram_bot_ui(telegram):
             {"type": "all_private_chats"},
             {"type": "all_group_chats"},
             {"type": "all_chat_administrators"},
-            {"type": "chat", "chat_id": telegram["chat_id"]},
         ]
+        if telegram.get("chat_id"):
+            scopes.append({"type": "chat", "chat_id": telegram["chat_id"]})
         for scope in scopes:
             for language_code in [None, "ru", "en"]:
                 delete_telegram_commands(telegram["bot_token"], scope, language_code)
-        set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"])
+        if telegram.get("chat_id"):
+            set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"])
     except Exception as exc:
         print(f"Telegram menu cleanup error: {exc}")
 
@@ -675,7 +1278,7 @@ def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
 
 def poll_telegram_updates():
     telegram = telegram_notification_config()
-    if not telegram["enabled"] or not telegram["poll_commands"] or not telegram["bot_token"] or not telegram["chat_id"]:
+    if not telegram["enabled"] or not telegram["poll_commands"] or not telegram["bot_token"]:
         time.sleep(10)
         return
 
@@ -710,24 +1313,43 @@ def handle_telegram_update(update, telegram):
     text = str(message.get("text") or "").strip()
     chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
     chat_id = str(chat.get("id") or "")
-    if not text or chat_id != str(telegram["chat_id"]):
+    if not text or not chat_id:
         return
+
+    bind_code = bind_code_from_text(text)
+    if bind_code:
+        bound_athlete = bind_telegram_chat(bind_code, chat)
+        if bound_athlete:
+            send_telegram_message(
+                telegram["bot_token"],
+                chat_id,
+                f"Telegram подключен к спортсмену: {bound_athlete.get('name') or 'спортсмен'}. Теперь можно нажать «{telegram['today_button_text']}».",
+                reply_markup=telegram_reply_markup(telegram),
+            )
+            return
 
     if not is_today_plan_command(text, telegram):
         return
 
-    if daily_assignment_sent_today():
+    athlete = telegram_athlete_by_chat(chat_id, telegram)
+    if not athlete:
+        response = "Чат не привязан к ученику. Попросите тренера сгенерировать код Telegram и отправьте его сюда."
+        send_telegram_message(telegram["bot_token"], chat_id, response, reply_markup=telegram_reply_markup(telegram))
+        return
+
+    sent_key = athlete.get("id") or chat_id
+    if daily_assignment_sent_today(sent_key):
         response = "План на сегодня уже был отправлен ранее. Повторно не отправляю, чтобы не дублировать."
     else:
-        plan_day = get_today_plan_day()
+        plan_day = get_today_plan_day(athlete)
         if plan_day:
             response = format_daily_assignment_message(plan_day)
-            mark_daily_assignment_sent()
+            mark_daily_assignment_sent(sent_key)
         else:
-            response = "На сегодня нет сохраненного плана. Откройте приложение и создайте или загрузите план на текущую неделю."
+            response = "На сегодня нет сохраненного плана. Тренеру нужно создать или загрузить план на текущую неделю."
     send_telegram_message(
         telegram["bot_token"],
-        telegram["chat_id"],
+        chat_id,
         response,
         reply_markup=telegram_reply_markup(telegram),
     )

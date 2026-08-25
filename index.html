@@ -5,9 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20260821-classify-long">
   </head>
-  <body>
+  <body class="auth-pending">
+    <section class="auth-gate" id="authGate" hidden>
+      <form class="auth-card" id="authForm">
+        <div class="brand compact-brand">
+          <div class="brand-mark">
+            <img src="AvaBotTrainingPlan.png" alt="">
+          </div>
+          <div>
+            <strong>Training Coach</strong>
+            <span>вход в приложение</span>
+          </div>
+        </div>
+        <label>
+          Роль
+          <select name="role">
+            <option value="coach">Тренер</option>
+            <option value="student">Ученик</option>
+          </select>
+        </label>
+        <label data-coach-login>
+          Пароль тренера
+          <input name="password" type="password" autocomplete="current-password">
+        </label>
+        <label data-student-login hidden>
+          Код ученика
+          <input name="accessCode" type="text" autocomplete="one-time-code" placeholder="ST-XXXXXXXX">
+        </label>
+        <button class="primary-btn" type="submit">Войти</button>
+        <p id="authStatus">Проверяем доступ...</p>
+      </form>
+    </section>
+
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
@@ -24,12 +55,16 @@
 
         <nav class="nav">
           <button class="nav-item active" data-view="dashboard" type="button">Обзор</button>
-          <button class="nav-item" data-view="import" type="button">Импорт</button>
-          <button class="nav-item" data-view="manual" type="button">Добавить</button>
+          <button class="nav-item student-import-only" data-view="import" type="button">Импорт</button>
+          <button class="nav-item student-import-only" data-view="manual" type="button">Добавить</button>
           <button class="nav-item" data-view="plan" type="button">План</button>
           <button class="nav-item" data-view="reference" type="button">Справка</button>
           <button class="nav-item" data-view="settings" type="button">Профиль</button>
         </nav>
+
+        <section class="role-panel" id="rolePanel"></section>
+
+        <button class="ghost-btn sidebar-logout" id="logoutButton" type="button" hidden>Выйти</button>
 
         <div class="side-note">
           <span>Хранилище</span>
@@ -44,7 +79,7 @@
               <h1>Тренировочная картина</h1>
               <p>Импортируйте выгрузки из спортивных сервисов, чтобы увидеть нагрузку и получить недельный план.</p>
             </div>
-            <button class="primary-btn" id="openImport" type="button">Импортировать</button>
+            <button class="primary-btn student-import-only" id="openImport" type="button">Импортировать</button>
           </div>
 
           <div class="metric-grid">
@@ -77,7 +112,7 @@
             <section class="panel">
               <div class="panel-head">
                 <h2>История</h2>
-                <button class="ghost-btn" id="clearData" type="button">Очистить</button>
+                <button class="ghost-btn student-import-only" id="clearData" type="button">Очистить</button>
               </div>
               <div class="workout-list" id="workoutList"></div>
             </section>
@@ -102,7 +137,7 @@
           </section>
         </section>
 
-        <section class="view" id="import">
+        <section class="view student-import-only" id="import">
           <div class="page-head compact">
             <div>
               <h1>Импорт файлов</h1>
@@ -143,7 +178,7 @@
           </section>
         </section>
 
-        <section class="view" id="manual">
+        <section class="view student-import-only" id="manual">
           <div class="page-head compact">
             <div>
               <h1>Ручная тренировка</h1>
@@ -198,18 +233,18 @@
               <p>План всегда строится на календарную неделю с понедельника по воскресенье.</p>
             </div>
             <div class="button-row">
-              <button class="ghost-btn" id="generatePlan" type="button">Локальный</button>
-              <button class="ghost-btn" id="adjustPlan" type="button">Скорректировать</button>
+              <button class="ghost-btn coach-only" id="generatePlan" type="button">Локальный</button>
+              <button class="ghost-btn coach-only" id="adjustPlan" type="button">Скорректировать</button>
               <button class="ghost-btn" id="togglePlanDensity" type="button">Компактно</button>
-              <button class="ghost-btn" id="loadPlanJson" type="button">План из JSON</button>
+              <button class="ghost-btn coach-only" id="loadPlanJson" type="button">План из JSON</button>
               <input id="planJsonInput" type="file" accept=".json,application/json" hidden>
             </div>
           </div>
 
           <div class="adjust-choice" id="adjustChoice">
             <span>Способ корректировки</span>
-            <button class="ghost-btn" id="adjustLocalPlan" type="button">Локально</button>
-            <button class="ghost-btn" id="adjustJsonPlan" type="button">Из JSON</button>
+            <button class="ghost-btn coach-only" id="adjustLocalPlan" type="button">Локально</button>
+            <button class="ghost-btn coach-only" id="adjustJsonPlan" type="button">Из JSON</button>
           </div>
 
           <div class="week-switcher">
@@ -254,7 +289,7 @@
 
           <div class="plan-grid" id="planGrid"></div>
 
-          <section class="panel prompt-panel">
+          <section class="panel prompt-panel coach-only">
             <div class="panel-head">
               <h2>Контекст для ИИ</h2>
               <div class="button-row compact-row">
@@ -467,11 +502,17 @@
           </div>
 
           <form class="form-grid panel" id="settingsForm">
+            <section class="student-manager wide" id="studentManager"></section>
+
             <div class="profile-photo-field wide">
               <div class="profile-photo-preview" id="profilePhotoPreview">
                 <span>Фото</span>
               </div>
-              <div class="profile-photo-actions">
+              <div class="profile-photo-readonly coach-only">
+                <strong>Фото профиля</strong>
+                <p>Тренер видит фото ученика, но загрузить или удалить его может только ученик.</p>
+              </div>
+              <div class="profile-photo-actions student-only-photo">
                 <strong>Фото профиля</strong>
                 <p>Изображение будет сохранено локально вместе с профилем.</p>
                 <div class="button-row compact-row">
@@ -672,6 +713,60 @@
       </form>
     </div>
 
-    <script src="app.js"></script>
+    <div class="modal-backdrop" id="studentModal" hidden>
+      <form class="modal-panel student-form" id="studentForm">
+        <input name="studentId" type="hidden">
+        <div class="panel-head">
+          <div>
+            <h2>Ученик</h2>
+            <span id="studentEditHint">Карточка спортсмена</span>
+          </div>
+          <button class="ghost-btn" id="cancelStudentEdit" type="button">Отмена</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Имя
+            <input name="studentName" type="text" required placeholder="Например: Белоусов Алексей">
+          </label>
+          <label>
+            Целевая дистанция
+            <select name="studentTargetDistance">
+              <option value="1k">1 км</option>
+              <option value="3k">3 км</option>
+              <option value="5k">5 км</option>
+              <option value="10k">10 км</option>
+              <option value="21k">21 км</option>
+              <option value="42k">42 км</option>
+            </select>
+          </label>
+          <label>
+            Уровень
+            <select name="studentAthleteLevel">
+              <option value="beginner">Начинающий</option>
+              <option value="intermediate">Средний</option>
+              <option value="advanced">Высокий</option>
+            </select>
+          </label>
+          <label>
+            Возрастная группа
+            <select name="studentAgeGroup">
+              <option value="adult">Взрослый</option>
+              <option value="youth">15-17 лет</option>
+              <option value="teen">11-14 лет</option>
+              <option value="child8">8-10 лет</option>
+            </select>
+          </label>
+          <label class="wide">
+            Заметки тренера
+            <textarea name="studentNotes" rows="3" placeholder="Ограничения, предпочтения, особенности расписания"></textarea>
+          </label>
+        </div>
+        <div class="button-row compact-row modal-actions">
+          <button class="primary-btn" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="app.js?v=20260821-classify-long"></script>
   </body>
 </html>

@@ -6,6 +6,13 @@ const ACTIVE_PLAN_SOURCE_KEY = "training-coach-active-plan-source";
 const SELECTED_WEEK_KEY = "training-coach-selected-week";
 const CURRENT_PLAN_KEY = "training-coach-current-plan";
 const PLAN_VIEW_MODE_KEY = "training-coach-plan-view-mode";
+const COACH_PROFILE_KEY = "training-coach-coach-profile";
+const ATHLETES_KEY = "training-coach-athletes";
+const ACTIVE_ATHLETE_KEY = "training-coach-active-athlete";
+const CURRENT_ROLE_KEY = "training-coach-current-role";
+const AUTH_ROLE_KEY = "training-coach-login-role";
+const DEFAULT_COACH_ID = "coach-belousov-aleksey";
+const DEFAULT_ATHLETE_ID = "athlete-belousov-aleksey";
 const WORKOUT_SYNC_INTERVAL_MS = 60000;
 const POLAR_SYNC_INTERVAL_MS = 10 * 60000;
 const API_BASE_URL = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
@@ -18,6 +25,14 @@ const WORKOUT_TYPE_OPTIONS = [
   ["easy", "Кросс"],
   ["cross", "Кросс-тренинг"],
 ];
+const WORKOUT_FEEDBACK_OPTIONS = [
+  ["", "Не указано"],
+  ["very_easy", "Очень легко"],
+  ["easy", "Легко"],
+  ["normal", "Нормально"],
+  ["hard", "Тяжело"],
+  ["very_hard", "Очень тяжело"],
+];
 const HR_ZONE_BOUNDARY_FIELDS = ["z1Max", "z2Max", "z3Max", "z4Max"];
 
 const state = {
@@ -27,9 +42,26 @@ const state = {
   activePlanSource: loadJson(ACTIVE_PLAN_SOURCE_KEY, "json"),
   selectedWeekStart: loadJson(SELECTED_WEEK_KEY, currentWeekKey()),
   planViewMode: loadJson(PLAN_VIEW_MODE_KEY, "detailed"),
+  coachProfile: loadJson(COACH_PROFILE_KEY, {
+    id: DEFAULT_COACH_ID,
+    name: "Белоусов Алексей",
+  }),
+  athletes: loadJson(ATHLETES_KEY, []),
+  activeAthleteId: loadJson(ACTIVE_ATHLETE_KEY, DEFAULT_ATHLETE_ID),
+  currentRole: loadJson(CURRENT_ROLE_KEY, "coach"),
+  auth: {
+    enabled: false,
+    authenticated: false,
+    role: "",
+    athleteId: "",
+  },
   planReview: null,
-  profile: loadJson(PROFILE_KEY, {
-    name: "",
+  profile: loadJson(PROFILE_KEY, defaultAthleteProfile()),
+};
+
+function defaultAthleteProfile(name = "") {
+  return {
+    name,
     goal: "Поддержание формы",
     targetDistance: "10k",
     athleteLevel: "intermediate",
@@ -46,8 +78,218 @@ const state = {
     hrZoneBoundaries: [],
     daysPerWeek: 4,
     constraints: "",
-  }),
-};
+  };
+}
+
+function normalizeAthleteProfile(profile, fallbackName = "") {
+  const normalized = { ...defaultAthleteProfile(fallbackName), ...(profile || {}) };
+  if (!normalized.name) normalized.name = fallbackName;
+  if (!normalized.athleteLevel) normalized.athleteLevel = "intermediate";
+  if (!normalized.ageGroup) normalized.ageGroup = "adult";
+  return normalized;
+}
+
+function athleteSnapshotFromCurrent(base = {}) {
+  const profile = normalizeAthleteProfile(state.profile, base.name || "Белоусов Алексей");
+  return {
+    id: base.id || createAthleteId(profile.name),
+    name: profile.name || base.name || "Спортсмен",
+    notes: base.notes || "",
+    auth: normalizeAthleteAuth(base.auth),
+    telegram: normalizeAthleteTelegram(base.telegram),
+    isSelf: Boolean(base.isSelf),
+    createdAt: base.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    profile,
+    workouts: dedupeWorkouts(state.workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date)),
+    plans: state.plans || {},
+    plansByWeek: state.plansByWeek || {},
+    activePlanSource: state.activePlanSource || "json",
+    selectedWeekStart: state.selectedWeekStart || currentWeekKey(),
+  };
+}
+
+function normalizeAthlete(athlete, index = 0) {
+  const name = String(athlete?.name || athlete?.profile?.name || (index === 0 ? "Белоусов Алексей" : "Спортсмен")).trim();
+  const profile = normalizeAthleteProfile(athlete?.profile, name);
+  profile.name = profile.name || name;
+  return {
+    id: String(athlete?.id || (index === 0 ? DEFAULT_ATHLETE_ID : createAthleteId(name))).trim(),
+    name: profile.name || name,
+    notes: String(athlete?.notes || "").trim(),
+    auth: normalizeAthleteAuth(athlete?.auth),
+    telegram: normalizeAthleteTelegram(athlete?.telegram),
+    isSelf: athlete?.id === DEFAULT_ATHLETE_ID,
+    createdAt: athlete?.createdAt || new Date().toISOString(),
+    updatedAt: athlete?.updatedAt || new Date().toISOString(),
+    profile,
+    workouts: dedupeWorkouts(Array.isArray(athlete?.workouts) ? athlete.workouts : []).sort((a, b) => new Date(b.date) - new Date(a.date)),
+    plans: athlete?.plans && typeof athlete.plans === "object" ? athlete.plans : {},
+    plansByWeek: athlete?.plansByWeek && typeof athlete.plansByWeek === "object" ? athlete.plansByWeek : {},
+    activePlanSource: athlete?.activePlanSource || "json",
+    selectedWeekStart: athlete?.selectedWeekStart || currentWeekKey(),
+  };
+}
+
+function sanitizeAthletesForIsolation(athletes) {
+  const normalized = Array.isArray(athletes) ? athletes.map(normalizeAthlete) : [];
+  const selfAthlete = normalized.find((athlete) => athlete.id === DEFAULT_ATHLETE_ID);
+  const selfFingerprint = workoutsFingerprint(selfAthlete?.workouts);
+  return normalized.map((athlete) => {
+    const isSelf = athlete.id === DEFAULT_ATHLETE_ID;
+    const copiedSelfWorkouts = !isSelf && selfFingerprint && workoutsFingerprint(athlete.workouts) === selfFingerprint;
+    return {
+      ...athlete,
+      isSelf,
+      workouts: copiedSelfWorkouts ? [] : athlete.workouts,
+    };
+  });
+}
+
+function workoutsFingerprint(workouts) {
+  if (!Array.isArray(workouts) || !workouts.length) return "";
+  return JSON.stringify(
+    workouts
+      .map((workout) => [
+        workout?.date || "",
+        workout?.source || "",
+        workout?.durationMin || "",
+        workout?.distanceKm || "",
+        workout?.load || "",
+      ].join("|"))
+      .sort()
+  );
+}
+
+function normalizeAthleteAuth(auth) {
+  if (!auth || typeof auth !== "object") return {};
+  return {
+    accessCode: String(auth.accessCode || "").trim().toUpperCase(),
+    updatedAt: String(auth.updatedAt || "").trim(),
+  };
+}
+
+function normalizeAthleteTelegram(telegram) {
+  if (!telegram || typeof telegram !== "object") return {};
+  return {
+    chatId: String(telegram.chatId || "").trim(),
+    bindCode: String(telegram.bindCode || "").trim().toUpperCase(),
+    username: String(telegram.username || "").trim(),
+    firstName: String(telegram.firstName || "").trim(),
+    lastName: String(telegram.lastName || "").trim(),
+    linkedAt: String(telegram.linkedAt || "").trim(),
+  };
+}
+
+function migrateAthleteState() {
+  state.coachProfile = {
+    id: state.coachProfile?.id || DEFAULT_COACH_ID,
+    name: state.coachProfile?.name || "Белоусов Алексей",
+  };
+
+  if (!Array.isArray(state.athletes) || !state.athletes.length) {
+    const profile = normalizeAthleteProfile(state.profile, "Белоусов Алексей");
+    profile.name = profile.name || "Белоусов Алексей";
+    state.profile = profile;
+    state.athletes = [
+      athleteSnapshotFromCurrent({
+        id: DEFAULT_ATHLETE_ID,
+        name: "Белоусов Алексей",
+        isSelf: true,
+      }),
+    ];
+    state.activeAthleteId = DEFAULT_ATHLETE_ID;
+  } else {
+    state.athletes = sanitizeAthletesForIsolation(state.athletes);
+  }
+
+  if (!state.athletes.some((athlete) => athlete.id === state.activeAthleteId)) {
+    state.activeAthleteId = state.athletes[0]?.id || DEFAULT_ATHLETE_ID;
+  }
+  if (!["coach", "student"].includes(state.currentRole)) state.currentRole = "coach";
+  persistAthleteState({ backend: false });
+}
+
+function activeAthlete() {
+  return state.athletes.find((athlete) => athlete.id === state.activeAthleteId) || state.athletes[0] || null;
+}
+
+function syncActiveAthleteFromState() {
+  if (!Array.isArray(state.athletes) || !state.athletes.length) return;
+  const index = state.athletes.findIndex((athlete) => athlete.id === state.activeAthleteId);
+  if (index === -1) return;
+  const previous = state.athletes[index];
+  const selfAthlete = state.athletes.find((athlete) => athlete.id === DEFAULT_ATHLETE_ID);
+  const selfFingerprint = workoutsFingerprint(selfAthlete?.workouts);
+  const currentWorkouts = dedupeWorkouts(state.workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const shouldDropCopiedSelfWorkouts =
+    previous.id !== DEFAULT_ATHLETE_ID &&
+    selfFingerprint &&
+    workoutsFingerprint(currentWorkouts) === selfFingerprint;
+  state.athletes[index] = {
+    ...athleteSnapshotFromCurrent(previous),
+    id: previous.id,
+    name: state.profile.name || previous.name,
+    notes: previous.notes || "",
+    auth: normalizeAthleteAuth(previous.auth),
+    telegram: normalizeAthleteTelegram(previous.telegram),
+    isSelf: previous.id === DEFAULT_ATHLETE_ID,
+    createdAt: previous.createdAt,
+    workouts: shouldDropCopiedSelfWorkouts ? [] : currentWorkouts,
+  };
+  state.athletes = sanitizeAthletesForIsolation(state.athletes);
+}
+
+function applyActiveAthleteState() {
+  const athlete = activeAthlete();
+  if (!athlete) return;
+  const normalized = normalizeAthlete(athlete);
+  state.activeAthleteId = normalized.id;
+  state.profile = normalizeAthleteProfile(normalized.profile, normalized.name);
+  state.workouts = dedupeWorkouts(normalized.workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+  state.plans = normalized.plans || {};
+  state.plansByWeek = normalized.plansByWeek || {};
+  state.activePlanSource = normalized.activePlanSource || "json";
+  state.selectedWeekStart = normalized.selectedWeekStart || currentWeekKey();
+  state.planReview = null;
+  saveLegacyAthleteState();
+}
+
+function persistAthleteState({ backend = true } = {}) {
+  state.athletes = sanitizeAthletesForIsolation(state.athletes);
+  saveJson(COACH_PROFILE_KEY, state.coachProfile);
+  saveJson(ATHLETES_KEY, state.athletes);
+  saveJson(ACTIVE_ATHLETE_KEY, state.activeAthleteId);
+  saveJson(CURRENT_ROLE_KEY, state.currentRole);
+  if (backend) saveBackendState();
+}
+
+function createAthleteId(name) {
+  const slug = String(name || "athlete")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "athlete";
+  return `${slug}-${Date.now().toString(36)}`;
+}
+
+function isCoachRole() {
+  if (state.auth.enabled) return state.auth.authenticated && state.auth.role === "coach";
+  return state.currentRole !== "student";
+}
+
+function isSelfAthlete() {
+  return Boolean(activeAthlete()?.isSelf);
+}
+
+function canImportWorkouts() {
+  return !isCoachRole();
+}
+
+function canUsePolar() {
+  return canImportWorkouts() && isSelfAthlete();
+}
 
 const views = document.querySelectorAll(".view");
 const navItems = document.querySelectorAll(".nav-item");
@@ -72,18 +314,39 @@ const polarStatus = document.querySelector("#polarStatus");
 const polarHint = document.querySelector("#polarHint");
 const connectPolarButton = document.querySelector("#connectPolar");
 const syncPolarButton = document.querySelector("#syncPolar");
+const rolePanel = document.querySelector("#rolePanel");
+const studentManager = document.querySelector("#studentManager");
+const studentModal = document.querySelector("#studentModal");
+const studentForm = document.querySelector("#studentForm");
+const authGate = document.querySelector("#authGate");
+const authForm = document.querySelector("#authForm");
+const logoutButton = document.querySelector("#logoutButton");
 
 init();
 
 async function init() {
+  document.body.classList.add("auth-pending");
+  wireAuth();
   wireNavigation();
   wireImport();
   wirePolar();
   wireForms();
-  hydrateProfile();
-  showPlanLoading("Идет загрузка плана...");
-  renderAll();
+  wireStudentManagement();
+
+  const auth = await loadAuthStatus();
+  applyAuthState(auth);
+  if (state.auth.enabled && !state.auth.authenticated) {
+    showAuthGate();
+    return;
+  }
+
+  if (authGate) authGate.hidden = true;
+  resetRuntimeStateForAuthLoad();
   await loadBackendState();
+  migrateAthleteState();
+  applyActiveAthleteState();
+  if (state.auth.role) state.currentRole = state.auth.role;
+  if (!state.auth.enabled) saveBackendState();
   dedupeStoredWorkouts();
   setAiStatus("Идет проверка новых тренировок...", "");
   await syncWorkoutFolderChanges({ render: false });
@@ -94,6 +357,7 @@ async function init() {
   hydrateProfile();
   renderAll();
   restoreCurrentPlanOrGenerate();
+  hideAuthGate();
   setInterval(() => syncWorkoutFolderChanges(), WORKOUT_SYNC_INTERVAL_MS);
   setInterval(() => syncPolarWorkouts({ automatic: true }), POLAR_SYNC_INTERVAL_MS);
 }
@@ -112,6 +376,7 @@ function wireNavigation() {
   });
 
   workoutList?.addEventListener("change", handleWorkoutTypeChange);
+  workoutList?.addEventListener("click", handleWorkoutFeedbackClick);
   document.querySelector("#openImport").addEventListener("click", () => showView("import"));
   document.querySelector("#generatePlan").addEventListener("click", selectLocalPlan);
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
@@ -139,9 +404,142 @@ function wireNavigation() {
   });
 }
 
+function wireStudentManagement() {
+  rolePanel?.addEventListener("change", handleRolePanelChange);
+  rolePanel?.addEventListener("click", handleRolePanelClick);
+  studentManager?.addEventListener("click", handleStudentManagerClick);
+  studentForm?.addEventListener("submit", saveStudentForm);
+  document.querySelector("#cancelStudentEdit")?.addEventListener("click", closeStudentModal);
+  studentModal?.addEventListener("click", (event) => {
+    if (event.target === studentModal) closeStudentModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !studentModal?.hidden) closeStudentModal();
+  });
+}
+
+function wireAuth() {
+  logoutButton?.addEventListener("click", logout);
+  authForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(authForm);
+    const role = data.get("role") || "coach";
+    const password = data.get("password") || "";
+    const accessCode = data.get("accessCode") || "";
+    const status = document.querySelector("#authStatus");
+    if (status) status.textContent = "Проверяем доступ...";
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, password, accessCode }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "не удалось войти");
+      saveJson(AUTH_ROLE_KEY, role);
+      applyAuthState(payload.enabled === undefined ? await loadAuthStatus() : payload);
+      if (authGate) authGate.hidden = true;
+      resetRuntimeStateForAuthLoad();
+      await loadBackendState();
+      migrateAthleteState();
+      applyActiveAthleteState();
+      if (state.auth.role) state.currentRole = state.auth.role;
+      hydrateProfile();
+      renderAll();
+      restoreCurrentPlanOrGenerate();
+      hideAuthGate();
+    } catch (error) {
+      if (status) status.textContent = error.message;
+    }
+  });
+
+  authForm?.addEventListener("change", updateAuthFormMode);
+}
+
+async function loadAuthStatus() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/status`);
+    if (!response.ok) throw new Error("auth status failed");
+    return await response.json();
+  } catch {
+    return { enabled: true, authenticated: false, role: "", error: "Backend недоступен" };
+  }
+}
+
+function applyAuthState(payload = {}) {
+  state.auth = {
+    enabled: Boolean(payload.enabled),
+    authenticated: !payload.enabled || Boolean(payload.authenticated),
+    role: payload.role || (payload.enabled ? "" : "coach"),
+    athleteId: payload.athleteId || "",
+    coachConfigured: payload.coachConfigured !== false,
+  };
+  if (state.auth.role) {
+    state.currentRole = state.auth.role === "student" ? "student" : "coach";
+    saveJson(CURRENT_ROLE_KEY, state.currentRole);
+  }
+}
+
+function resetRuntimeStateForAuthLoad() {
+  if (!state.auth.enabled || !state.auth.authenticated) return;
+  state.workouts = [];
+  state.plans = {};
+  state.plansByWeek = {};
+  state.activePlanSource = "json";
+  state.selectedWeekStart = currentWeekKey();
+  state.planReview = null;
+  state.athletes = [];
+  state.activeAthleteId = state.auth.athleteId || DEFAULT_ATHLETE_ID;
+  state.currentRole = state.auth.role === "student" ? "student" : "coach";
+  state.profile = defaultAthleteProfile();
+}
+
+function showAuthGate() {
+  document.body.classList.remove("auth-pending");
+  document.body.classList.add("auth-required");
+  if (authGate) authGate.hidden = false;
+  updateAuthFormMode();
+  const status = document.querySelector("#authStatus");
+  if (status) {
+    status.textContent = state.auth.coachConfigured === false
+      ? "Пароль тренера не настроен в conf.json."
+      : "Войдите как тренер или ученик.";
+  }
+}
+
+function hideAuthGate() {
+  document.body.classList.remove("auth-pending", "auth-required");
+  if (authGate) authGate.hidden = true;
+}
+
+function updateAuthFormMode() {
+  if (!authForm) return;
+  const role = authForm.elements.role?.value || loadJson(AUTH_ROLE_KEY, "coach");
+  authForm.elements.role.value = role;
+  const isStudent = role === "student";
+  authForm.querySelector("[data-coach-login]").hidden = isStudent;
+  authForm.querySelector("[data-student-login]").hidden = !isStudent;
+}
+
+async function logout() {
+  try {
+    await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST" });
+  } catch {
+    // If the backend is down, reloading still clears the current UI state.
+  }
+  window.location.reload();
+}
+
 function wireImport() {
   fileInput.addEventListener("change", (event) => handleFiles([...event.target.files]));
-  selectWorkoutFilesButton.addEventListener("click", () => fileInput.click());
+  selectWorkoutFilesButton.addEventListener("click", () => {
+    if (!canImportWorkouts()) {
+      showToast("Импорт тренировок доступен только ученику");
+      return;
+    }
+    fileInput.click();
+  });
 
   ["dragenter", "dragover"].forEach((eventName) => {
     dropzone.addEventListener(eventName, (event) => {
@@ -158,6 +556,10 @@ function wireImport() {
   });
 
   dropzone.addEventListener("drop", (event) => {
+    if (!canImportWorkouts()) {
+      showToast("Импорт тренировок доступен только ученику");
+      return;
+    }
     handleFiles([...event.dataTransfer.files]);
   });
 }
@@ -165,6 +567,10 @@ function wireImport() {
 function wirePolar() {
   if (!connectPolarButton || !syncPolarButton) return;
   connectPolarButton.addEventListener("click", () => {
+    if (!canUsePolar()) {
+      showToast("Polar Flow доступен только ученику Белоусов Алексей");
+      return;
+    }
     window.location.href = `${API_BASE_URL}/api/polar/connect`;
   });
   syncPolarButton.addEventListener("click", () => syncPolarWorkouts({ automatic: false }));
@@ -173,8 +579,12 @@ function wirePolar() {
 function wireForms() {
   const today = new Date().toISOString().slice(0, 10);
   manualForm.elements.date.value = today;
-  selectProfilePhotoButton.addEventListener("click", () => profilePhotoInput.click());
+  selectProfilePhotoButton.addEventListener("click", () => {
+    if (isCoachRole()) return;
+    profilePhotoInput.click();
+  });
   removeProfilePhotoButton.addEventListener("click", () => {
+    if (isCoachRole()) return;
     state.profile.photoDataUrl = "";
     profilePhotoInput.value = "";
     renderProfilePhoto();
@@ -191,6 +601,10 @@ function wireForms() {
 
   manualForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (!canImportWorkouts()) {
+      showToast("Добавление тренировок доступно только ученику");
+      return;
+    }
     const data = new FormData(manualForm);
     const workout = normalizeWorkout({
       source: "manual",
@@ -236,7 +650,11 @@ function wireForms() {
     saveBackendState();
     hydrateProfile();
     renderAll();
-    generatePlan();
+    if (isCoachRole()) {
+      generatePlan();
+    } else {
+      restoreCurrentPlanOrGenerate();
+    }
     showToast(data.get("hrZoneMode") === "custom" && hrZones.mode !== "custom"
       ? "Профиль сохранен, но пульсовые зоны возвращены к HRR по умолчанию: границы должны возрастать между пульсом покоя и максимумом"
       : "Профиль сохранен");
@@ -244,6 +662,10 @@ function wireForms() {
 }
 
 async function handleProfilePhotoFile(event) {
+  if (isCoachRole()) {
+    profilePhotoInput.value = "";
+    return;
+  }
   const file = event.target.files?.[0];
   if (!file) return;
   if (!file.type.startsWith("image/")) {
@@ -286,6 +708,9 @@ function resizeImageToDataUrl(file, maxSize) {
 }
 
 function showView(viewId) {
+  if (!canImportWorkouts() && ["import", "manual"].includes(viewId)) {
+    viewId = "dashboard";
+  }
   hideAdjustChoice();
   views.forEach((view) => view.classList.toggle("active", view.id === viewId));
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.view === viewId));
@@ -293,6 +718,11 @@ function showView(viewId) {
 
 async function handleFiles(files) {
   if (!files.length) return;
+  if (!canImportWorkouts()) {
+    showToast("Импорт тренировок доступен только ученику");
+    fileInput.value = "";
+    return;
+  }
 
   const results = [];
   for (const file of files) {
@@ -494,6 +924,9 @@ function parseCsv(text, fileName) {
 }
 
 function addWorkouts(workouts, shouldPersist = true) {
+  if (!canImportWorkouts()) {
+    return { accepted: 0, skipped: 0, duplicates: 0, parsed: Array.isArray(workouts) ? workouts.length : 0 };
+  }
   const validIncoming = workouts.filter((workout) => workout.date && workout.durationMin > 0);
   const byIncomingKey = new Map();
 
@@ -586,6 +1019,9 @@ function mergeDuplicateWorkouts(a, b) {
   if (!base.workoutTypeOverride && other.workoutTypeOverride) {
     base.workoutTypeOverride = other.workoutTypeOverride;
   }
+  if (!base.feedback && other.feedback) {
+    base.feedback = other.feedback;
+  }
   base.workoutType = classifyWorkout(base);
   return base;
 }
@@ -646,6 +1082,7 @@ function normalizeWorkout(input) {
     load,
     loadSource,
     notes: String(input.notes || "").trim(),
+    feedback: normalizeWorkoutFeedback(input.feedback),
     workoutTypeOverride: validWorkoutType(input.workoutTypeOverride) ? input.workoutTypeOverride : "",
     workoutType: classifyWorkout({
       sport,
@@ -664,6 +1101,15 @@ function normalizeWorkout(input) {
       notes: input.notes,
     }),
   };
+}
+
+function normalizeWorkoutFeedback(feedback) {
+  if (!feedback || typeof feedback !== "object") return null;
+  const effort = WORKOUT_FEEDBACK_OPTIONS.some(([value]) => value === feedback.effort) ? feedback.effort : "";
+  const notes = String(feedback.notes || "").trim();
+  const updatedAt = feedback.updatedAt || "";
+  if (!effort && !notes) return null;
+  return { effort, notes, updatedAt };
 }
 
 function estimateTrimp(durationMin, avgHr, hrMax, hrRest) {
@@ -689,6 +1135,7 @@ function estimateTrimpFromHrr(durationMin, hrReserveRatio) {
 }
 
 function renderAll() {
+  renderUserContext();
   renderMetrics();
   renderGoalCenter();
   renderTodayPlan();
@@ -701,6 +1148,376 @@ function renderAll() {
   renderPlanWeekLabel();
   updatePlanDensityUi();
   document.querySelector("#storageCount").textContent = formatCount(state.workouts.length);
+}
+
+function renderUserContext() {
+  document.body.classList.toggle("role-coach", isCoachRole());
+  document.body.classList.toggle("role-student", !isCoachRole());
+  if (logoutButton) logoutButton.hidden = !state.auth.enabled || !state.auth.authenticated;
+  renderRolePanel();
+  renderStudentManager();
+  updatePolarUiForRole();
+}
+
+function renderRolePanel() {
+  if (!rolePanel) return;
+  const athlete = activeAthlete();
+  const athleteOptions = state.athletes
+    .map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.activeAthleteId ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
+    .join("");
+
+  rolePanel.innerHTML = `
+    <div class="role-field">
+      <span>Роль</span>
+      ${state.auth.enabled
+        ? `<strong>${isCoachRole() ? "Тренер" : "Ученик"}</strong>`
+        : `<select data-role-select>
+            <option value="coach" ${isCoachRole() ? "selected" : ""}>Тренер</option>
+            <option value="student" ${!isCoachRole() ? "selected" : ""}>Ученик</option>
+          </select>`}
+    </div>
+    <div class="role-field">
+      <span>Спортсмен</span>
+      ${isCoachRole()
+        ? `<select data-athlete-select>${athleteOptions}</select>`
+        : `<strong>${escapeHtml(athlete?.name || "Спортсмен")}</strong>`}
+    </div>
+    ${isCoachRole() ? `<button class="ghost-btn" data-add-student type="button">Добавить ученика</button>` : ""}
+  `;
+}
+
+function renderStudentManager() {
+  if (!studentManager) return;
+  studentManager.hidden = !isCoachRole();
+  if (!isCoachRole()) {
+    studentManager.innerHTML = "";
+    return;
+  }
+
+  studentManager.innerHTML = `
+    <div class="panel-head compact-head">
+      <div>
+        <h2>Ученики</h2>
+        <span>Выберите спортсмена, чтобы подгрузить его данные. Для Telegram сгенерируйте код и попросите ученика отправить его боту.</span>
+      </div>
+      <button class="primary-btn" data-add-student type="button">Добавить</button>
+    </div>
+    <div class="student-list">
+      ${state.athletes.map((athlete) => `
+        <article class="student-row ${athlete.id === state.activeAthleteId ? "active" : ""}">
+          <div>
+            <strong>${escapeHtml(athlete.name)}</strong>
+            <span>${escapeHtml(targetDistanceLabel(athlete.profile?.targetDistance || "10k"))} · ${escapeHtml(athleteLevelLabel(athlete.profile?.athleteLevel || "intermediate"))}${athlete.isSelf ? " · вы" : ""}</span>
+            <small>${escapeHtml(accessStatusLabel(athlete))}</small>
+            <small>${escapeHtml(telegramStatusLabel(athlete))}</small>
+            ${athlete.notes ? `<small>${escapeHtml(athlete.notes)}</small>` : ""}
+          </div>
+          <div class="student-actions">
+            <button class="ghost-btn" data-select-student="${escapeHtml(athlete.id)}" type="button">${athlete.id === state.activeAthleteId ? "Выбран" : "Выбрать"}</button>
+            <button class="ghost-btn" data-edit-student="${escapeHtml(athlete.id)}" type="button">Править</button>
+            <button class="ghost-btn" data-access-code="${escapeHtml(athlete.id)}" type="button">Код входа</button>
+            <button class="ghost-btn" data-telegram-code="${escapeHtml(athlete.id)}" type="button">Код Telegram</button>
+            <button class="ghost-btn" data-send-telegram="${escapeHtml(athlete.id)}" type="button" ${athlete.telegram?.chatId ? "" : "disabled"}>Отправить план</button>
+            <button class="ghost-btn danger" data-delete-student="${escapeHtml(athlete.id)}" type="button" ${athlete.isSelf || state.athletes.length < 2 ? "disabled" : ""}>Удалить</button>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function handleRolePanelChange(event) {
+  const roleSelect = event.target.closest("[data-role-select]");
+  if (roleSelect) {
+    syncActiveAthleteFromState();
+    state.currentRole = roleSelect.value === "student" ? "student" : "coach";
+    persistAthleteState();
+    renderAll();
+    restoreCurrentPlanOrGenerate();
+    refreshPolarStatus();
+    return;
+  }
+
+  const athleteSelect = event.target.closest("[data-athlete-select]");
+  if (athleteSelect) {
+    selectAthlete(athleteSelect.value);
+  }
+}
+
+function handleRolePanelClick(event) {
+  if (event.target.closest("[data-add-student]")) {
+    openStudentModal();
+  }
+}
+
+function handleStudentManagerClick(event) {
+  const addButton = event.target.closest("[data-add-student]");
+  if (addButton) {
+    openStudentModal();
+    return;
+  }
+
+  const selectButton = event.target.closest("[data-select-student]");
+  if (selectButton) {
+    selectAthlete(selectButton.dataset.selectStudent);
+    return;
+  }
+
+  const editButton = event.target.closest("[data-edit-student]");
+  if (editButton) {
+    openStudentModal(editButton.dataset.editStudent);
+    return;
+  }
+
+  const accessCodeButton = event.target.closest("[data-access-code]");
+  if (accessCodeButton) {
+    createStudentAccessCode(accessCodeButton.dataset.accessCode);
+    return;
+  }
+
+  const telegramCodeButton = event.target.closest("[data-telegram-code]");
+  if (telegramCodeButton) {
+    createTelegramBindCode(telegramCodeButton.dataset.telegramCode);
+    return;
+  }
+
+  const sendTelegramButton = event.target.closest("[data-send-telegram]");
+  if (sendTelegramButton) {
+    sendTelegramPlanToStudent(sendTelegramButton.dataset.sendTelegram);
+    return;
+  }
+
+  const deleteButton = event.target.closest("[data-delete-student]");
+  if (deleteButton) {
+    deleteStudent(deleteButton.dataset.deleteStudent);
+  }
+}
+
+function selectAthlete(athleteId) {
+  if (!state.athletes.some((athlete) => athlete.id === athleteId)) return;
+  syncActiveAthleteFromState();
+  state.activeAthleteId = athleteId;
+  applyActiveAthleteState();
+  saveLegacyAthleteState();
+  persistAthleteState();
+  hydrateProfile();
+  renderAll();
+  restoreCurrentPlanOrGenerate();
+  refreshPolarStatus();
+  showToast(`Открыт спортсмен: ${activeAthlete()?.name || "спортсмен"}`);
+}
+
+function openStudentModal(athleteId = "") {
+  if (!studentModal || !studentForm) return;
+  const athlete = athleteId ? state.athletes.find((item) => item.id === athleteId) : null;
+  studentForm.reset();
+  studentForm.elements.studentId.value = athlete?.id || "";
+  studentForm.elements.studentName.value = athlete?.name || "";
+  studentForm.elements.studentTargetDistance.value = athlete?.profile?.targetDistance || "10k";
+  studentForm.elements.studentAthleteLevel.value = athlete?.profile?.athleteLevel || "intermediate";
+  studentForm.elements.studentAgeGroup.value = athlete?.profile?.ageGroup || "adult";
+  studentForm.elements.studentNotes.value = athlete?.notes || "";
+  document.querySelector("#studentEditHint").textContent = athlete ? "Редактирование карточки спортсмена" : "Новый спортсмен";
+  studentModal.hidden = false;
+  studentForm.elements.studentName.focus();
+}
+
+function closeStudentModal() {
+  if (studentModal) studentModal.hidden = true;
+}
+
+function createStudentAccessCode(athleteId) {
+  syncActiveAthleteFromState();
+  const athlete = state.athletes.find((item) => item.id === athleteId);
+  if (!athlete) return;
+  athlete.auth = {
+    ...normalizeAthleteAuth(athlete.auth),
+    accessCode: generateStudentAccessCode(),
+    updatedAt: new Date().toISOString(),
+  };
+  persistAthleteState();
+  renderAll();
+  copyTextToClipboard(athlete.auth.accessCode);
+  showToast(`Код входа для ${athlete.name}: ${athlete.auth.accessCode}`);
+}
+
+function createTelegramBindCode(athleteId) {
+  syncActiveAthleteFromState();
+  const athlete = state.athletes.find((item) => item.id === athleteId);
+  if (!athlete) return;
+  athlete.telegram = {
+    ...normalizeAthleteTelegram(athlete.telegram),
+    bindCode: generateTelegramBindCode(),
+  };
+  persistAthleteState();
+  renderAll();
+  copyTextToClipboard(athlete.telegram.bindCode);
+  showToast(`Код Telegram для ${athlete.name}: ${athlete.telegram.bindCode}. Ученик должен отправить его боту.`);
+}
+
+async function sendTelegramPlanToStudent(athleteId) {
+  const athlete = state.athletes.find((item) => item.id === athleteId);
+  if (!athlete?.telegram?.chatId) {
+    showToast("Сначала привяжите Telegram ученика по коду");
+    return;
+  }
+
+  try {
+    await saveBackendState();
+    const response = await fetch(`${API_BASE_URL}/api/notifications/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ athleteId }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "не удалось отправить план");
+    showToast(`План отправлен в Telegram: ${athlete.name}`);
+  } catch (error) {
+    showToast(`Telegram: ${error.message}`);
+  }
+}
+
+function saveStudentForm(event) {
+  event.preventDefault();
+  syncActiveAthleteFromState();
+  const data = new FormData(studentForm);
+  const id = String(data.get("studentId") || "").trim();
+  const name = String(data.get("studentName") || "").trim();
+  if (!name) return;
+
+  const existingIndex = state.athletes.findIndex((athlete) => athlete.id === id);
+  const previous = existingIndex >= 0 ? state.athletes[existingIndex] : null;
+  const profile = normalizeAthleteProfile(previous?.profile, name);
+  profile.name = name;
+  profile.targetDistance = data.get("studentTargetDistance") || profile.targetDistance || "10k";
+  profile.athleteLevel = data.get("studentAthleteLevel") || profile.athleteLevel || "intermediate";
+  profile.ageGroup = data.get("studentAgeGroup") || profile.ageGroup || "adult";
+
+  const athlete = normalizeAthlete({
+    ...(previous || {}),
+    id: previous?.id || createAthleteId(name),
+    name,
+    notes: String(data.get("studentNotes") || "").trim(),
+    auth: normalizeAthleteAuth(previous?.auth),
+    telegram: normalizeAthleteTelegram(previous?.telegram),
+    isSelf: Boolean(previous?.isSelf),
+    profile,
+    workouts: previous?.workouts || [],
+    plans: previous?.plans || {},
+    plansByWeek: previous?.plansByWeek || {},
+    activePlanSource: previous?.activePlanSource || "json",
+    selectedWeekStart: previous?.selectedWeekStart || currentWeekKey(),
+    createdAt: previous?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  if (existingIndex >= 0) {
+    state.athletes[existingIndex] = athlete;
+  } else {
+    syncActiveAthleteFromState();
+    state.athletes.push(athlete);
+    state.activeAthleteId = athlete.id;
+    applyActiveAthleteState();
+  }
+
+  if (athlete.id === state.activeAthleteId) {
+    state.profile = normalizeAthleteProfile(athlete.profile, athlete.name);
+    saveLegacyAthleteState();
+    hydrateProfile();
+  }
+  persistAthleteState();
+  closeStudentModal();
+  renderAll();
+  restoreCurrentPlanOrGenerate();
+  showToast(existingIndex >= 0 ? "Карточка ученика обновлена" : "Ученик добавлен");
+}
+
+function deleteStudent(athleteId) {
+  syncActiveAthleteFromState();
+  const athlete = state.athletes.find((item) => item.id === athleteId);
+  if (!athlete || athlete.isSelf || state.athletes.length < 2) {
+    showToast("Этот профиль нельзя удалить: он хранит вашу основную историю");
+    return;
+  }
+  if (!window.confirm(`Удалить ученика ${athlete.name}? Его тренировки и планы будут удалены из приложения.`)) return;
+
+  state.athletes = state.athletes.filter((item) => item.id !== athleteId);
+  if (state.activeAthleteId === athleteId) {
+    state.activeAthleteId = state.athletes[0]?.id || DEFAULT_ATHLETE_ID;
+    applyActiveAthleteState();
+    saveLegacyAthleteState();
+    hydrateProfile();
+  }
+  persistAthleteState();
+  renderAll();
+  restoreCurrentPlanOrGenerate();
+  showToast("Ученик удален");
+}
+
+function saveLegacyAthleteState() {
+  saveJson(PROFILE_KEY, state.profile);
+  saveJson(STORAGE_KEY, state.workouts);
+  saveJson(PLANS_KEY, state.plans);
+  saveJson(PLANS_BY_WEEK_KEY, state.plansByWeek);
+  saveJson(ACTIVE_PLAN_SOURCE_KEY, state.activePlanSource);
+  saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
+}
+
+function targetDistanceLabel(value) {
+  return getTargetDistanceProfile({ targetDistance: value })?.label || value;
+}
+
+function athleteLevelLabel(value) {
+  return getAthleteLevelProfile({ athleteLevel: value })?.label || value;
+}
+
+function telegramStatusLabel(athlete) {
+  const telegram = normalizeAthleteTelegram(athlete?.telegram);
+  if (telegram.chatId) {
+    const user = telegram.username ? `@${telegram.username}` : `chat ${maskTelegramChatId(telegram.chatId)}`;
+    return `Telegram подключен: ${user}`;
+  }
+  if (telegram.bindCode) {
+    return `Код Telegram: ${telegram.bindCode}`;
+  }
+  return "Telegram не подключен";
+}
+
+function maskTelegramChatId(chatId) {
+  const value = String(chatId || "");
+  if (value.length <= 4) return value;
+  return `...${value.slice(-4)}`;
+}
+
+function generateTelegramBindCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "TC-";
+  for (let index = 0; index < 6; index += 1) {
+    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return code;
+}
+
+function generateStudentAccessCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "ST-";
+  for (let index = 0; index < 8; index += 1) {
+    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return code;
+}
+
+function accessStatusLabel(athlete) {
+  const accessCode = normalizeAthleteAuth(athlete?.auth).accessCode;
+  return accessCode ? `Код входа: ${accessCode}` : "Код входа не создан";
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard?.writeText(String(text || ""));
+  } catch {
+    // The code remains visible in the student card if clipboard access is blocked.
+  }
 }
 
 function renderMetrics() {
@@ -844,7 +1661,7 @@ function renderTodayPlan() {
   const weekStart = startOfTrainingWeek(today);
   const weekKey = toDateInputValue(weekStart);
   const savedPlan = storedPlanForWeekKey(weekKey);
-  const planDays = savedPlan?.days || buildPlan(weekStart);
+  const planDays = savedPlan?.days || (isCoachRole() ? buildPlan(weekStart) : []);
   const day = planDays.find((item) => sameDay(new Date(item.date), today));
   container.className = "panel today-plan-panel";
   if (!day) {
@@ -1000,12 +1817,35 @@ function renderWorkouts() {
                 ${renderWorkoutTypeOptions(workout)}
               </select>
             </label>
+            <div class="workout-feedback">
+              <label>
+                Ощущения
+                <select data-feedback-effort>
+                  ${renderWorkoutFeedbackOptions(workout.feedback?.effort || "")}
+                </select>
+              </label>
+              <label>
+                Комментарий
+                <textarea data-feedback-notes rows="2" placeholder="Самочувствие, усталость, сон, что было легко или тяжело">${escapeHtml(workout.feedback?.notes || "")}</textarea>
+              </label>
+              <button class="ghost-btn" data-save-feedback type="button">Сохранить ощущения</button>
+            </div>
           </div>
           <small>${workout.load} TRIMP</small>
         </article>
       `
     )
     .join("");
+}
+
+function renderWorkoutFeedbackOptions(value) {
+  return WORKOUT_FEEDBACK_OPTIONS
+    .map(([optionValue, label]) => `<option value="${optionValue}" ${optionValue === value ? "selected" : ""}>${label}</option>`)
+    .join("");
+}
+
+function workoutFeedbackLabel(value) {
+  return WORKOUT_FEEDBACK_OPTIONS.find(([optionValue]) => optionValue === value)?.[1] || "";
 }
 
 function renderImportDiagnostics() {
@@ -1157,6 +1997,27 @@ function handleWorkoutTypeChange(event) {
   renderAll();
   restoreCurrentPlanOrGenerate();
   showToast(select.value === "auto" ? "Тип тренировки снова определяется автоматически" : "Тип тренировки задан вручную");
+}
+
+function handleWorkoutFeedbackClick(event) {
+  const button = event.target.closest("[data-save-feedback]");
+  if (!button) return;
+  const row = button.closest(".workout-row");
+  const key = row?.dataset.workoutKey || "";
+  const workout = state.workouts.find((item) => workoutDedupKey(item) === key);
+  if (!workout) return;
+
+  const effort = row.querySelector("[data-feedback-effort]")?.value || "";
+  const notes = row.querySelector("[data-feedback-notes]")?.value?.trim() || "";
+  workout.feedback = normalizeWorkoutFeedback({
+    effort,
+    notes,
+    updatedAt: new Date().toISOString(),
+  });
+  persistWorkouts();
+  renderAll();
+  restoreCurrentPlanOrGenerate();
+  showToast("Ощущения по тренировке сохранены");
 }
 
 function renderBars() {
@@ -1330,7 +2191,15 @@ function plannedMinutesForProgress(day) {
   return Math.max(plannedDurationMinutes(day) || 0, plannedDurationFromDistance(day) || 0);
 }
 
+function requireCoachForPlanChanges() {
+  if (isCoachRole()) return true;
+  hideAdjustChoice();
+  setAiStatus("Создание и изменение плана доступно тренеру. Ученик видит план, назначенный тренером.", "error");
+  return false;
+}
+
 function generatePlan() {
+  if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
   const plan = buildPlan();
   const savedPlan = saveCurrentPlan({
@@ -1344,6 +2213,7 @@ function generatePlan() {
 }
 
 function selectLocalPlan() {
+  if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
   const savedPlan = getCurrentWeekPlan("local");
   if (savedPlan) {
@@ -1354,6 +2224,7 @@ function selectLocalPlan() {
 }
 
 function selectJsonPlan() {
+  if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
   const savedPlan = getCurrentWeekPlan("json");
   if (savedPlan) {
@@ -1364,11 +2235,13 @@ function selectJsonPlan() {
 }
 
 function reloadJsonPlan() {
+  if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
   planJsonInput.click();
 }
 
 function selectAiPlan() {
+  if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
   const savedPlan = getCurrentWeekPlan("ai");
   if (savedPlan) {
@@ -1379,6 +2252,7 @@ function selectAiPlan() {
 }
 
 function adjustDisplayedPlan() {
+  if (!requireCoachForPlanChanges()) return;
   const choice = document.querySelector("#adjustChoice");
   const isOpen = choice.classList.toggle("open");
   document.querySelector("#adjustPlan").classList.toggle("active", isOpen);
@@ -1392,6 +2266,7 @@ function hideAdjustChoice() {
 }
 
 function adjustPlanLocally() {
+  if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
   const current = loadCurrentPlan() || {
     source: "local",
@@ -1521,7 +2396,7 @@ function renderPlan(plan) {
         <article class="plan-card ${status.className} eval-${execution.level} ${toneClass}" data-plan-day-index="${index}">
           <div class="plan-card-head">
             <time>${day.dateLabel}</time>
-            <button class="ghost-btn plan-edit-btn" data-edit-plan-day="${index}" type="button" title="Редактировать день">Править</button>
+            ${isCoachRole() ? `<button class="ghost-btn plan-edit-btn" data-edit-plan-day="${index}" type="button" title="Редактировать день">Править</button>` : ""}
           </div>
           <div class="plan-status">${status.label}</div>
           <span>${day.focus}</span>
@@ -1903,6 +2778,7 @@ function clearPlanAnalysis(message = "Для выбранной недели н�
 function handlePlanGridClick(event) {
   const button = event.target.closest("[data-edit-plan-day]");
   if (!button) return;
+  if (!requireCoachForPlanChanges()) return;
   openPlanDayEditor(Number(button.dataset.editPlanDay));
 }
 
@@ -1933,6 +2809,10 @@ function closePlanEditModal() {
 
 function saveEditedPlanDay(event) {
   event.preventDefault();
+  if (!requireCoachForPlanChanges()) {
+    closePlanEditModal();
+    return;
+  }
   const current = loadCurrentPlan();
   const index = Number(planEditForm.elements.dayIndex.value);
   const original = current?.days?.[index];
@@ -2112,7 +2992,7 @@ function showPlanLoading(message = "Идет загрузка плана...") {
 function restoreCurrentPlanOrGenerate() {
   const savedPlan = loadCurrentPlan();
   if (!savedPlan) {
-    if (selectedWeekKey() !== currentWeekKey()) {
+    if (selectedWeekKey() !== currentWeekKey() || !isCoachRole()) {
       showNoSavedPlanForWeek();
       return;
     }
@@ -2130,7 +3010,9 @@ function showNoSavedPlanForWeek() {
   clearPlanChangeLog();
   planGrid.innerHTML = `
     <div class="empty">
-      Для выбранной недели нет сохраненного плана. Можно создать локальный план, загрузить JSON или сформировать план от ИИ.
+      ${isCoachRole()
+        ? "Для выбранной недели нет сохраненного плана. Можно создать локальный план или загрузить JSON."
+        : "Для выбранной недели тренер еще не назначил сохраненный план."}
     </div>
   `;
   document.querySelector("#aiPrompt").value = buildAiPrompt();
@@ -2195,7 +3077,11 @@ function normalizeStoredPlan(planState) {
 function showPlanState(planState) {
   const normalized = saveCurrentPlan(planState) || normalizeStoredPlan(planState);
   if (!normalized) {
-    generatePlan();
+    if (isCoachRole()) {
+      generatePlan();
+    } else {
+      showNoSavedPlanForWeek();
+    }
     return;
   }
   renderPlan(normalized.days);
@@ -3262,6 +4148,7 @@ function plannedTypeLabelForDay(day, type) {
 }
 
 async function generateAiPlan() {
+  if (!requireCoachForPlanChanges()) return;
   const button = document.querySelector("#generateAiPlan");
   const fallbackPlan = buildPlan();
   renderPlan(fallbackPlan);
@@ -3306,6 +4193,10 @@ async function generateAiPlan() {
 }
 
 async function handlePlanJsonFile(event) {
+  if (!requireCoachForPlanChanges()) {
+    planJsonInput.value = "";
+    return;
+  }
   const file = event.target.files?.[0];
   if (!file) return;
 
@@ -3429,7 +4320,7 @@ function getPreparationPhase(weekStart = selectedWeekStartDate()) {
   return preparationPhaseById("base");
 }
 
-function getPlanningModeProfile() {
+function getPlanningModeProfile(profile = state.profile) {
   const modes = {
     conservative: {
       id: "conservative",
@@ -3456,10 +4347,10 @@ function getPlanningModeProfile() {
       progressionGuidance: "не превышай примерно 12-18% прироста недельной нагрузки и обязательно смягчай план при высоком acute/chronic ratio или тяжелых днях подряд",
     },
   };
-  return modes[state.profile.planningMode] || modes.normal;
+  return modes[profile?.planningMode] || modes.normal;
 }
 
-function getAthleteLevelProfile() {
+function getAthleteLevelProfile(profile = state.profile) {
   const levels = {
     beginner: {
       id: "beginner",
@@ -3483,10 +4374,10 @@ function getAthleteLevelProfile() {
       volumeGuidance: "верхняя граница объема допустима только при стабильной предыдущей нагрузке",
     },
   };
-  return levels[state.profile.athleteLevel] || levels.intermediate;
+  return levels[profile?.athleteLevel] || levels.intermediate;
 }
 
-function getAgeGroupProfile() {
+function getAgeGroupProfile(profile = state.profile) {
   const groups = {
     adult: {
       id: "adult",
@@ -3513,7 +4404,7 @@ function getAgeGroupProfile() {
       isChild: true,
     },
   };
-  return groups[state.profile.ageGroup] || groups.adult;
+  return groups[profile?.ageGroup] || groups.adult;
 }
 
 function preparationPhaseById(id) {
@@ -3781,8 +4672,8 @@ function raceTuneUpDetails(race) {
   return "40-50 минут легко, в середине 3 x 3 минуты в марафонском усилии с полным контролем пульса.";
 }
 
-function getTargetDistanceProfile() {
-  const value = state.profile.targetDistance || "10k";
+function getTargetDistanceProfile(profile = state.profile) {
+  const value = profile?.targetDistance || "10k";
   const profiles = {
     "1k": {
       label: "1 км",
@@ -4036,6 +4927,12 @@ function buildAiRequest() {
     rpe: workout.rpe,
     load: workout.load,
     loadSource: workout.loadSource || "",
+    studentFeedback: workout.feedback
+      ? {
+        ...workout.feedback,
+        effortLabel: workoutFeedbackLabel(workout.feedback.effort),
+      }
+      : null,
     workoutTypeSource: workout.workoutTypeOverride ? "manual" : "auto",
   }));
   const planningMode = getPlanningModeProfile();
@@ -4848,7 +5745,9 @@ function renderProfilePhoto() {
   profilePhotoPreview.innerHTML = photo
     ? `<img src="${photo}" alt="Фото профиля">`
     : "<span>Фото</span>";
-  removeProfilePhotoButton.disabled = !photo;
+  document.querySelector(".student-only-photo")?.toggleAttribute("hidden", isCoachRole());
+  removeProfilePhotoButton.disabled = !photo || isCoachRole();
+  selectProfilePhotoButton.disabled = isCoachRole();
   renderSidebarProfilePhoto();
 }
 
@@ -4871,13 +5770,35 @@ async function loadBackendState() {
     const response = await fetch(`${API_BASE_URL}/api/state`);
     if (!response.ok) return;
     const payload = await response.json();
-    const hasBackendWorkouts = Array.isArray(payload.workouts) && payload.workouts.length > 0;
+    const replaceState = state.auth.enabled;
+    const hasBackendWorkouts = Array.isArray(payload.workouts) && (payload.workouts.length > 0 || replaceState);
     const hasBackendProfile = payload.profile && typeof payload.profile === "object";
-    const hasBackendPlans = payload.plans && typeof payload.plans === "object" && Object.keys(payload.plans).length > 0;
-    const hasBackendPlansByWeek = payload.plansByWeek && typeof payload.plansByWeek === "object" && Object.keys(payload.plansByWeek).length > 0;
+    const hasBackendPlans = payload.plans && typeof payload.plans === "object" && (Object.keys(payload.plans).length > 0 || replaceState);
+    const hasBackendPlansByWeek = payload.plansByWeek && typeof payload.plansByWeek === "object" && (Object.keys(payload.plansByWeek).length > 0 || replaceState);
     const hasBackendActivePlanSource = typeof payload.activePlanSource === "string" && payload.activePlanSource;
     const hasBackendSelectedWeekStart = typeof payload.selectedWeekStart === "string" && payload.selectedWeekStart;
+    const hasBackendAthletes = Array.isArray(payload.athletes) && payload.athletes.length > 0;
+    const hasBackendCoachProfile = payload.coachProfile && typeof payload.coachProfile === "object";
+    const hasBackendActiveAthleteId = typeof payload.activeAthleteId === "string" && payload.activeAthleteId;
+    const hasBackendCurrentRole = typeof payload.currentRole === "string" && payload.currentRole;
     let backendStateChanged = false;
+
+    if (hasBackendCoachProfile) {
+      state.coachProfile = { ...state.coachProfile, ...payload.coachProfile };
+      saveJson(COACH_PROFILE_KEY, state.coachProfile);
+    }
+    if (hasBackendAthletes) {
+      state.athletes = sanitizeAthletesForIsolation(payload.athletes);
+      saveJson(ATHLETES_KEY, state.athletes);
+    }
+    if (hasBackendActiveAthleteId) {
+      state.activeAthleteId = payload.activeAthleteId;
+      saveJson(ACTIVE_ATHLETE_KEY, state.activeAthleteId);
+    }
+    if (hasBackendCurrentRole && ["coach", "student"].includes(payload.currentRole)) {
+      state.currentRole = payload.currentRole;
+      saveJson(CURRENT_ROLE_KEY, state.currentRole);
+    }
 
     if (hasBackendWorkouts) {
       state.workouts = dedupeWorkouts(payload.workouts).sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -4885,15 +5806,15 @@ async function loadBackendState() {
       saveJson(STORAGE_KEY, state.workouts);
     }
     if (hasBackendProfile) {
-      state.profile = { ...state.profile, ...payload.profile };
+      state.profile = replaceState ? payload.profile : { ...state.profile, ...payload.profile };
       saveJson(PROFILE_KEY, state.profile);
     }
     if (hasBackendPlans) {
-      state.plans = { ...state.plans, ...payload.plans };
+      state.plans = replaceState ? payload.plans : { ...state.plans, ...payload.plans };
       saveJson(PLANS_KEY, state.plans);
     }
     if (hasBackendPlansByWeek) {
-      state.plansByWeek = { ...state.plansByWeek, ...payload.plansByWeek };
+      state.plansByWeek = replaceState ? payload.plansByWeek : { ...state.plansByWeek, ...payload.plansByWeek };
       saveJson(PLANS_BY_WEEK_KEY, state.plansByWeek);
     }
     if (hasBackendActivePlanSource) {
@@ -4904,15 +5825,29 @@ async function loadBackendState() {
       state.selectedWeekStart = payload.selectedWeekStart;
       saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
     }
+    if (state.auth.enabled && state.auth.role) {
+      state.currentRole = state.auth.role;
+      saveJson(CURRENT_ROLE_KEY, state.currentRole);
+    }
+    if (replaceState && hasBackendAthletes) {
+      applyActiveAthleteState();
+    }
 
     if (
-      (!hasBackendWorkouts && state.workouts.length) ||
-      (!hasBackendProfile && state.profile) ||
-      (!hasBackendPlans && Object.keys(state.plans || {}).length) ||
-      (!hasBackendPlansByWeek && Object.keys(state.plansByWeek || {}).length) ||
-      (!hasBackendActivePlanSource && state.activePlanSource) ||
-      (!hasBackendSelectedWeekStart && state.selectedWeekStart) ||
-      backendStateChanged
+      !state.auth.enabled &&
+      (
+        (!hasBackendWorkouts && state.workouts.length) ||
+        (!hasBackendProfile && state.profile) ||
+        (!hasBackendPlans && Object.keys(state.plans || {}).length) ||
+        (!hasBackendPlansByWeek && Object.keys(state.plansByWeek || {}).length) ||
+        (!hasBackendActivePlanSource && state.activePlanSource) ||
+        (!hasBackendSelectedWeekStart && state.selectedWeekStart) ||
+        (!hasBackendAthletes && state.athletes.length) ||
+        (!hasBackendCoachProfile && state.coachProfile) ||
+        (!hasBackendActiveAthleteId && state.activeAthleteId) ||
+        (!hasBackendCurrentRole && state.currentRole) ||
+        backendStateChanged
+      )
     ) {
       saveBackendState();
     }
@@ -4922,6 +5857,7 @@ async function loadBackendState() {
 }
 
 async function syncWorkoutFolderChanges(options = {}) {
+  if (!canUsePolar()) return 0;
   const accepted = await autoImportKnownWorkoutFiles();
   if (!accepted) return 0;
 
@@ -4936,6 +5872,10 @@ async function syncWorkoutFolderChanges(options = {}) {
 
 async function refreshPolarStatus() {
   if (!polarStatus) return null;
+  if (!canUsePolar()) {
+    updatePolarUi({ configured: false, connected: false, unavailable: false });
+    return null;
+  }
   try {
     const response = await fetch(`${API_BASE_URL}/api/polar/status`);
     if (!response.ok) throw new Error("status failed");
@@ -4952,6 +5892,24 @@ function updatePolarUi(status) {
   if (!polarStatus || !connectPolarButton || !syncPolarButton) return;
   const configured = Boolean(status?.configured);
   const connected = Boolean(status?.connected);
+  if (!canImportWorkouts()) {
+    connectPolarButton.textContent = "Polar доступен ученику";
+    connectPolarButton.classList.remove("connected");
+    connectPolarButton.disabled = true;
+    syncPolarButton.disabled = true;
+    polarStatus.textContent = "Тренер не импортирует тренировки спортсменов.";
+    polarHint.textContent = "Войдите как ученик Белоусов Алексей, чтобы синхронизировать его тренировки Polar Flow.";
+    return;
+  }
+  if (!isSelfAthlete()) {
+    connectPolarButton.textContent = "Polar привязан к тренеру";
+    connectPolarButton.classList.remove("connected");
+    connectPolarButton.disabled = true;
+    syncPolarButton.disabled = true;
+    polarStatus.textContent = "Polar Flow используется только для профиля Белоусов Алексей.";
+    polarHint.textContent = "Для других учеников импортируйте файлы вручную или добавьте отдельный источник данных позже.";
+    return;
+  }
   connectPolarButton.textContent = connected ? "Polar подключен" : "Подключить Polar";
   connectPolarButton.classList.toggle("connected", connected);
   connectPolarButton.disabled = !configured || connected;
@@ -4978,7 +5936,17 @@ function updatePolarUi(status) {
   polarHint.textContent = "Новые тренировки будут проверяться автоматически, пока приложение открыто.";
 }
 
+function updatePolarUiForRole() {
+  if (!canUsePolar() && polarStatus && connectPolarButton && syncPolarButton) {
+    updatePolarUi({ configured: false, connected: false });
+  }
+}
+
 async function syncPolarWorkouts(options = {}) {
+  if (!canUsePolar()) {
+    if (!options.automatic) showToast("Polar Flow подключен только к профилю Белоусов Алексей");
+    return 0;
+  }
   const status = await refreshPolarStatus();
   if (!status?.connected) return 0;
 
@@ -5134,7 +6102,7 @@ function needsWorkoutEnrichment(workout) {
   return Boolean(
       workout &&
       workout.source &&
-      (!workout.intervalSignals || !workout.lapSignals || !workout.avgSpeed || !workout.maxSpeed || !workout.loadSource || workout.loadSource === "trimp" || !workout.workoutType)
+      (!workout.intervalSignals || !workout.lapSignals || workout.lapSignals?.hasTempoLaps || !workout.avgSpeed || !workout.maxSpeed || !workout.loadSource || workout.loadSource === "trimp" || !workout.workoutType)
   );
 }
 
@@ -5179,8 +6147,15 @@ function mergeWorkoutEnrichment(workout, parsed) {
   let changed = false;
   const enriched = { ...workout };
 
-  for (const key of ["avgSpeed", "maxSpeed", "intervalSignals", "lapSignals", "hrMax", "hrRest"]) {
+  for (const key of ["avgSpeed", "maxSpeed", "hrMax", "hrRest"]) {
     if (!enriched[key] && parsed[key]) {
+      enriched[key] = parsed[key];
+      changed = true;
+    }
+  }
+
+  for (const key of ["intervalSignals", "lapSignals"]) {
+    if (parsed[key] && JSON.stringify(enriched[key] || null) !== JSON.stringify(parsed[key])) {
       enriched[key] = parsed[key];
       changed = true;
     }
@@ -5237,6 +6212,22 @@ function fileNameFromSource(source) {
 }
 
 async function saveBackendState() {
+  syncActiveAthleteFromState();
+  state.athletes = sanitizeAthletesForIsolation(state.athletes);
+  const active = activeAthlete();
+  if (active) {
+    state.workouts = dedupeWorkouts(active.workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+    state.profile = normalizeAthleteProfile(active.profile, active.name);
+    state.plans = active.plans || {};
+    state.plansByWeek = active.plansByWeek || {};
+    state.activePlanSource = active.activePlanSource || "json";
+    state.selectedWeekStart = active.selectedWeekStart || currentWeekKey();
+  }
+  saveLegacyAthleteState();
+  saveJson(ATHLETES_KEY, state.athletes);
+  saveJson(ACTIVE_ATHLETE_KEY, state.activeAthleteId);
+  saveJson(CURRENT_ROLE_KEY, state.currentRole);
+  saveJson(COACH_PROFILE_KEY, state.coachProfile);
   try {
     await fetch(`${API_BASE_URL}/api/state`, {
       method: "POST",
@@ -5248,6 +6239,10 @@ async function saveBackendState() {
         plansByWeek: state.plansByWeek,
         activePlanSource: state.activePlanSource,
         selectedWeekStart: state.selectedWeekStart,
+        coachProfile: state.coachProfile,
+        athletes: state.athletes,
+        activeAthleteId: state.activeAthleteId,
+        currentRole: state.currentRole,
       }),
     });
   } catch {
@@ -5425,7 +6420,14 @@ function analyzeTcxLaps(laps) {
   const hasAutoDistanceOnly = distanceLaps.length >= Math.max(3, lapRows.length * 0.8) && manualLaps.length === 0;
   const hasManualStructure = manualLaps.length >= 2 && manualRatio >= 0.5;
   const hasIntervalLaps = hasManualStructure && manualLaps.length >= 6 && shortManualLaps.length >= 4 && speedRange >= 1.2;
-  const hasTempoLaps = hasManualStructure && !hasIntervalLaps;
+  const hasTempoLaps =
+    hasManualStructure &&
+    !hasIntervalLaps &&
+    manualLaps.length >= 3 &&
+    (
+      longManualLaps.length >= 2 ||
+      (longManualLaps.length >= 1 && speedRange >= 0.8)
+    );
 
   return {
     lapCount: lapRows.length,
@@ -5726,11 +6728,14 @@ function classifyWorkout(workout) {
   const maxSpeed = numberOrNull(workout.maxSpeed);
   const intervalSignals = workout.intervalSignals || null;
   const lapSignals = workout.lapSignals || null;
-  const maxHr = numberOrNull(workout.hrMax) || state.profile.maxHr || 185;
+  const maxHr = state.profile.maxHr || numberOrNull(workout.hrMax) || 185;
   const hrRatio = avgHr ? avgHr / maxHr : 0;
   const targetDistance = state.profile.targetDistance || "10k";
   const longMin = targetDistance === "42k" ? 100 : targetDistance === "21k" ? 85 : targetDistance === "10k" ? 70 : targetDistance === "5k" ? 60 : targetDistance === "3k" ? 55 : 45;
   const longKm = targetDistance === "42k" ? 24 : targetDistance === "21k" ? 18 : targetDistance === "10k" ? 14 : targetDistance === "5k" ? 11 : targetDistance === "3k" ? 9 : 7;
+  const isMarathonTarget = targetDistance === "42k";
+  const isLongByDuration = duration >= longMin;
+  const isLongByDistance = !isMarathonTarget && duration >= longMin * 0.95 && distance >= longKm * 1.1;
   const hasStrongSampleIntervals = hasStrongSampleIntervalPattern(intervalSignals, duration, longMin);
 
   if (matchesAny(notes, ["интервал", "interval", "повтор", "repeat", "vo2", "400", "800", "1000", "фартлек", "fartlek"])) {
@@ -5754,7 +6759,7 @@ function classifyWorkout(workout) {
   if (lapSignals?.hasTempoLaps) return "tempo";
   if (!lapSignals?.hasAutoDistanceOnly && hasStrongSampleIntervals) return "interval";
   if (rpe >= 8 && duration < longMin) return "interval";
-  if (duration >= longMin || distance >= longKm) return "long";
+  if (isLongByDuration || isLongByDistance) return "long";
   if (rpe >= 7 || hrRatio >= 0.83 || load >= duration * 2.2) return "tempo";
   if (duration <= 40 && (hrRatio && hrRatio < 0.72)) return "recovery";
   return "easy";
@@ -5824,8 +6829,19 @@ function formatActualWorkout(workout) {
     formatTrustedPace(workout),
     workout.avgHr ? `ср. пульс ${workout.avgHr}` : "",
     workout.load ? `TRIMP ${workout.load}` : "",
+    formatWorkoutFeedback(workout.feedback),
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+function formatWorkoutFeedback(feedback) {
+  if (!feedback) return "";
+  const label = workoutFeedbackLabel(feedback.effort);
+  const notes = String(feedback.notes || "").trim();
+  if (label && notes) return `ощущения: ${label}; ${notes}`;
+  if (label) return `ощущения: ${label}`;
+  if (notes) return `ощущения: ${notes}`;
+  return "";
 }
 
 function getPlanDayStatus(day) {
