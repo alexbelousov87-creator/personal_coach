@@ -256,6 +256,12 @@ textarea {
   color: #f8fbfc;
 }
 
+.context-hint {
+  color: #aebbc1;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .sidebar-logout {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.18);

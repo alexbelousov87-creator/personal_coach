@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260825-coaches-context">
+    <link rel="stylesheet" href="styles.css?v=20260826-coach-register">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -27,14 +27,29 @@
           </select>
         </label>
         <label data-coach-login>
+          Логин тренера
+          <input name="coachLogin" type="text" autocomplete="username" placeholder="coach">
+        </label>
+        <label data-coach-login>
           Пароль тренера
           <input name="password" type="password" autocomplete="current-password">
         </label>
+        <div class="auth-register-fields" data-coach-register hidden>
+          <label>
+            Имя тренера
+            <input name="coachName" type="text" autocomplete="name" placeholder="Например: Иван Петров">
+          </label>
+          <label data-registration-code hidden>
+            Код регистрации
+            <input name="registrationCode" type="text" autocomplete="one-time-code">
+          </label>
+        </div>
         <label data-student-login hidden>
           Код ученика
           <input name="accessCode" type="text" autocomplete="one-time-code" placeholder="ST-XXXXXXXX">
         </label>
-        <button class="primary-btn" type="submit">Войти</button>
+        <button class="primary-btn" id="authSubmit" type="submit">Войти</button>
+        <button class="ghost-btn auth-toggle" data-toggle-coach-register type="button" hidden>Зарегистрировать тренера</button>
         <p id="authStatus">Проверяем доступ...</p>
       </form>
     </section>
@@ -63,8 +78,6 @@
           <button class="nav-item" data-view="reference" type="button">Справка</button>
           <button class="nav-item" data-view="settings" type="button">Профиль</button>
         </nav>
-
-        <section class="role-panel" id="rolePanel"></section>
 
         <button class="ghost-btn sidebar-logout" id="logoutButton" type="button" hidden>Выйти</button>
 
@@ -769,6 +782,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260825-coaches-context"></script>
+    <script src="app.js?v=20260826-coach-register"></script>
   </body>
 </html>

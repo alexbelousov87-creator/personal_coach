@@ -1259,6 +1259,7 @@ function renderRolePanel() {
         : `<strong>${escapeHtml(athlete?.name || "Спортсмен")}</strong>`}
     </div>
     ${isCoachRole() ? `<button class="ghost-btn" data-add-student type="button">Добавить ученика</button>` : ""}
+    ${state.auth.enabled && isCoachRole() ? `<small class="context-hint">Новый тренер создается на экране входа: Выйти → Зарегистрировать тренера.</small>` : ""}
   `;
 }
 
