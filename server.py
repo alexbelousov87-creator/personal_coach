@@ -18,6 +18,7 @@ import socket
 import sqlite3
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parent
@@ -1844,10 +1845,13 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
     workouts = [polar_exercise_to_workout(item) for item in exercises]
     saved_tcx = []
     if POLAR_CONFIG.get("downloadTcx", True):
-        for exercise in exercises:
+        for index, exercise in enumerate(exercises):
             saved = download_polar_tcx(exercise, access_token)
             if saved:
                 saved_tcx.append(saved)
+                enrichment = parse_tcx_workout_enrichment(ROOT / "Workouts" / "TCX" / saved)
+                if enrichment and index < len(workouts):
+                    workouts[index] = merge_polar_workout_enrichment(workouts[index], enrichment)
 
     target_coach_id = coach_id or polar_sync_target_coach_id()
     target_athlete_id = athlete_id or polar_sync_target_athlete_id()
@@ -2005,6 +2009,215 @@ def workout_richness_score(workout):
 
 def is_generic_sport(sport):
     return str(sport or "").strip().lower() in {"", "other", "polar", "unknown"}
+
+
+
+
+def enrich_stored_polar_workouts_from_tcx():
+    coach_id = polar_sync_target_coach_id()
+    athlete_id = polar_sync_target_athlete_id()
+    athletes = telegram_athletes(coach_id)
+    target_index = next((index for index, athlete in enumerate(athletes) if str(athlete.get("id") or "") == str(athlete_id)), -1)
+    if target_index < 0:
+        return
+
+    target = dict(athletes[target_index])
+    workouts = target.get("workouts") if isinstance(target.get("workouts"), list) else []
+    if not workouts and athlete_id == DEFAULT_ATHLETE_ID:
+        workouts = load_state_value("workouts", [], coach_id=coach_id)
+    if not isinstance(workouts, list) or not workouts:
+        return
+
+    changed = False
+    enriched_workouts = []
+    for workout in workouts:
+        if not isinstance(workout, dict):
+            continue
+        polar_id = polar_exercise_id_from_source(workout.get("source"))
+        if not polar_id or workout_has_tcx_enrichment(workout):
+            enriched_workouts.append(workout)
+            continue
+        tcx_path = find_polar_tcx_file(polar_id)
+        enrichment = parse_tcx_workout_enrichment(tcx_path) if tcx_path else {}
+        if enrichment:
+            updated = merge_polar_workout_enrichment(workout, enrichment)
+            enriched_workouts.append(updated)
+            changed = changed or updated != workout
+        else:
+            enriched_workouts.append(workout)
+
+    if not changed:
+        return
+    merged_workouts = dedupe_backend_workouts(enriched_workouts)
+    merged_workouts.sort(key=workout_sort_timestamp, reverse=True)
+    target["workouts"] = merged_workouts
+    athletes[target_index] = target
+    save_telegram_athletes(athletes, coach_id=coach_id)
+    if athlete_id == load_state_value("activeAthleteId", "", coach_id=coach_id) or athlete_id == DEFAULT_ATHLETE_ID:
+        save_state_value("workouts", merged_workouts, coach_id=coach_id)
+    logging.info("Polar startup enrichment updated stored workouts for athlete %s", athlete_id)
+
+
+def workout_has_tcx_enrichment(workout):
+    if not isinstance(workout, dict):
+        return False
+    return bool(workout.get("lapSignals") and workout.get("paceSource") and workout.get("maxSpeed"))
+
+
+def find_polar_tcx_file(polar_id):
+    polar_id = str(polar_id or "").lower()
+    if not polar_id:
+        return None
+    folder = ROOT / "Workouts" / "TCX"
+    if not folder.exists():
+        return None
+    for path in folder.glob("Polar_*.TCX"):
+        file_id = polar_exercise_id_from_source(path.name)
+        if file_id == polar_id:
+            return path
+    return None
+
+
+def parse_tcx_workout_enrichment(path):
+    try:
+        if not path.exists() or not path.is_file():
+            return {}
+        root = ET.parse(path).getroot()
+    except Exception as exc:
+        logging.warning("Could not parse TCX enrichment from %s: %s", path, exc)
+        return {}
+
+    activities = xml_descendants(root, "Activity")
+    if not activities:
+        return {}
+    activity = activities[0]
+    laps = xml_descendants(activity, "Lap")
+    if not laps:
+        return {}
+
+    duration_sec = sum(number_or_none(xml_text(lap, "TotalTimeSeconds")) or 0 for lap in laps)
+    distance_m = sum(number_or_none(xml_text(lap, "DistanceMeters")) or 0 for lap in laps)
+    avg_hr_values = []
+    max_hr_values = []
+    avg_speed_values = []
+    max_speed_values = []
+    for lap in laps:
+        avg_hr = number_or_none(xml_text(xml_first(lap, "AverageHeartRateBpm"), "Value"))
+        max_hr = number_or_none(xml_text(xml_first(lap, "MaximumHeartRateBpm"), "Value"))
+        avg_speed = number_or_none(xml_text(lap, "AverageSpeed") or xml_text(lap, "AvgSpeed"))
+        max_speed = number_or_none(xml_text(lap, "MaximumSpeed"))
+        if avg_hr:
+            avg_hr_values.append(avg_hr)
+        if max_hr:
+            max_hr_values.append(max_hr)
+        if avg_speed:
+            avg_speed_values.append(speed_to_kph(avg_speed))
+        if max_speed:
+            max_speed_values.append(speed_to_kph(max_speed))
+
+    enrichment = {}
+    lap_signals = analyze_tcx_laps_backend(laps)
+    if lap_signals:
+        enrichment["lapSignals"] = lap_signals
+    if avg_speed_values:
+        enrichment["avgSpeed"] = round(sum(avg_speed_values) / len(avg_speed_values), 2)
+    if max_speed_values:
+        enrichment["maxSpeed"] = round(max(max_speed_values), 2)
+    if avg_hr_values:
+        enrichment["avgHr"] = int(round(sum(avg_hr_values) / len(avg_hr_values)))
+    if max_hr_values:
+        enrichment["hrMax"] = int(round(max(max_hr_values)))
+    if duration_sec and distance_m:
+        distance_km = distance_m / 1000
+        enrichment["paceMinPerKm"] = round((duration_sec / 60) / distance_km, 3) if distance_km else None
+        enrichment["paceSource"] = "tcx"
+    return {key: value for key, value in enrichment.items() if value not in (None, "", [], {})}
+
+
+def merge_polar_workout_enrichment(workout, enrichment):
+    if not isinstance(workout, dict) or not isinstance(enrichment, dict) or not enrichment:
+        return workout
+    updated = dict(workout)
+    for key in ["lapSignals", "avgSpeed", "maxSpeed", "hrMax", "paceMinPerKm", "paceSource"]:
+        if enrichment.get(key):
+            updated[key] = enrichment[key]
+    if enrichment.get("avgHr") and not updated.get("avgHr"):
+        updated["avgHr"] = enrichment["avgHr"]
+    return updated
+
+
+def analyze_tcx_laps_backend(laps):
+    lap_rows = []
+    for lap in laps:
+        duration = number_or_none(xml_text(lap, "TotalTimeSeconds")) or 0
+        distance = number_or_none(xml_text(lap, "DistanceMeters")) or 0
+        trigger = xml_text(lap, "TriggerMethod") or ""
+        speed = (distance / duration) * 3.6 if duration and distance else None
+        if duration > 0 or distance > 0:
+            lap_rows.append({"duration": duration, "distance": distance, "trigger": trigger, "speed": speed})
+    if not lap_rows:
+        return None
+
+    manual_laps = [lap for lap in lap_rows if lap["trigger"].lower() == "manual"]
+    distance_laps = [lap for lap in lap_rows if lap["trigger"].lower() == "distance"]
+    manual_ratio = len(manual_laps) / len(lap_rows)
+    speeds = [lap["speed"] for lap in lap_rows if lap.get("speed")]
+    speed_range = percentile_backend(speeds, 0.85) - percentile_backend(speeds, 0.2) if len(speeds) >= 2 else 0
+    short_manual_laps = [lap for lap in manual_laps if 45 <= lap["duration"] <= 420 and 150 <= lap["distance"] <= 1600]
+    long_manual_laps = [lap for lap in manual_laps if lap["duration"] >= 600 or lap["distance"] >= 2500]
+    has_auto_distance_only = len(distance_laps) >= max(3, len(lap_rows) * 0.8) and not manual_laps
+    has_manual_structure = len(manual_laps) >= 2 and manual_ratio >= 0.5
+    has_interval_laps = has_manual_structure and len(manual_laps) >= 6 and len(short_manual_laps) >= 4 and speed_range >= 1.2
+    has_tempo_laps = has_manual_structure and not has_interval_laps and len(manual_laps) >= 3 and (
+        len(long_manual_laps) >= 2 or (len(long_manual_laps) >= 1 and speed_range >= 0.8)
+    )
+    return {
+        "lapCount": len(lap_rows),
+        "manualCount": len(manual_laps),
+        "distanceCount": len(distance_laps),
+        "manualRatio": round(manual_ratio, 2),
+        "shortManualCount": len(short_manual_laps),
+        "longManualCount": len(long_manual_laps),
+        "speedRange": round(speed_range, 2),
+        "hasAutoDistanceOnly": has_auto_distance_only,
+        "hasIntervalLaps": has_interval_laps,
+        "hasTempoLaps": has_tempo_laps,
+    }
+
+
+def percentile_backend(values, percentile_value):
+    values = sorted(value for value in values if value is not None)
+    if not values:
+        return 0
+    index = (len(values) - 1) * percentile_value
+    lower = int(index)
+    upper = min(lower + 1, len(values) - 1)
+    fraction = index - lower
+    return values[lower] + (values[upper] - values[lower]) * fraction
+
+
+def speed_to_kph(speed):
+    return speed * 3.6 if speed <= 12 else speed
+
+
+def xml_descendants(element, local_name):
+    if element is None:
+        return []
+    return [node for node in element.iter() if xml_local_name(node.tag) == local_name]
+
+
+def xml_first(element, local_name):
+    descendants = xml_descendants(element, local_name)
+    return descendants[0] if descendants else None
+
+
+def xml_text(element, local_name):
+    node = xml_first(element, local_name)
+    return (node.text or "").strip() if node is not None and node.text else ""
+
+
+def xml_local_name(tag):
+    return str(tag).rsplit("}", 1)[-1]
 
 
 def polar_exercise_to_workout(exercise):
@@ -2560,6 +2773,7 @@ def load_api_key():
 def main():
     setup_logging()
     init_db()
+    enrich_stored_polar_workouts_from_tcx()
     start_notification_worker()
     start_polar_sync_worker()
     logging.info("Training Coach: http://%s:%s", HOST, PORT)

@@ -1238,7 +1238,6 @@ function renderRolePanel() {
     .join("");
 
   rolePanel.innerHTML = `
-    <div class="context-eyebrow">Контекст</div>
     <div class="role-field">
       <span>Роль</span>
       ${state.auth.enabled

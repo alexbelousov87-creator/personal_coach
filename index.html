@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260826-coach-register">
+    <link rel="stylesheet" href="styles.css?v=20260826-role-logout">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -70,6 +70,8 @@
 
         <section class="role-panel" id="rolePanel"></section>
 
+        <button class="ghost-btn sidebar-logout" id="logoutButton" type="button" hidden>Выйти</button>
+
         <nav class="nav">
           <button class="nav-item active" data-view="dashboard" type="button">Обзор</button>
           <button class="nav-item student-import-only" data-view="import" type="button">Импорт</button>
@@ -78,8 +80,6 @@
           <button class="nav-item" data-view="reference" type="button">Справка</button>
           <button class="nav-item" data-view="settings" type="button">Профиль</button>
         </nav>
-
-        <button class="ghost-btn sidebar-logout" id="logoutButton" type="button" hidden>Выйти</button>
 
         <div class="side-note">
           <span>Хранилище</span>
@@ -782,6 +782,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260826-coach-register"></script>
+    <script src="app.js?v=20260826-role-logout"></script>
   </body>
 </html>
