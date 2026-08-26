@@ -162,8 +162,10 @@ textarea {
 }
 
 .nav {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .nav-item,
@@ -176,16 +178,26 @@ textarea {
 }
 
 .nav-item {
+  flex: 0 0 auto;
   padding: 0 14px;
+  border: 1px solid transparent;
   background: transparent;
-  color: #d7e0e4;
-  text-align: left;
+  color: var(--muted);
+  font-weight: 750;
+  text-align: center;
 }
 
-.nav-item.active,
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(17, 106, 123, 0.22);
+  background: rgba(17, 106, 123, 0.07);
+  color: var(--ink);
+}
+
+.nav-item.active {
+  border-color: rgba(17, 106, 123, 0.38);
+  background: #116a7b;
   color: #ffffff;
+  box-shadow: 0 8px 22px rgba(17, 106, 123, 0.18);
 }
 
 .side-note {
@@ -284,7 +296,62 @@ textarea {
 
 .main {
   min-width: 0;
-  padding: 28px;
+  padding: 22px 28px 28px;
+}
+
+.top-nav-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: -22px -28px 24px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(244, 247, 249, 0.94);
+  backdrop-filter: blur(12px);
+}
+
+.top-nav {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.top-week-switcher {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 26px rgba(31, 48, 57, 0.06);
+}
+
+.top-week-switcher strong {
+  min-width: 230px;
+  padding: 0 8px;
+  color: var(--ink);
+}
+
+.top-week-switcher .ghost-btn {
+  min-height: 34px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.top-week-switcher .week-arrow {
+  width: 36px;
+  padding: 0;
+  font-size: 17px;
+}
+
+.current-week-btn.current {
+  border-color: rgba(17, 106, 123, 0.22);
+  background: rgba(17, 106, 123, 0.08);
+  color: #116a7b;
+  font-weight: 800;
 }
 
 .view {
@@ -2139,6 +2206,23 @@ textarea {
   text-align: center;
 }
 
+@media (max-width: 1180px) {
+  .top-nav-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .top-week-switcher {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .top-nav {
+    width: 100%;
+    padding-bottom: 2px;
+  }
+}
+
 @media (max-width: 1080px) {
   .metric-grid,
   .analysis-grid,
@@ -2202,21 +2286,46 @@ textarea {
     max-height: 100px;
   }
 
+  .top-nav-bar {
+    position: sticky;
+    gap: 10px;
+    margin: -16px -12px 18px;
+    padding: 10px 12px;
+  }
+
   .nav {
     display: flex;
-    gap: 8px;
-    margin: 0 -12px;
-    padding: 0 12px 4px;
+    gap: 6px;
+    margin: 0;
+    padding: 0 0 4px;
     overflow-x: auto;
     scrollbar-width: thin;
   }
 
   .nav-item {
     flex: 0 0 auto;
-    min-width: 86px;
+    min-width: 84px;
     min-height: 38px;
     padding: 0 12px;
     text-align: center;
+  }
+
+  .top-week-switcher {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) 38px auto;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .top-week-switcher strong {
+    min-width: 0;
+    align-self: center;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .top-week-switcher .ghost-btn {
+    min-height: 34px;
   }
 
   .role-panel {
@@ -2333,19 +2442,19 @@ textarea {
     justify-content: stretch;
   }
 
-  .week-switcher {
+  .week-switcher:not(.top-week-switcher) {
     flex-wrap: wrap;
     gap: 8px;
     margin: 0 0 14px;
   }
 
-  .week-switcher strong {
+  .week-switcher:not(.top-week-switcher) strong {
     order: -1;
     min-width: 100%;
     text-align: left;
   }
 
-  .week-switcher .ghost-btn {
+  .week-switcher:not(.top-week-switcher) .ghost-btn {
     flex: 1 1 auto;
   }
 

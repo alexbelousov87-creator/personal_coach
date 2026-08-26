@@ -3291,10 +3291,13 @@ function changeSelectedWeek(days) {
 function renderPlanWeekLabel() {
   const label = document.querySelector("#planWeekLabel");
   if (!label) return;
+  const currentButton = document.querySelector("#currentWeek");
+  const isCurrentWeek = selectedWeekKey() === currentWeekKey();
   const start = selectedWeekStartDate();
   const end = addDays(start, 6);
   const range = `${formatDate(start)} - ${formatDate(end)}`;
-  label.textContent = selectedWeekKey() === currentWeekKey() ? `${range} · текущая` : range;
+  label.textContent = isCurrentWeek ? `${range} · текущая` : range;
+  currentButton?.classList.toggle("current", isCurrentWeek);
 }
 
 function currentPlanStatusText(planState) {

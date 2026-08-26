@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260826-role-logout">
+    <link rel="stylesheet" href="styles.css?v=20260826-top-nav">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -72,15 +72,6 @@
 
         <button class="ghost-btn sidebar-logout" id="logoutButton" type="button" hidden>Выйти</button>
 
-        <nav class="nav">
-          <button class="nav-item active" data-view="dashboard" type="button">Обзор</button>
-          <button class="nav-item student-import-only" data-view="import" type="button">Импорт</button>
-          <button class="nav-item student-import-only" data-view="manual" type="button">Добавить</button>
-          <button class="nav-item" data-view="plan" type="button">План</button>
-          <button class="nav-item" data-view="reference" type="button">Справка</button>
-          <button class="nav-item" data-view="settings" type="button">Профиль</button>
-        </nav>
-
         <div class="side-note">
           <span>Хранилище</span>
           <strong id="storageCount">0 тренировок</strong>
@@ -88,6 +79,23 @@
       </aside>
 
       <main class="main">
+        <header class="top-nav-bar">
+          <nav class="nav top-nav" aria-label="Основное меню">
+            <button class="nav-item active" data-view="dashboard" type="button">Обзор</button>
+            <button class="nav-item" data-view="plan" type="button">План</button>
+            <button class="nav-item student-import-only" data-view="import" type="button">Импорт</button>
+            <button class="nav-item student-import-only" data-view="manual" type="button">Добавить</button>
+            <button class="nav-item" data-view="reference" type="button">Справка</button>
+            <button class="nav-item" data-view="settings" type="button">Профиль</button>
+          </nav>
+
+          <div class="week-switcher top-week-switcher" aria-label="Выбор недели">
+            <button class="ghost-btn week-arrow" id="previousWeek" type="button" aria-label="Предыдущая неделя">←</button>
+            <strong id="planWeekLabel">Неделя</strong>
+            <button class="ghost-btn week-arrow" id="nextWeek" type="button" aria-label="Следующая неделя">→</button>
+            <button class="ghost-btn current-week-btn" id="currentWeek" type="button">Текущая</button>
+          </div>
+        </header>
         <section class="view active" id="dashboard">
           <div class="page-head">
             <div>
@@ -260,13 +268,6 @@
             <span>Способ корректировки</span>
             <button class="ghost-btn coach-only" id="adjustLocalPlan" type="button">Локально</button>
             <button class="ghost-btn coach-only" id="adjustJsonPlan" type="button">Из JSON</button>
-          </div>
-
-          <div class="week-switcher">
-            <button class="ghost-btn" id="previousWeek" type="button">←</button>
-            <strong id="planWeekLabel">Неделя</strong>
-            <button class="ghost-btn" id="nextWeek" type="button">→</button>
-            <button class="ghost-btn" id="currentWeek" type="button">Текущая</button>
           </div>
 
           <div class="ai-status" id="aiStatus">Сейчас показан локальный план.</div>
@@ -782,6 +783,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260826-role-logout"></script>
+    <script src="app.js?v=20260826-top-nav"></script>
   </body>
 </html>
