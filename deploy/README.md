@@ -23,3 +23,11 @@ After that:
 
 Polar settings after HTTPS:
 - Redirect URI: `https://runflow.pro/api/polar/callback`
+
+Deploy product from prepared staging:
+
+```bash
+bash /home/aliveco/runflow/promote_staging_to_product.sh
+```
+
+The promote script copies code only, keeps `conf.json`, `data`, and `Workouts`, then restarts the systemd-managed product backend.
