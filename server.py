@@ -62,6 +62,11 @@ DEFAULT_CONFIG = {
         "scope": "accesslink.read_all",
         "downloadTcx": True,
         "timeoutSeconds": 45,
+        "backgroundSync": True,
+        "backgroundSyncIntervalSeconds": 600,
+        "backgroundSyncInitialDelaySeconds": 20,
+        "syncCoachId": "coach-belousov-aleksey",
+        "syncAthleteId": "athlete-belousov-aleksey",
     },
     "notifications": {
         "telegram": {
@@ -123,6 +128,7 @@ PORT = int(SERVER_CONFIG["port"])
 DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite3")).resolve()
 LOG_PATH = (ROOT / LOGGING_CONFIG.get("file", "data/logs/training_coach.log")).resolve()
 SESSIONS = {}
+POLAR_SYNC_LOCK = threading.Lock()
 ORIGINAL_GETADDRINFO = socket.getaddrinfo
 GETADDRINFO_LOCK = threading.Lock()
 SESSION_COOKIE = "training_coach_session"
@@ -1295,6 +1301,7 @@ def telegram_athletes(coach_id=DEFAULT_COACH_ID):
             "name": profile.get("name") or "Белоусов Алексей",
             "isSelf": True,
             "profile": profile,
+            "workouts": load_state_value("workouts", [], coach_id=coach_id),
             "plansByWeek": load_state_value("plansByWeek", {}, coach_id=coach_id),
             "activePlanSource": load_state_value("activePlanSource", "", coach_id=coach_id),
         }
@@ -1308,6 +1315,7 @@ def save_telegram_athletes(athletes, coach_id=DEFAULT_COACH_ID):
     active = next((athlete for athlete in athletes if athlete.get("id") == active_id), None)
     if active:
         save_state_value("profile", active.get("profile") or {}, coach_id=coach_id)
+        save_state_value("workouts", active.get("workouts") or [], coach_id=coach_id)
         save_state_value("plansByWeek", active.get("plansByWeek") or {}, coach_id=coach_id)
         save_state_value("activePlanSource", active.get("activePlanSource") or "", coach_id=coach_id)
 
@@ -1634,6 +1642,9 @@ def polar_status():
         "userId": token.get("x_user_id") or token.get("user_id") or "",
         "lastSync": load_state_value("polarLastSync", ""),
         "downloadTcx": bool(POLAR_CONFIG.get("downloadTcx", True)),
+        "backgroundSync": bool(POLAR_CONFIG.get("backgroundSync", True)),
+        "backgroundSyncIntervalSeconds": positive_int(POLAR_CONFIG.get("backgroundSyncIntervalSeconds"), 600, minimum=300),
+        "syncAthleteId": polar_sync_target_athlete_id(),
     }
 
 
@@ -1728,7 +1739,91 @@ def register_polar_user(token):
             raise
 
 
-def sync_polar_workouts():
+def start_polar_sync_worker():
+    if not POLAR_CONFIG.get("enabled", True) or not POLAR_CONFIG.get("backgroundSync", True):
+        logging.info("Polar background sync is disabled")
+        return
+    credentials = load_polar_credentials()
+    if not credentials.get("client_id") or not credentials.get("client_secret"):
+        logging.info("Polar background sync is not started: credentials are missing")
+        return
+    interval = positive_int(POLAR_CONFIG.get("backgroundSyncIntervalSeconds"), 600, minimum=300)
+    initial_delay = positive_int(POLAR_CONFIG.get("backgroundSyncInitialDelaySeconds"), 20, minimum=0)
+    thread = threading.Thread(
+        target=polar_sync_worker_loop,
+        args=(interval, initial_delay),
+        name="polar-sync",
+        daemon=True,
+    )
+    thread.start()
+    logging.info("Polar background sync enabled: every %s seconds", interval)
+
+
+def polar_sync_worker_loop(interval, initial_delay):
+    if initial_delay:
+        time.sleep(initial_delay)
+    waiting_for_connection_logged = False
+    while True:
+        try:
+            result = sync_polar_workouts(store=True, automatic=True)
+            waiting_for_connection_logged = False
+            if result.get("count") or result.get("added") or result.get("savedTcx"):
+                logging.info(
+                    "Polar background sync: received=%s added=%s duplicates=%s tcx=%s athlete=%s",
+                    result.get("count", 0),
+                    result.get("added", 0),
+                    result.get("duplicates", 0),
+                    len(result.get("savedTcx") or []),
+                    result.get("athleteId") or "",
+                )
+        except AppError as exc:
+            if exc.status == 401:
+                if not waiting_for_connection_logged:
+                    logging.info("Polar background sync is waiting for a connected Polar account")
+                waiting_for_connection_logged = True
+            else:
+                logging.warning("Polar background sync failed: %s", exc)
+        except Exception:
+            logging.exception("Unexpected Polar background sync error")
+        time.sleep(interval)
+
+
+def positive_int(value, fallback, minimum=1):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, parsed)
+
+
+def polar_sync_target_coach_id():
+    return str(POLAR_CONFIG.get("syncCoachId") or DEFAULT_COACH_ID).strip() or DEFAULT_COACH_ID
+
+
+def polar_sync_target_athlete_id():
+    return str(POLAR_CONFIG.get("syncAthleteId") or DEFAULT_ATHLETE_ID).strip() or DEFAULT_ATHLETE_ID
+
+
+def sync_polar_workouts(store=True, automatic=False, coach_id=None, athlete_id=None):
+    acquired = POLAR_SYNC_LOCK.acquire(blocking=not automatic)
+    if not acquired:
+        return {
+            "ok": True,
+            "count": 0,
+            "workouts": [],
+            "savedTcx": [],
+            "added": 0,
+            "duplicates": 0,
+            "skipped": True,
+            "message": "Polar sync is already running.",
+        }
+    try:
+        return sync_polar_workouts_locked(store=store, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
+    finally:
+        POLAR_SYNC_LOCK.release()
+
+
+def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athlete_id=None):
     credentials = load_polar_credentials()
     if not credentials.get("client_id") or not credentials.get("client_secret"):
         raise AppError("Polar credentials not found. Check polar.clientId and polar.clientSecret in conf.json.", 500)
@@ -1741,7 +1836,7 @@ def sync_polar_workouts():
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
-    logging.info("Polar sync started")
+    logging.info("Polar sync started%s", " automatically" if automatic else "")
     exercises = http_json("https://www.polaraccesslink.com/v3/exercises?zones=true", headers=headers)
     if not isinstance(exercises, list):
         exercises = []
@@ -1754,13 +1849,162 @@ def sync_polar_workouts():
             if saved:
                 saved_tcx.append(saved)
 
+    target_coach_id = coach_id or polar_sync_target_coach_id()
+    target_athlete_id = athlete_id or polar_sync_target_athlete_id()
+    store_result = {"added": 0, "duplicates": 0, "stored": 0}
+    if store:
+        store_result = merge_polar_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
+
     save_state_value("polarLastSync", int(time.time()))
     return {
         "ok": True,
         "count": len(workouts),
         "workouts": workouts,
         "savedTcx": saved_tcx,
+        "added": store_result.get("added", 0),
+        "duplicates": store_result.get("duplicates", 0),
+        "stored": store_result.get("stored", 0),
+        "coachId": target_coach_id,
+        "athleteId": target_athlete_id,
     }
+
+
+def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
+    if not isinstance(workouts, list):
+        return {"added": 0, "duplicates": 0, "stored": 0}
+    valid = [dict(workout) for workout in workouts if isinstance(workout, dict) and workout.get("date") and number_or_none(workout.get("durationMin"))]
+    if not valid:
+        return {"added": 0, "duplicates": 0, "stored": 0}
+
+    athletes = telegram_athletes(coach_id)
+    target_index = next((index for index, athlete in enumerate(athletes) if str(athlete.get("id") or "") == str(athlete_id)), -1)
+    if target_index < 0:
+        raise AppError(f"Polar target athlete not found: {athlete_id}", 500)
+
+    target = dict(athletes[target_index])
+    existing_workouts = target.get("workouts") if isinstance(target.get("workouts"), list) else []
+    if not existing_workouts and athlete_id == DEFAULT_ATHLETE_ID:
+        existing_workouts = load_state_value("workouts", [], coach_id=coach_id)
+
+    existing_keys = {workout_dedup_key(workout) for workout in existing_workouts if workout_dedup_key(workout)}
+    incoming_unique = dedupe_backend_workouts(valid)
+    duplicate_rows = len(valid) - len(incoming_unique)
+    incoming_existing_duplicates = sum(1 for workout in incoming_unique if workout_dedup_key(workout) in existing_keys)
+    added = len(incoming_unique) - incoming_existing_duplicates
+
+    merged_workouts = dedupe_backend_workouts([*existing_workouts, *incoming_unique])
+    merged_workouts.sort(key=workout_sort_timestamp, reverse=True)
+    target["workouts"] = merged_workouts
+    athletes[target_index] = target
+    save_telegram_athletes(athletes, coach_id=coach_id)
+
+    active_athlete_id = load_state_value("activeAthleteId", "", coach_id=coach_id)
+    if athlete_id == active_athlete_id or athlete_id == DEFAULT_ATHLETE_ID:
+        save_state_value("workouts", merged_workouts, coach_id=coach_id)
+
+    if added:
+        logging.info("Polar sync stored %s new workout(s) for athlete %s", added, athlete_id)
+    return {"added": added, "duplicates": duplicate_rows + incoming_existing_duplicates, "stored": len(merged_workouts)}
+
+
+def dedupe_backend_workouts(workouts):
+    by_key = {}
+    order = []
+    for workout in workouts:
+        if not isinstance(workout, dict):
+            continue
+        key = workout_dedup_key(workout)
+        if not key:
+            continue
+        if key not in by_key:
+            by_key[key] = workout
+            order.append(key)
+        else:
+            by_key[key] = merge_duplicate_backend_workouts(by_key[key], workout)
+    return [by_key[key] for key in order]
+
+
+def workout_dedup_key(workout):
+    polar_id = polar_exercise_id_from_source(workout.get("source") if isinstance(workout, dict) else "")
+    if polar_id:
+        return f"polar-{polar_id}"
+    date_key = workout_date_key(workout.get("date") if isinstance(workout, dict) else "")
+    sport_key = normalized_sport_key(workout.get("sport") if isinstance(workout, dict) else "")
+    duration_key = round(number_or_none(workout.get("durationMin") if isinstance(workout, dict) else 0) or 0)
+    distance_key = f"{round(number_or_none(workout.get('distanceKm') if isinstance(workout, dict) else 0) or 0, 2):.2f}"
+    return f"{date_key}-{sport_key}-{duration_key}-{distance_key}"
+
+
+def polar_exercise_id_from_source(source):
+    value = str(source or "").strip()
+    direct_match = re.match(r"^Polar:([^/\\]+)$", value, flags=re.IGNORECASE)
+    if direct_match:
+        return direct_match.group(1).lower()
+    file_name = Path(value).name
+    file_match = re.match(r"^Polar_.+_([A-Za-z0-9-]+)\.TCX$", file_name, flags=re.IGNORECASE)
+    return file_match.group(1).lower() if file_match else ""
+
+
+def workout_date_key(value):
+    text = str(value or "").replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed.isoformat()[:16]
+    except ValueError:
+        return text[:16]
+
+
+def normalized_sport_key(sport):
+    value = str(sport or "").strip().lower()
+    if "run" in value or "бег" in value:
+        return "running"
+    return value or "unknown"
+
+
+def workout_sort_timestamp(workout):
+    text = str(workout.get("date") if isinstance(workout, dict) else "").replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return 0
+
+
+def merge_duplicate_backend_workouts(a, b):
+    use_b = workout_richness_score(b) > workout_richness_score(a)
+    base = dict(b if use_b else a)
+    other = a if use_b else b
+    if is_generic_sport(base.get("sport")) and other.get("sport"):
+        base["sport"] = other.get("sport")
+    for key in ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "hrMax", "hrRest", "feedback", "workoutTypeOverride"]:
+        if not base.get(key) and other.get(key):
+            base[key] = other.get(key)
+    if not base.get("paceSource") and other.get("paceSource"):
+        base["paceMinPerKm"] = other.get("paceMinPerKm")
+        base["pace"] = other.get("pace")
+        base["paceSource"] = other.get("paceSource")
+    if (not base.get("loadSource") or base.get("loadSource") == "duration") and other.get("loadSource") and other.get("loadSource") != "duration":
+        base["load"] = other.get("load")
+        base["loadSource"] = other.get("loadSource")
+    return base
+
+
+def workout_richness_score(workout):
+    if not isinstance(workout, dict):
+        return 0
+    source = str(workout.get("source") or "").lower()
+    load_source = str(workout.get("loadSource") or "")
+    return sum([
+        4 if source.endswith(".csv") else 0,
+        3 if workout.get("intervalSignals") else 0,
+        2 if workout.get("lapSignals") else 0,
+        1 if workout.get("paceSource") else 0,
+        2 if load_source == "imported" else 0,
+        2 if load_source.startswith("trimp-") else 0,
+    ])
+
+
+def is_generic_sport(sport):
+    return str(sport or "").strip().lower() in {"", "other", "polar", "unknown"}
 
 
 def polar_exercise_to_workout(exercise):
@@ -2317,6 +2561,7 @@ def main():
     setup_logging()
     init_db()
     start_notification_worker()
+    start_polar_sync_worker()
     logging.info("Training Coach: http://%s:%s", HOST, PORT)
     logging.info("Config: %s", CONF_FILE)
     logging.info("Database: %s", DB_PATH)

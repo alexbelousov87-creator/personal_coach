@@ -6010,7 +6010,7 @@ function updatePolarUi(status) {
 
   const lastSync = status.lastSync ? new Date(Number(status.lastSync) * 1000).toLocaleString("ru-RU") : "еще не выполнялась";
   polarStatus.textContent = `Polar Flow подключен · последняя синхронизация: ${lastSync}`;
-  polarHint.textContent = "Новые тренировки будут проверяться автоматически, пока приложение открыто.";
+  polarHint.textContent = "Сервер автоматически проверяет новые тренировки, даже если приложение закрыто.";
 }
 
 function updatePolarUiForRole() {
@@ -6052,10 +6052,12 @@ async function syncPolarWorkouts(options = {}) {
       restoreCurrentPlanOrGenerate();
     }
 
+    const backendAccepted = Number(payload.added) || 0;
+    const accepted = Math.max(summary.accepted, backendAccepted);
     if (!options.automatic) {
-      showToast(`Polar Flow: получено ${payload.count || 0}, добавлено ${summary.accepted}, TCX ${payload.savedTcx?.length || 0}`);
+      showToast(`Polar Flow: получено ${payload.count || 0}, добавлено ${accepted}, TCX ${payload.savedTcx?.length || 0}`);
     }
-    return summary.accepted + folderAccepted;
+    return accepted + folderAccepted;
   } catch (error) {
     if (!options.automatic) {
       showToast(`Polar Flow: ${error.message}`);
