@@ -1850,8 +1850,10 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
             if saved:
                 saved_tcx.append(saved)
                 enrichment = parse_tcx_workout_enrichment(ROOT / "Workouts" / "TCX" / saved)
-                if enrichment and index < len(workouts):
-                    workouts[index] = merge_polar_workout_enrichment(workouts[index], enrichment)
+                if index < len(workouts):
+                    workouts[index]["tcxFile"] = saved
+                    if enrichment:
+                        workouts[index] = merge_polar_workout_enrichment(workouts[index], enrichment)
 
     target_coach_id = coach_id or polar_sync_target_coach_id()
     target_athlete_id = athlete_id or polar_sync_target_athlete_id()
@@ -2061,7 +2063,7 @@ def enrich_stored_polar_workouts_from_tcx():
 def workout_has_tcx_enrichment(workout):
     if not isinstance(workout, dict):
         return False
-    return bool(workout.get("lapSignals") and workout.get("paceSource") and workout.get("maxSpeed"))
+    return bool(workout.get("lapSignals") and workout.get("paceSource") and workout.get("maxSpeed") and workout.get("workoutType"))
 
 
 def find_polar_tcx_file(polar_id):
@@ -2115,7 +2117,7 @@ def parse_tcx_workout_enrichment(path):
         if max_speed:
             max_speed_values.append(speed_to_kph(max_speed))
 
-    enrichment = {}
+    enrichment = {"tcxFile": path.name}
     lap_signals = analyze_tcx_laps_backend(laps)
     if lap_signals:
         enrichment["lapSignals"] = lap_signals
@@ -2138,9 +2140,14 @@ def merge_polar_workout_enrichment(workout, enrichment):
     if not isinstance(workout, dict) or not isinstance(enrichment, dict) or not enrichment:
         return workout
     updated = dict(workout)
-    for key in ["lapSignals", "avgSpeed", "maxSpeed", "hrMax", "paceMinPerKm", "paceSource"]:
+    for key in ["lapSignals", "avgSpeed", "maxSpeed", "hrMax", "paceMinPerKm", "paceSource", "tcxFile"]:
         if enrichment.get(key):
             updated[key] = enrichment[key]
+    lap_signals = enrichment.get("lapSignals") if isinstance(enrichment.get("lapSignals"), dict) else {}
+    if lap_signals.get("hasIntervalLaps"):
+        updated["workoutType"] = "interval"
+    elif lap_signals.get("hasTempoLaps"):
+        updated["workoutType"] = "tempo"
     if enrichment.get("avgHr") and not updated.get("avgHr"):
         updated["avgHr"] = enrichment["avgHr"]
     return updated

@@ -366,6 +366,10 @@ async function init() {
 
 async function runStartupBackgroundSync() {
   try {
+    if (!canImportWorkouts()) {
+      await refreshPolarStatus();
+      return;
+    }
     setAiStatus("Идет фоновая проверка новых тренировок...", "");
     const folderAccepted = await syncWorkoutFolderChanges({ render: false });
     await refreshPolarStatus();
@@ -2003,9 +2007,19 @@ function buildImportDiagnostics() {
     sources: [...sourceCounts.entries()]
       .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count),
-    latestSources: [...new Set(workouts.map((workout) => fileNameFromSource(workout.source) || workout.source || "без источника"))].slice(0, 8),
+    latestSources: [...new Set(workouts.map(workoutSourceLabel))].slice(0, 8),
     suspicious: suspicious.slice(0, 8),
   };
+}
+
+function workoutSourceLabel(workout) {
+  const source = String(workout?.source || "").trim();
+  const tcxFile = String(workout?.tcxFile || "").trim();
+  if (source.toLowerCase().startsWith("polar:")) {
+    const dateLabel = workout?.date ? formatDate(workout.date) : "без даты";
+    return `Polar Flow · ${dateLabel}${tcxFile ? ` · ${tcxFile}` : ""}`;
+  }
+  return fileNameFromSource(source) || source || "без источника";
 }
 
 function importSourceKind(workout) {
@@ -2025,7 +2039,7 @@ function suspiciousWorkoutIssue(workout) {
   if (isRunningWorkout(workout) && pace && (pace < 2.3 || pace > 9)) {
     return {
       title,
-      details: `подозрительный темп ${formatPace(pace)}; источник: ${fileNameFromSource(workout.source) || workout.source || "не указан"}`,
+      details: `подозрительный темп ${formatPace(pace)}; источник: ${workoutSourceLabel(workout)}`,
     };
   }
   if (isRunningWorkout(workout) && Number(workout.durationMin) >= 20 && !Number(workout.distanceKm)) {
