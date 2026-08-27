@@ -148,6 +148,14 @@ STATE_KEYS = {
     "activeAthleteId",
     "currentRole",
 }
+ATHLETE_SCOPED_STATE_KEYS = {
+    "workouts",
+    "profile",
+    "plans",
+    "plansByWeek",
+    "activePlanSource",
+    "selectedWeekStart",
+}
 
 
 PLAN_SCHEMA = {
@@ -648,8 +656,11 @@ def save_state_from_coach(payload, coach_id=DEFAULT_COACH_ID):
         if isinstance(athlete, dict)
     }
 
-    safe_payload = dict(payload)
-    safe_payload.pop("workouts", None)
+    safe_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in ATHLETE_SCOPED_STATE_KEYS
+    }
 
     athletes = payload.get("athletes")
     if isinstance(athletes, list):
@@ -682,6 +693,8 @@ def save_state_from_coach(payload, coach_id=DEFAULT_COACH_ID):
         safe_payload["athletes"] = safe_athletes
 
     save_state(safe_payload, coach_id=coach_id)
+    if isinstance(safe_payload.get("athletes"), list):
+        mirror_legacy_state_from_primary_athlete(safe_payload["athletes"], coach_id=coach_id)
 
 
 def load_state_value(key, fallback, coach_id=DEFAULT_COACH_ID):
@@ -1312,13 +1325,25 @@ def telegram_athletes(coach_id=DEFAULT_COACH_ID):
 def save_telegram_athletes(athletes, coach_id=DEFAULT_COACH_ID):
     athletes = sanitize_athletes_for_storage(athletes)
     save_state_value("athletes", athletes, coach_id=coach_id)
-    active_id = load_state_value("activeAthleteId", "", coach_id=coach_id)
-    active = next((athlete for athlete in athletes if athlete.get("id") == active_id), None)
-    if active:
-        save_state_value("profile", active.get("profile") or {}, coach_id=coach_id)
-        save_state_value("workouts", active.get("workouts") or [], coach_id=coach_id)
-        save_state_value("plansByWeek", active.get("plansByWeek") or {}, coach_id=coach_id)
-        save_state_value("activePlanSource", active.get("activePlanSource") or "", coach_id=coach_id)
+    mirror_legacy_state_from_primary_athlete(athletes, coach_id=coach_id)
+
+
+def mirror_legacy_state_from_primary_athlete(athletes, coach_id=DEFAULT_COACH_ID):
+    if not isinstance(athletes, list) or not athletes:
+        return
+    primary = next((athlete for athlete in athletes if athlete.get("id") == DEFAULT_ATHLETE_ID), None)
+    if not primary and coach_id != DEFAULT_COACH_ID:
+        active_id = load_state_value("activeAthleteId", "", coach_id=coach_id)
+        primary = next((athlete for athlete in athletes if athlete.get("id") == active_id), None)
+    if not primary:
+        return
+    save_state_value("profile", primary.get("profile") or {}, coach_id=coach_id)
+    save_state_value("workouts", primary.get("workouts") or [], coach_id=coach_id)
+    save_state_value("plans", primary.get("plans") or {}, coach_id=coach_id)
+    save_state_value("plansByWeek", primary.get("plansByWeek") or {}, coach_id=coach_id)
+    save_state_value("activePlanSource", primary.get("activePlanSource") or "", coach_id=coach_id)
+    save_state_value("selectedWeekStart", primary.get("selectedWeekStart") or "", coach_id=coach_id)
+
 
 def athlete_chat_id(athlete):
     telegram = athlete.get("telegram") if isinstance(athlete, dict) and isinstance(athlete.get("telegram"), dict) else {}

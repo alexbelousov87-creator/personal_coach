@@ -588,6 +588,8 @@ async function logout() {
   } catch {
     // If the backend is down, reloading still clears the current UI state.
   }
+  state.auth = { ...state.auth, authenticated: false, role: "", athleteId: "" };
+  localStorage.removeItem(CURRENT_ROLE_KEY);
   window.location.reload();
 }
 
@@ -1227,7 +1229,7 @@ function renderAll() {
 function renderUserContext() {
   document.body.classList.toggle("role-coach", isCoachRole());
   document.body.classList.toggle("role-student", !isCoachRole());
-  if (logoutButton) logoutButton.hidden = !state.auth.enabled || !state.auth.authenticated;
+  if (logoutButton) logoutButton.hidden = true;
   renderRolePanel();
   renderStudentManager();
   updatePolarUiForRole();
@@ -1262,7 +1264,8 @@ function renderRolePanel() {
         : `<strong>${escapeHtml(athlete?.name || "Спортсмен")}</strong>`}
     </div>
     ${isCoachRole() ? `<button class="ghost-btn" data-add-student type="button">Добавить ученика</button>` : ""}
-    ${state.auth.enabled && isCoachRole() ? `<small class="context-hint">Новый тренер создается на экране входа: Выйти → Зарегистрировать тренера.</small>` : ""}
+    ${state.auth.enabled && state.auth.authenticated ? `<button class="ghost-btn role-logout" data-logout-inline type="button">Выйти</button>` : ""}
+    ${state.auth.enabled && isCoachRole() ? `<small class="context-hint">Новый тренер создается на экране входа после выхода.</small>` : ""}
   `;
 }
 
@@ -1326,6 +1329,10 @@ function handleRolePanelChange(event) {
 }
 
 function handleRolePanelClick(event) {
+  if (event.target.closest("[data-logout-inline]")) {
+    logout();
+    return;
+  }
   if (event.target.closest("[data-add-student]")) {
     openStudentModal();
   }
