@@ -1899,31 +1899,75 @@ function renderWorkouts() {
             <strong>${escapeHtml(workout.sport)} · ${escapeHtml(workoutTypeLabel(workout))}</strong>
             <span>${formatDate(workout.date)} · ${workout.durationMin} мин · ${formatDistance(workout.distanceKm)} · ${formatTrustedPace(workout)}</span>
             ${workout.workoutTypeOverride ? `<em>тип задан вручную</em>` : ""}
-            <label class="workout-type-control">
-              Тип
-              <select data-workout-type-select>
-                ${renderWorkoutTypeOptions(workout)}
-              </select>
-            </label>
-            <div class="workout-feedback">
-              <label>
-                Ощущения
-                <select data-feedback-effort>
-                  ${renderWorkoutFeedbackOptions(workout.feedback?.effort || "")}
-                </select>
-              </label>
-              <label>
-                Комментарий
-                <textarea data-feedback-notes rows="2" placeholder="Самочувствие, усталость, сон, что было легко или тяжело">${escapeHtml(workout.feedback?.notes || "")}</textarea>
-              </label>
-              <button class="ghost-btn" data-save-feedback type="button">Сохранить ощущения</button>
-            </div>
+            ${renderWorkoutTypeControl(workout)}
+            ${renderWorkoutFeedbackBlock(workout)}
           </div>
           <small>${workout.load} TRIMP</small>
         </article>
       `
     )
     .join("");
+}
+
+function canEditWorkoutDetails() {
+  return !isCoachRole();
+}
+
+function renderWorkoutTypeControl(workout) {
+  if (!canEditWorkoutDetails()) {
+    const source = workout.workoutTypeOverride ? "вручную" : "авто";
+    return `
+      <div class="workout-readonly-meta">
+        <span>Тип</span>
+        <strong>${escapeHtml(workoutTypeLabel(workout))}</strong>
+        <small>${source}</small>
+      </div>
+    `;
+  }
+
+  return `
+    <label class="workout-type-control">
+      Тип
+      <select data-workout-type-select>
+        ${renderWorkoutTypeOptions(workout)}
+      </select>
+    </label>
+  `;
+}
+
+function renderWorkoutFeedbackBlock(workout) {
+  if (canEditWorkoutDetails()) {
+    return `
+      <div class="workout-feedback">
+        <label>
+          Ощущения
+          <select data-feedback-effort>
+            ${renderWorkoutFeedbackOptions(workout.feedback?.effort || "")}
+          </select>
+        </label>
+        <label>
+          Комментарий
+          <textarea data-feedback-notes rows="2" placeholder="Самочувствие, усталость, сон, что было легко или тяжело">${escapeHtml(workout.feedback?.notes || "")}</textarea>
+        </label>
+        <button class="ghost-btn" data-save-feedback type="button">Сохранить ощущения</button>
+      </div>
+    `;
+  }
+
+  const effort = workoutFeedbackLabel(workout.feedback?.effort) || "не указано";
+  const notes = String(workout.feedback?.notes || "").trim();
+  return `
+    <div class="workout-feedback workout-feedback-readonly">
+      <div>
+        <span>Ощущения</span>
+        <strong>${escapeHtml(effort)}</strong>
+      </div>
+      <div>
+        <span>Комментарий</span>
+        <p>${notes ? escapeHtml(notes) : "не указан"}</p>
+      </div>
+    </div>
+  `;
 }
 
 function renderWorkoutFeedbackOptions(value) {
@@ -2078,6 +2122,7 @@ function renderWorkoutTypeOptions(workout) {
 }
 
 function handleWorkoutTypeChange(event) {
+  if (!canEditWorkoutDetails()) return;
   const select = event.target.closest("[data-workout-type-select]");
   if (!select) return;
   const row = select.closest(".workout-row");
@@ -2098,6 +2143,7 @@ function handleWorkoutTypeChange(event) {
 }
 
 function handleWorkoutFeedbackClick(event) {
+  if (!canEditWorkoutDetails()) return;
   const button = event.target.closest("[data-save-feedback]");
   if (!button) return;
   const row = button.closest(".workout-row");

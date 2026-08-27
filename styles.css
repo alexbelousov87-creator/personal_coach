@@ -838,6 +838,48 @@ p {
   font-size: 12px;
 }
 
+.workout-readonly-meta,
+.workout-feedback-readonly {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.workout-readonly-meta {
+  display: inline-grid;
+  gap: 3px;
+  min-width: 150px;
+}
+
+.workout-readonly-meta span,
+.workout-feedback-readonly span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workout-readonly-meta strong,
+.workout-feedback-readonly strong {
+  font-size: 13px;
+}
+
+.workout-readonly-meta small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workout-feedback-readonly {
+  grid-template-columns: minmax(130px, 0.35fr) minmax(220px, 1fr);
+  align-items: start;
+}
+
+.workout-feedback-readonly p {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
 .workout-row span,
 .workout-row small {
   color: var(--muted);
