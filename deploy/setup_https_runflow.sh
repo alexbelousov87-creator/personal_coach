@@ -9,6 +9,43 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+ensure_staging_conf() {
+  if [ -f "$BASE/staging/conf.json" ]; then
+    return
+  fi
+  cat > "$BASE/staging/conf.json" <<'JSON'
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8766
+  },
+  "storage": {
+    "databasePath": "data/training_coach.sqlite3"
+  },
+  "logging": {
+    "file": "data/logs/training_coach.log",
+    "level": "INFO",
+    "maxBytes": 1048576,
+    "backupCount": 5
+  },
+  "polar": {
+    "enabled": false,
+    "autoSync": false
+  },
+  "notifications": {
+    "telegram": {
+      "enabled": false,
+      "pollCommands": false
+    }
+  },
+  "auth": {
+    "enabled": false
+  }
+}
+JSON
+  chown aliveco:aliveco "$BASE/staging/conf.json"
+}
+
 resolved=$(getent ahostsv4 "$DOMAIN" | awk '{print $1; exit}' || true)
 if [ "$resolved" != "$IP" ]; then
   echo "DNS is not ready: $DOMAIN resolves to '${resolved:-nothing}', expected $IP" >&2
@@ -34,6 +71,7 @@ systemctl daemon-reload
 
 # Stop legacy user-launched processes if present.
 su - aliveco -c '/home/aliveco/runflow/stop_all.sh' || true
+ensure_staging_conf
 
 systemctl enable --now runflow-product.service runflow-staging.service
 
