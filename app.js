@@ -78,6 +78,9 @@ function defaultAthleteProfile(name = "") {
     raceName: "",
     photoDataUrl: "",
     planningMode: "normal",
+    subjectiveFatigue: 3,
+    subjectiveFatigueNotes: "",
+    subjectiveFatigueUpdatedAt: "",
     maxHr: 185,
     restHr: 50,
     hrZoneMode: "default",
@@ -92,8 +95,37 @@ function normalizeAthleteProfile(profile, fallbackName = "") {
   if (!normalized.name) normalized.name = fallbackName;
   if (!normalized.athleteLevel) normalized.athleteLevel = "intermediate";
   if (!normalized.ageGroup) normalized.ageGroup = "adult";
+  normalized.subjectiveFatigue = normalizeSubjectiveFatigueValue(normalized.subjectiveFatigue);
+  normalized.subjectiveFatigueNotes = String(normalized.subjectiveFatigueNotes || "").trim();
+  normalized.subjectiveFatigueUpdatedAt = String(normalized.subjectiveFatigueUpdatedAt || "").trim();
   return normalized;
 }
+
+function normalizeSubjectiveFatigueValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 3;
+  return Math.min(5, Math.max(1, Math.round(number)));
+}
+
+function subjectiveFatigueLabel(value = state.profile.subjectiveFatigue) {
+  const fatigue = normalizeSubjectiveFatigueValue(value);
+  return {
+    1: "1/5 · свежий",
+    2: "2/5 · легкая усталость",
+    3: "3/5 · нормально",
+    4: "4/5 · уставший",
+    5: "5/5 · сильная усталость",
+  }[fatigue];
+}
+
+function subjectiveFatigueGuidance(value = state.profile.subjectiveFatigue) {
+  const fatigue = normalizeSubjectiveFatigueValue(value);
+  if (fatigue <= 2) return "Субъективно запас хороший: не снижать неделю только из-за высокого TRIMP, если нет других признаков перегруза.";
+  if (fatigue === 3) return "Состояние обычное: сопоставлять TRIMP, динамику нагрузки и качество последних тренировок.";
+  if (fatigue === 4) return "Есть заметная усталость: осторожнее с ростом объема и количеством тяжелых стимулов.";
+  return "Сильная усталость: приоритет восстановления, снизить объем и интенсивность до нормализации состояния.";
+}
+
 
 function athleteSnapshotFromCurrent(base = {}) {
   const profile = normalizeAthleteProfile(state.profile, base.name || "Белоусов Алексей");
@@ -701,6 +733,9 @@ function wireForms() {
       raceName: data.get("raceName").trim(),
       photoDataUrl: state.profile.photoDataUrl || "",
       planningMode: data.get("planningMode") || "normal",
+      subjectiveFatigue: canEditSubjectiveState() ? normalizeSubjectiveFatigueValue(data.get("subjectiveFatigue")) : normalizeSubjectiveFatigueValue(state.profile.subjectiveFatigue),
+      subjectiveFatigueNotes: canEditSubjectiveState() ? String(data.get("subjectiveFatigueNotes") || "").trim() : String(state.profile.subjectiveFatigueNotes || "").trim(),
+      subjectiveFatigueUpdatedAt: canEditSubjectiveState() ? new Date().toISOString() : String(state.profile.subjectiveFatigueUpdatedAt || ""),
       maxHr: Number(data.get("maxHr")) || 185,
       restHr: Number(data.get("restHr")) || 50,
       hrZoneMode: hrZones.mode,
@@ -1642,6 +1677,8 @@ function renderGoalCenter() {
     ? `${race.name} · ${race.distanceLabel} · ${race.dateLabel}${race.daysUntil >= 0 ? ` · через ${race.daysUntil} дн.` : " · старт уже прошел"}`
     : "гонка не указана";
   const constraints = state.profile.constraints?.trim() || "без дополнительных ограничений";
+  const fatigue = subjectiveFatigueLabel();
+  const fatigueNotes = String(state.profile.subjectiveFatigueNotes || "").trim();
 
   container.innerHTML = `
     <div class="panel-head compact-head">
@@ -1665,6 +1702,11 @@ function renderGoalCenter() {
         <span class="section-label">Режим</span>
         <strong>${escapeHtml(planningMode.label)} · ${Number(state.profile.daysPerWeek) || 4} дн./нед. · ${escapeHtml(readiness.label)}</strong>
         <p>${escapeHtml(planningMode.description)} ${escapeHtml(constraints)}</p>
+      </div>
+      <div>
+        <span class="section-label">Состояние</span>
+        <strong>${escapeHtml(fatigue)}</strong>
+        <p>${escapeHtml(fatigueNotes || subjectiveFatigueGuidance())}</p>
       </div>
       <div>
         <span class="section-label">Спортсмен</span>
@@ -1910,6 +1952,10 @@ function renderWorkouts() {
 }
 
 function canEditWorkoutDetails() {
+  return !isCoachRole();
+}
+
+function canEditSubjectiveState() {
   return !isCoachRole();
 }
 
@@ -5022,8 +5068,12 @@ function planDay(date, focus, title, details, load) {
 }
 
 function getReadiness() {
+  const subjectiveFatigue = normalizeSubjectiveFatigueValue(state.profile.subjectiveFatigue);
   if (state.workouts.length < 2) {
     return { level: "bad", label: "низкая", reason: "мало истории" };
+  }
+  if (subjectiveFatigue >= 5) {
+    return { level: "bad", label: "восстановление", reason: "спортсмен отметил сильную усталость" };
   }
 
   const week = sumLoad(7);
@@ -5031,12 +5081,18 @@ function getReadiness() {
   const last = state.workouts[0];
   const hoursSinceLast = (Date.now() - new Date(last.date).getTime()) / 36e5;
 
-  if (hoursSinceLast < 18 && last.load > 80) {
+  if (hoursSinceLast < 18 && last.load > 80 && subjectiveFatigue >= 3) {
     return { level: "bad", label: "восстановление", reason: "недавно была заметная нагрузка" };
   }
 
+  if (subjectiveFatigue >= 4) {
+    return { level: "warn", label: "осторожно", reason: "спортсмен отметил заметную усталость" };
+  }
+
   if (previousWeek > 0 && week > previousWeek * 1.45) {
-    return { level: "warn", label: "осторожно", reason: "нагрузка выросла быстрее обычного" };
+    return subjectiveFatigue <= 2
+      ? { level: "warn", label: "рабочая нагрузка", reason: "TRIMP вырос, но субъективно запас сохраняется" }
+      : { level: "warn", label: "осторожно", reason: "нагрузка выросла быстрее обычного" };
   }
 
   if (hoursSinceLast > 72 || week < 120) {
@@ -5088,13 +5144,14 @@ function buildAiRequest() {
 
   return {
     system:
-      "Ты опытный тренер по видам спорта на выносливость. Составляй календарный недельный микроцикл с понедельника по воскресенье от текущего тренировочного состояния спортсмена, цели и этапа подготовки preparationPhase. Не используй жесткое расписание по дням: сначала выбери нужные тренировочные стимулы недели, затем разложи их по календарю с учетом восстановления, гонки, предыдущих тренировок и нагрузки. Базовая развивающая неделя обычно содержит 1 скоростной/интервальный стимул, 1 темповый/пороговый/специфический стимул, 1 длительную, легкие кроссы и восстановление, но это ориентир, а не обязанность. Можешь заменять классические интервалы или темпо на бег в гору, фартлек, прогрессивный бег, марафонский темп, strides, силовую, прыжковые упражнения, ОФП/мобилити или кросс-тренинг, если это лучше соответствует состоянию и цели. Если отклоняешься от базовой структуры, объясни причину в rationale. Не перестраховывайся легкими днями по умолчанию, но при признаках перегруза снижай объем/интенсивность и убирай лишние тяжелые стимулы. Не давай медицинских диагнозов и не назначай лечение.",
+      "Ты опытный тренер по видам спорта на выносливость. Составляй календарный недельный микроцикл с понедельника по воскресенье от текущего тренировочного состояния спортсмена, цели и этапа подготовки preparationPhase. Не используй жесткое расписание по дням: сначала выбери нужные тренировочные стимулы недели, затем разложи их по календарю с учетом восстановления, гонки, предыдущих тренировок и нагрузки. Базовая развивающая неделя обычно содержит 1 скоростной/интервальный стимул, 1 темповый/пороговый/специфический стимул, 1 длительную, легкие кроссы и восстановление, но это ориентир, а не обязанность. Можешь заменять классические интервалы или темпо на бег в гору, фартлек, прогрессивный бег, марафонский темп, strides, силовую, прыжковые упражнения, ОФП/мобилити или кросс-тренинг, если это лучше соответствует состоянию и цели. Если отклоняешься от базовой структуры, объясни причину в rationale. Не перестраховывайся легкими днями по умолчанию, но при признаках перегруза снижай объем/интенсивность и убирай лишние тяжелые стимулы. Субъективная усталость спортсмена важна: если она низкая у подготовленного спортсмена, высокий TRIMP сам по себе не означает обязательную разгрузочную неделю; если усталость высокая, снижай нагрузку даже при умеренном TRIMP. Не давай медицинских диагнозов и не назначай лечение.",
     context: {
       profile: profileForPlanning(),
       race: getRaceSummary(),
       preparationPhase: getPreparationPhase(),
       planningMode,
       readiness: getReadiness(),
+      subjectiveState: subjectiveStateForPlanning(),
       trainingState: buildTrainingState(),
       load7Days: sumLoad(7),
       load28Days: sumLoad(28),
@@ -5111,6 +5168,7 @@ function buildAiRequest() {
         "Планируй неделю как набор тренировочных стимулов, а не как фиксированный шаблон вторник-суббота-воскресенье.",
         `Режим генерации: ${planningMode.label}. ${planningMode.loadGuidance}. ${planningMode.qualityGuidance}. ${planningMode.progressionGuidance}.`,
         `Уровень спортсмена: ${athleteLevel.label}. ${athleteLevel.qualityGuidance}. ${athleteLevel.volumeGuidance}.`,
+        `Субъективная усталость: ${subjectiveFatigueLabel()}. ${subjectiveFatigueGuidance()}`,
         `Возрастная группа: ${ageGroup.label}. ${ageGroup.guidance}`,
         "В нормальной развивающей неделе обычно нужны: один скоростной/интервальный стимул, один темповый/пороговый/специфический стимул, одна длительная, легкие кроссы и восстановление.",
         "Длительная чаще всего удобна в воскресенье, но ее можно перенести, если это лучше по гонке, восстановлению или фактически выполненным тренировкам.",
@@ -5370,6 +5428,18 @@ function buildPlanningWeek() {
   };
 }
 
+function subjectiveStateForPlanning() {
+  const fatigue = normalizeSubjectiveFatigueValue(state.profile.subjectiveFatigue);
+  return {
+    fatigueScale: "1-5, где 1 = свежий, 5 = сильная усталость",
+    fatigue,
+    fatigueLabel: subjectiveFatigueLabel(fatigue),
+    fatigueGuidance: subjectiveFatigueGuidance(fatigue),
+    notes: String(state.profile.subjectiveFatigueNotes || "").trim(),
+    updatedAt: String(state.profile.subjectiveFatigueUpdatedAt || ""),
+  };
+}
+
 function profileForPlanning() {
   const { photoDataUrl, ...profile } = state.profile || {};
   const athleteLevel = getAthleteLevelProfile();
@@ -5381,6 +5451,8 @@ function profileForPlanning() {
     athleteLevelGuidance: `${athleteLevel.qualityGuidance}. ${athleteLevel.volumeGuidance}`,
     ageGroupLabel: ageGroup.label,
     ageGroupGuidance: ageGroup.guidance,
+    subjectiveFatigueLabel: subjectiveFatigueLabel(),
+    subjectiveFatigueGuidance: subjectiveFatigueGuidance(),
     heartRateZones: heartRateZonesBpm(state.profile).map((zone) => ({
       zone: zone.label,
       range: zone.range,
@@ -5874,6 +5946,17 @@ function hydrateProfile() {
   settingsForm.elements.ageGroup.value = state.profile.ageGroup || "adult";
   settingsForm.elements.prepPhase.value = state.profile.prepPhase || "auto";
   settingsForm.elements.planningMode.value = state.profile.planningMode || "normal";
+  if (settingsForm.elements.subjectiveFatigue) {
+    settingsForm.elements.subjectiveFatigue.value = normalizeSubjectiveFatigueValue(state.profile.subjectiveFatigue);
+    settingsForm.elements.subjectiveFatigue.disabled = !canEditSubjectiveState();
+  }
+  if (settingsForm.elements.subjectiveFatigueNotes) {
+    settingsForm.elements.subjectiveFatigueNotes.value = state.profile.subjectiveFatigueNotes || "";
+    settingsForm.elements.subjectiveFatigueNotes.readOnly = !canEditSubjectiveState();
+  }
+  document.querySelector("#subjectiveFatigueHint")?.replaceChildren(document.createTextNode(canEditSubjectiveState()
+    ? "Оценка попадет в контекст ИИ и поможет не снижать нагрузку только по TRIMP, если запас хороший."
+    : "Оценку состояния заполняет ученик; тренер видит ее как входной сигнал для плана."));
   settingsForm.elements.raceDate.value = state.profile.raceDate || "";
   settingsForm.elements.raceDistance.value = state.profile.raceDistance || "";
   settingsForm.elements.raceName.value = state.profile.raceName || "";

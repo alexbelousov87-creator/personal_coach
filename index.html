@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260827-readonly-workouts">
+    <link rel="stylesheet" href="styles.css?v=20260827-subjective-fatigue">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -599,6 +599,21 @@
               </select>
             </label>
             <label>
+              Усталость сейчас
+              <select name="subjectiveFatigue">
+                <option value="1">1/5 · свежий</option>
+                <option value="2">2/5 · легкая усталость</option>
+                <option value="3">3/5 · нормально</option>
+                <option value="4">4/5 · уставший</option>
+                <option value="5">5/5 · сильная усталость</option>
+              </select>
+            </label>
+            <label class="wide subjective-state-field">
+              Комментарий к состоянию
+              <textarea name="subjectiveFatigueNotes" rows="2" placeholder="Например: ноги свежие, сон хороший, высокий объем переносится нормально"></textarea>
+              <small id="subjectiveFatigueHint"></small>
+            </label>
+            <label>
               Максимальный пульс
               <input name="maxHr" type="number" min="120" max="230" step="1" value="185">
             </label>
@@ -783,6 +798,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260827-readonly-workouts"></script>
+    <script src="app.js?v=20260827-subjective-fatigue"></script>
   </body>
 </html>

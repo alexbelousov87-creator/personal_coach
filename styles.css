@@ -1220,6 +1220,23 @@ p {
   color: var(--bad);
 }
 
+.subjective-state-field {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.subjective-state-field small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.subjective-state-field textarea[readonly] {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
 .hr-zone-settings {
   display: grid;
   gap: 12px;
