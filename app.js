@@ -6153,6 +6153,7 @@ function updateIntegrationsUi(status = {}) {
     connectText: "Подключить Polar",
     connectedText: "Polar подключен",
     disabledText: "Polar не настроен",
+    disabledHint: "Добавьте данные приложения Polar в секцию polar файла conf.json.",
     notConnectedText: "Polar Flow не подключен",
     notConnectedHint: "Нажмите «Подключить Polar» и разрешите доступ к тренировкам.",
     connectedHint: "Сервер автоматически проверяет новые тренировки этого ученика, даже если приложение закрыто.",
@@ -6165,6 +6166,7 @@ function updateIntegrationsUi(status = {}) {
     connectText: "Подключить Strava",
     connectedText: "Strava подключена",
     disabledText: "Strava не настроена",
+    disabledHint: "Добавьте integrations.strava.enabled=true, clientId, clientSecret и redirectUri в conf.json. Redirect URI для сервера: https://runflow.pro/api/strava/callback.",
     notConnectedText: "Strava не подключена",
     notConnectedHint: "После настройки clientId/clientSecret ученик сможет подключить Strava одной кнопкой.",
     connectedHint: "Можно подтягивать новые активности Strava в профиль ученика.",
@@ -6177,6 +6179,7 @@ function updateIntegrationsUi(status = {}) {
     connectText: "",
     connectedText: "Runalyze token сохранен",
     disabledText: "Runalyze выключен",
+    disabledHint: "Включите integrations.runalyze.enabled в conf.json, если хотите сохранить token ученика.",
     notConnectedText: "Runalyze token не указан",
     notConnectedHint: "Сохраните Personal API token. Чтение активностей включим после подтверждения доступного read API.",
     connectedHint: "Token сохранен для этого ученика. Полный импорт активностей Runalyze будет включен отдельно.",
@@ -6215,7 +6218,11 @@ function updateProviderUi(provider, status, refs, unavailable = false) {
   }
   if (!enabled || !configured) {
     if (refs.statusEl) refs.statusEl.textContent = !enabled ? "Источник выключен" : refs.disabledText;
-    if (refs.connectButton) refs.connectButton.disabled = true;
+    if (refs.hintEl) refs.hintEl.textContent = refs.disabledHint || refs.notConnectedHint || "Источник нужно настроить в conf.json.";
+    if (refs.connectButton) {
+      refs.connectButton.textContent = !enabled ? "Источник выключен" : "Нужны настройки";
+      refs.connectButton.disabled = true;
+    }
     if (refs.syncButton) refs.syncButton.disabled = true;
     return;
   }
