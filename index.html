@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260828-strava-status">
+    <link rel="stylesheet" href="styles.css?v=20260828-hide-strava">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -185,17 +185,6 @@
                 <div class="button-row">
                   <button class="ghost-btn" id="connectPolar" type="button">Подключить Polar</button>
                   <button class="primary-btn" id="syncPolar" type="button">Синхронизировать</button>
-                </div>
-              </article>
-              <article class="integration-card" data-provider-card="strava">
-                <div>
-                  <h3>Strava</h3>
-                  <span id="stravaStatus">Не настроена</span>
-                </div>
-                <p id="stravaHint">Удобный общий источник для Garmin, COROS, Suunto, Polar и других сервисов, если они синхронизируются со Strava.</p>
-                <div class="button-row">
-                  <button class="ghost-btn" id="connectStrava" type="button">Подключить Strava</button>
-                  <button class="primary-btn" id="syncStrava" type="button">Синхронизировать</button>
                 </div>
               </article>
               <article class="integration-card" data-provider-card="runalyze">
@@ -827,6 +816,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260828-strava-status"></script>
+    <script src="app.js?v=20260828-hide-strava"></script>
   </body>
 </html>

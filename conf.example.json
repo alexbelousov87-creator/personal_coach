@@ -39,17 +39,6 @@
     "backgroundSyncInitialDelaySeconds": 20
   },
   "integrations": {
-    "strava": {
-      "enabled": false,
-      "clientId": "",
-      "clientSecret": "",
-      "clientIdEnv": "STRAVA_CLIENT_ID",
-      "clientSecretEnv": "STRAVA_CLIENT_SECRET",
-      "redirectUri": "http://127.0.0.1:8765/api/strava/callback",
-      "scope": "read,activity:read_all",
-      "timeoutSeconds": 45,
-      "backgroundSync": true
-    },
     "runalyze": {
       "enabled": true,
       "timeoutSeconds": 45

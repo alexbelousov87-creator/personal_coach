@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
     "integrations": {
         "strava": {
             "enabled": False,
+            "visible": False,
             "clientId": "",
             "clientSecret": "",
             "clientIdEnv": "STRAVA_CLIENT_ID",
@@ -1787,6 +1788,13 @@ def integration_config(provider):
     return deep_merge(json.loads(json.dumps(default)), config) if isinstance(config, dict) else default
 
 
+def integration_visible(provider):
+    config = integration_config(provider)
+    if provider == "strava":
+        return bool(config.get("visible", False))
+    return config.get("visible") is not False
+
+
 def current_athlete_target(session):
     coach_id = (session or {}).get("coach_id") or DEFAULT_COACH_ID
     athlete_id = (session or {}).get("athlete_id") or ""
@@ -1861,13 +1869,15 @@ def integrations_status(session):
     coach_id, athlete_id = current_athlete_target(session)
     if auth_enabled() and (session or {}).get("role") != "student":
         return {"providers": {}, "message": "Integrations are managed by athletes."}
+    providers = {
+        "polar": polar_status(coach_id=coach_id, athlete_id=athlete_id),
+        "runalyze": runalyze_status(coach_id=coach_id, athlete_id=athlete_id),
+    }
+    if integration_visible("strava"):
+        providers["strava"] = strava_status(coach_id=coach_id, athlete_id=athlete_id)
     return {
         "athleteId": athlete_id,
-        "providers": {
-            "polar": polar_status(coach_id=coach_id, athlete_id=athlete_id),
-            "strava": strava_status(coach_id=coach_id, athlete_id=athlete_id),
-            "runalyze": runalyze_status(coach_id=coach_id, athlete_id=athlete_id),
-        },
+        "providers": providers,
     }
 
 
