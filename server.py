@@ -69,7 +69,23 @@ DEFAULT_CONFIG = {
         "syncCoachId": "coach-belousov-aleksey",
         "syncAthleteId": "athlete-belousov-aleksey",
     },
-    "notifications": {
+    "integrations": {
+        "strava": {
+            "enabled": False,
+            "clientId": "",
+            "clientSecret": "",
+            "clientIdEnv": "STRAVA_CLIENT_ID",
+            "clientSecretEnv": "STRAVA_CLIENT_SECRET",
+            "redirectUri": "",
+            "scope": "read,activity:read_all",
+            "timeoutSeconds": 45,
+            "backgroundSync": True,
+        },
+        "runalyze": {
+            "enabled": True,
+            "timeoutSeconds": 45,
+        },
+    },    "notifications": {
         "telegram": {
             "enabled": False,
             "botToken": "",
@@ -122,6 +138,7 @@ STORAGE_CONFIG = CONFIG.get("storage", DEFAULT_CONFIG["storage"])
 LOGGING_CONFIG = CONFIG.get("logging", DEFAULT_CONFIG["logging"])
 LLM_CONFIG = CONFIG.get("llm", CONFIG.get("openai", DEFAULT_CONFIG["llm"]))
 POLAR_CONFIG = CONFIG.get("polar", DEFAULT_CONFIG["polar"])
+INTEGRATIONS_CONFIG = CONFIG.get("integrations", DEFAULT_CONFIG["integrations"])
 NOTIFICATIONS_CONFIG = CONFIG.get("notifications", DEFAULT_CONFIG["notifications"])
 AUTH_CONFIG = CONFIG.get("auth", DEFAULT_CONFIG["auth"])
 HOST = SERVER_CONFIG["host"]
@@ -263,11 +280,14 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"files": list_workout_files()})
             return
-        if clean_path == "/api/polar/status":
-            session = self.require_polar_session()
+        if clean_path in {"/api/polar/status", "/api/integrations/status"}:
+            session = self.require_session()
             if session is None:
                 return
-            self.send_json(polar_status())
+            if clean_path == "/api/polar/status":
+                self.send_json(polar_status_for_session(session))
+            else:
+                self.send_json(integrations_status(session))
             return
         if clean_path == "/api/notifications/status":
             session = self.require_session()
@@ -275,23 +295,43 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 return
             self.send_json(notification_status(session))
             return
-        if clean_path == "/api/polar/connect":
-            session = self.require_polar_session()
+        if clean_path in {"/api/polar/connect", "/api/integrations/polar/connect"}:
+            session = self.require_integration_session()
             if session is None:
                 return
             try:
-                self.redirect(polar_authorization_url())
+                self.redirect(polar_authorization_url(session))
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            return
+        if clean_path == "/api/integrations/strava/connect":
+            session = self.require_integration_session()
+            if session is None:
+                return
+            try:
+                self.redirect(strava_authorization_url(session))
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
             return
         if clean_path == "/api/polar/callback":
             try:
                 payload = handle_polar_callback(self.path)
-                self.send_html(polar_callback_html(payload))
+                self.send_html(integration_callback_html("Polar", payload))
             except AppError as exc:
-                self.send_html(polar_callback_html({"ok": False, "error": str(exc)}), status=exc.status)
+                self.send_html(integration_callback_html("Polar", {"ok": False, "error": str(exc)}), status=exc.status)
             except Exception as exc:
-                self.send_html(polar_callback_html({"ok": False, "error": f"unexpected server error: {exc}"}), status=500)
+                logging.exception("Unexpected Polar callback error")
+                self.send_html(integration_callback_html("Polar", {"ok": False, "error": f"unexpected server error: {exc}"}), status=500)
+            return
+        if clean_path == "/api/strava/callback":
+            try:
+                payload = handle_strava_callback(self.path)
+                self.send_html(integration_callback_html("Strava", payload))
+            except AppError as exc:
+                self.send_html(integration_callback_html("Strava", {"ok": False, "error": str(exc)}), status=exc.status)
+            except Exception as exc:
+                logging.exception("Unexpected Strava callback error")
+                self.send_html(integration_callback_html("Strava", {"ok": False, "error": f"unexpected server error: {exc}"}), status=500)
             return
         self.serve_static()
 
@@ -343,16 +383,49 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
-        if clean_path == "/api/polar/sync":
-            session = self.require_polar_session()
+        if clean_path in {"/api/polar/sync", "/api/integrations/sync"}:
+            session = self.require_integration_session()
             if session is None:
                 return
             try:
-                result = sync_polar_workouts()
+                payload = self.read_json() if clean_path == "/api/integrations/sync" else {}
+                provider = str(payload.get("provider") or "polar").strip().lower()
+                result = sync_integration_for_session(session, provider)
                 self.send_json(result)
             except AppError as exc:
                 self.send_json({"error": str(exc)}, status=exc.status)
             except Exception as exc:
+                logging.exception("Unexpected integration sync error")
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/integrations/runalyze/token":
+            session = self.require_integration_session()
+            if session is None:
+                return
+            try:
+                payload = self.read_json()
+                result = save_runalyze_token_for_session(session, str(payload.get("token") or ""))
+                self.send_json(result)
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                logging.exception("Unexpected Runalyze token error")
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/integrations/disconnect":
+            session = self.require_integration_session()
+            if session is None:
+                return
+            try:
+                payload = self.read_json()
+                result = disconnect_integration_for_session(session, str(payload.get("provider") or ""))
+                self.send_json(result)
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                logging.exception("Unexpected integration disconnect error")
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
@@ -486,12 +559,15 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
         return session
 
     def require_polar_session(self):
+        return self.require_integration_session()
+
+    def require_integration_session(self):
         session = self.require_session()
         if session is None:
             return None
         if not auth_enabled():
             return session
-        if not is_self_student_session(session):
+        if session.get("role") != "student" or not session.get("athlete_id"):
             self.send_json({"error": "forbidden"}, status=403)
             return None
         return session
@@ -655,6 +731,11 @@ def save_state_from_coach(payload, coach_id=DEFAULT_COACH_ID):
         for athlete in current_athletes
         if isinstance(athlete, dict)
     }
+    integrations_by_id = {
+        str(athlete.get("id") or ""): athlete.get("integrations") or {}
+        for athlete in current_athletes
+        if isinstance(athlete, dict)
+    }
 
     safe_payload = {
         key: value
@@ -689,6 +770,7 @@ def save_state_from_coach(payload, coach_id=DEFAULT_COACH_ID):
                 continue
             safe_athlete = dict(athlete)
             safe_athlete["workouts"] = workouts_by_id.get(athlete_id, [])
+            safe_athlete["integrations"] = integrations_by_id.get(athlete_id, {})
             safe_athletes.append(safe_athlete)
         safe_payload["athletes"] = safe_athletes
 
@@ -1084,6 +1166,44 @@ def athlete_by_access_code(code):
     return None, ""
 
 
+
+def integration_public_summary(provider, integration):
+    if not isinstance(integration, dict):
+        return {"provider": provider, "connected": False, "lastSync": ""}
+    token = integration.get("token")
+    connected = bool(token.get("access_token")) if isinstance(token, dict) else bool(token)
+    return {
+        "provider": provider,
+        "connected": connected,
+        "lastSync": integration.get("lastSync", ""),
+        "connectedAt": integration.get("connectedAt", ""),
+        "externalUserId": str(integration.get("externalUserId") or ""),
+    }
+
+
+def sanitize_athlete_for_client(athlete):
+    if not isinstance(athlete, dict):
+        return athlete
+    safe = dict(athlete)
+    integrations = athlete.get("integrations") if isinstance(athlete.get("integrations"), dict) else {}
+    safe["integrations"] = {
+        provider: integration_public_summary(provider, integration)
+        for provider, integration in integrations.items()
+        if provider in {"polar", "strava", "runalyze"}
+    }
+    return safe
+
+
+def sanitize_state_for_client(state):
+    if not isinstance(state, dict):
+        return state
+    safe = dict(state)
+    athletes = safe.get("athletes")
+    if isinstance(athletes, list):
+        safe["athletes"] = [sanitize_athlete_for_client(athlete) for athlete in athletes if isinstance(athlete, dict)]
+    return safe
+
+
 def state_for_session(session):
     coach_id = session.get("coach_id") or DEFAULT_COACH_ID
     state = load_state(coach_id)
@@ -1092,7 +1212,7 @@ def state_for_session(session):
         state["coachProfile"] = {"id": coach_id, "name": coach.get("name") or "Тренер"}
     if not auth_enabled() or session.get("role") == "coach":
         state["currentRole"] = "coach"
-        return state
+        return sanitize_state_for_client(state)
 
     athlete_id = session.get("athlete_id", "")
     athletes = state.get("athletes") if isinstance(state.get("athletes"), list) else []
@@ -1119,7 +1239,7 @@ def state_for_session(session):
         "activePlanSource": athlete.get("activePlanSource") or "json",
         "selectedWeekStart": athlete.get("selectedWeekStart") or "",
         "coachProfile": state.get("coachProfile") or ({"id": coach_id, "name": coach.get("name") or "Тренер"} if coach else {}),
-        "athletes": [athlete],
+        "athletes": [sanitize_athlete_for_client(athlete)],
         "activeAthleteId": athlete_id,
         "currentRole": "student",
     }
@@ -1658,20 +1778,142 @@ def is_today_plan_command(text, telegram):
     return bool(normalized) and all(char in {"?", " "} for char in normalized)
 
 
-def polar_status():
-    credentials = load_polar_credentials()
-    token = load_state_value("polarToken", {})
+
+def integration_config(provider):
+    if provider == "polar":
+        return POLAR_CONFIG
+    config = INTEGRATIONS_CONFIG.get(provider, {})
+    default = DEFAULT_CONFIG.get("integrations", {}).get(provider, {})
+    return deep_merge(json.loads(json.dumps(default)), config) if isinstance(config, dict) else default
+
+
+def current_athlete_target(session):
+    coach_id = (session or {}).get("coach_id") or DEFAULT_COACH_ID
+    athlete_id = (session or {}).get("athlete_id") or ""
+    if not auth_enabled() and not athlete_id:
+        athlete_id = load_state_value("activeAthleteId", "", coach_id=coach_id) or DEFAULT_ATHLETE_ID
+    return coach_id, athlete_id
+
+
+def athlete_record(coach_id, athlete_id):
+    athletes = telegram_athletes(coach_id)
+    for athlete in athletes:
+        if isinstance(athlete, dict) and str(athlete.get("id") or "") == str(athlete_id or ""):
+            return athlete
+    return None
+
+
+def update_athlete_record(coach_id, athlete_id, updater):
+    athletes = telegram_athletes(coach_id)
+    for index, athlete in enumerate(athletes):
+        if not isinstance(athlete, dict) or str(athlete.get("id") or "") != str(athlete_id or ""):
+            continue
+        updated = dict(athlete)
+        updater(updated)
+        updated["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+        athletes[index] = updated
+        save_telegram_athletes(athletes, coach_id=coach_id)
+        return updated
+    raise AppError("Athlete not found.", 404)
+
+
+def athlete_integrations(athlete):
+    integrations = athlete.get("integrations") if isinstance(athlete, dict) and isinstance(athlete.get("integrations"), dict) else {}
+    return dict(integrations)
+
+
+def athlete_integration(coach_id, athlete_id, provider):
+    athlete = athlete_record(coach_id, athlete_id)
+    integration = athlete_integrations(athlete).get(provider, {}) if athlete else {}
+    if provider == "polar" and not integration and str(coach_id) == DEFAULT_COACH_ID and str(athlete_id) == DEFAULT_ATHLETE_ID:
+        legacy = load_state_value("polarToken", {})
+        if isinstance(legacy, dict) and legacy.get("access_token"):
+            integration = {"token": legacy, "connectedAt": legacy.get("connected_at") or int(time.time())}
+    return integration if isinstance(integration, dict) else {}
+
+
+def save_athlete_integration(coach_id, athlete_id, provider, integration):
+    def apply(athlete):
+        integrations = athlete_integrations(athlete)
+        if integration:
+            integrations[provider] = integration
+        else:
+            integrations.pop(provider, None)
+        athlete["integrations"] = integrations
+    return update_athlete_record(coach_id, athlete_id, apply)
+
+
+def public_integration_status(provider, integration, configured=True, enabled=True):
+    integration = integration if isinstance(integration, dict) else {}
+    token = integration.get("token") if isinstance(integration.get("token"), dict) else {}
+    athlete = token.get("athlete") if isinstance(token.get("athlete"), dict) else {}
     return {
-        "enabled": bool(POLAR_CONFIG.get("enabled", True)),
-        "configured": bool(credentials.get("client_id") and credentials.get("client_secret")),
-        "connected": bool(token.get("access_token")),
-        "userId": token.get("x_user_id") or token.get("user_id") or "",
-        "lastSync": load_state_value("polarLastSync", ""),
-        "downloadTcx": bool(POLAR_CONFIG.get("downloadTcx", True)),
-        "backgroundSync": bool(POLAR_CONFIG.get("backgroundSync", True)),
-        "backgroundSyncIntervalSeconds": positive_int(POLAR_CONFIG.get("backgroundSyncIntervalSeconds"), 600, minimum=300),
-        "syncAthleteId": polar_sync_target_athlete_id(),
+        "provider": provider,
+        "enabled": bool(enabled),
+        "configured": bool(configured),
+        "connected": bool(token.get("access_token") or integration.get("token")),
+        "lastSync": integration.get("lastSync", ""),
+        "userId": token.get("x_user_id") or token.get("user_id") or athlete.get("id") or integration.get("externalUserId", ""),
     }
+
+
+def integrations_status(session):
+    coach_id, athlete_id = current_athlete_target(session)
+    if auth_enabled() and (session or {}).get("role") != "student":
+        return {"providers": {}, "message": "Integrations are managed by athletes."}
+    return {
+        "athleteId": athlete_id,
+        "providers": {
+            "polar": polar_status(coach_id=coach_id, athlete_id=athlete_id),
+            "strava": strava_status(coach_id=coach_id, athlete_id=athlete_id),
+            "runalyze": runalyze_status(coach_id=coach_id, athlete_id=athlete_id),
+        },
+    }
+
+
+def save_oauth_state(provider, state, coach_id, athlete_id):
+    states = load_state_value("integrationOAuthStates", {}, coach_id="")
+    if not isinstance(states, dict):
+        states = {}
+    states[state] = {"provider": provider, "coachId": coach_id, "athleteId": athlete_id, "createdAt": int(time.time())}
+    save_state_value("integrationOAuthStates", states, coach_id="")
+
+
+def pop_oauth_state(provider, state):
+    states = load_state_value("integrationOAuthStates", {}, coach_id="")
+    if not isinstance(states, dict):
+        states = {}
+    payload = states.pop(state, None)
+    save_state_value("integrationOAuthStates", states, coach_id="")
+    if not payload or payload.get("provider") != provider:
+        raise AppError(f"{provider} OAuth state mismatch", 400)
+    if int(time.time()) - int(payload.get("createdAt") or 0) > 1800:
+        raise AppError(f"{provider} OAuth state expired", 400)
+    return payload
+def polar_status(coach_id=DEFAULT_COACH_ID, athlete_id=DEFAULT_ATHLETE_ID):
+    credentials = load_polar_credentials()
+    config = integration_config("polar")
+    integration = athlete_integration(coach_id, athlete_id, "polar")
+    status = public_integration_status(
+        "polar",
+        integration,
+        configured=bool(credentials.get("client_id") and credentials.get("client_secret")),
+        enabled=bool(config.get("enabled", True)),
+    )
+    status.update(
+        {
+            "downloadTcx": bool(config.get("downloadTcx", True)),
+            "backgroundSync": bool(config.get("backgroundSync", True)),
+            "backgroundSyncIntervalSeconds": positive_int(config.get("backgroundSyncIntervalSeconds"), 600, minimum=300),
+            "syncAthleteId": athlete_id,
+        }
+    )
+    return status
+
+
+def polar_status_for_session(session):
+    coach_id, athlete_id = current_athlete_target(session)
+    return polar_status(coach_id=coach_id, athlete_id=athlete_id)
 
 
 def load_polar_credentials():
@@ -1683,13 +1925,16 @@ def load_polar_credentials():
     }
 
 
-def polar_authorization_url():
+def polar_authorization_url(session=None):
     credentials = load_polar_credentials()
     if not credentials.get("client_id") or not credentials.get("client_secret"):
         raise AppError("Polar credentials not found. Add polar.clientId and polar.clientSecret to conf.json.", 500)
 
+    coach_id, athlete_id = current_athlete_target(session)
+    if not athlete_id:
+        raise AppError("Athlete is not selected.", 400)
     state = secrets.token_urlsafe(24)
-    save_state_value("polarOAuthState", {"state": state, "createdAt": int(time.time())})
+    save_oauth_state("polar", state, coach_id, athlete_id)
     params = {
         "response_type": "code",
         "client_id": credentials["client_id"],
@@ -1710,16 +1955,19 @@ def handle_polar_callback(path):
     if not code:
         raise AppError("Polar callback has no authorization code", 400)
 
-    stored_state = load_state_value("polarOAuthState", {})
-    if stored_state.get("state") and state != stored_state.get("state"):
-        raise AppError("Polar OAuth state mismatch", 400)
-
+    oauth_state = pop_oauth_state("polar", state)
     token = exchange_polar_code(code)
     token["connected_at"] = int(time.time())
-    save_state_value("polarToken", token)
-    register_polar_user(token)
-    save_state_value("polarOAuthState", {})
-    return {"ok": True, "userId": token.get("x_user_id") or token.get("user_id") or ""}
+    register_polar_user(token, oauth_state["coachId"], oauth_state["athleteId"])
+    integration = {
+        "token": token,
+        "connectedAt": token.get("connected_at"),
+        "externalUserId": token.get("x_user_id") or token.get("user_id") or token.get("polar_user_id") or "",
+    }
+    save_athlete_integration(oauth_state["coachId"], oauth_state["athleteId"], "polar", integration)
+    if oauth_state["coachId"] == DEFAULT_COACH_ID and oauth_state["athleteId"] == DEFAULT_ATHLETE_ID:
+        save_state_value("polarToken", token)
+    return {"ok": True, "userId": integration.get("externalUserId") or ""}
 
 
 def first_query_value(query, key):
@@ -1744,11 +1992,14 @@ def exchange_polar_code(code):
     return http_json("https://polarremote.com/v2/oauth2/token", method="POST", data=data, headers=headers)
 
 
-def register_polar_user(token):
+def register_polar_user(token, coach_id=None, athlete_id=None):
     access_token = token.get("access_token")
     if not access_token:
         return
-    member_id = f"training-coach-{token.get('x_user_id') or token.get('user_id') or 'local'}"
+    member_target = athlete_id or token.get("x_user_id") or token.get("user_id") or "local"
+    member_source = f"{coach_id or DEFAULT_COACH_ID}:{member_target}"
+    member_hash = hashlib.sha1(member_source.encode("utf-8")).hexdigest()[:20]
+    member_id = f"runflow-{member_hash}"
     body = json.dumps({"member-id": member_id}).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -1759,60 +2010,216 @@ def register_polar_user(token):
         result = http_json("https://www.polaraccesslink.com/v3/users", method="POST", data=body, headers=headers)
         if result.get("polar-user-id"):
             token["polar_user_id"] = result.get("polar-user-id")
-            save_state_value("polarToken", token)
     except AppError as exc:
         if exc.status not in {409, 400}:
             raise
 
 
-def start_polar_sync_worker():
-    if not POLAR_CONFIG.get("enabled", True) or not POLAR_CONFIG.get("backgroundSync", True):
-        logging.info("Polar background sync is disabled")
-        return
-    credentials = load_polar_credentials()
+def load_strava_credentials():
+    config = integration_config("strava")
+    return {
+        "enabled": bool(config.get("enabled", False)),
+        "client_id": config.get("clientId") or os.environ.get(config.get("clientIdEnv", "STRAVA_CLIENT_ID"), ""),
+        "client_secret": config.get("clientSecret") or os.environ.get(config.get("clientSecretEnv", "STRAVA_CLIENT_SECRET"), ""),
+        "redirect_uri": config.get("redirectUri") or f"http://{HOST}:{PORT}/api/strava/callback",
+        "scope": config.get("scope", "read,activity:read_all"),
+    }
+
+
+def strava_status(coach_id=DEFAULT_COACH_ID, athlete_id=DEFAULT_ATHLETE_ID):
+    credentials = load_strava_credentials()
+    integration = athlete_integration(coach_id, athlete_id, "strava")
+    return public_integration_status(
+        "strava",
+        integration,
+        configured=bool(credentials.get("client_id") and credentials.get("client_secret")),
+        enabled=bool(credentials.get("enabled")),
+    )
+
+
+def strava_authorization_url(session=None):
+    credentials = load_strava_credentials()
+    if not credentials.get("enabled"):
+        raise AppError("Strava integration is disabled. Enable integrations.strava in conf.json.", 400)
     if not credentials.get("client_id") or not credentials.get("client_secret"):
-        logging.info("Polar background sync is not started: credentials are missing")
+        raise AppError("Strava credentials not found. Add integrations.strava.clientId and clientSecret to conf.json.", 500)
+    coach_id, athlete_id = current_athlete_target(session)
+    if not athlete_id:
+        raise AppError("Athlete is not selected.", 400)
+    state = secrets.token_urlsafe(24)
+    save_oauth_state("strava", state, coach_id, athlete_id)
+    params = {
+        "client_id": credentials["client_id"],
+        "redirect_uri": credentials["redirect_uri"],
+        "response_type": "code",
+        "approval_prompt": "auto",
+        "scope": credentials["scope"],
+        "state": state,
+    }
+    return "https://www.strava.com/oauth/authorize?" + urlencode(params)
+
+
+def handle_strava_callback(path):
+    query = parse_qs(urlparse(path).query)
+    if query.get("error"):
+        raise AppError(f"Strava authorization error: {query['error'][0]}", 400)
+    code = first_query_value(query, "code")
+    state = first_query_value(query, "state")
+    if not code:
+        raise AppError("Strava callback has no authorization code", 400)
+    oauth_state = pop_oauth_state("strava", state)
+    token = exchange_strava_code(code)
+    integration = {
+        "token": token,
+        "connectedAt": int(time.time()),
+        "externalUserId": str((token.get("athlete") or {}).get("id") or ""),
+    }
+    save_athlete_integration(oauth_state["coachId"], oauth_state["athleteId"], "strava", integration)
+    return {"ok": True, "userId": integration.get("externalUserId") or ""}
+
+
+def exchange_strava_code(code):
+    credentials = load_strava_credentials()
+    data = urlencode(
+        {
+            "client_id": credentials["client_id"],
+            "client_secret": credentials["client_secret"],
+            "code": code,
+            "grant_type": "authorization_code",
+        }
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+    return http_json("https://www.strava.com/oauth/token", method="POST", data=data, headers=headers)
+
+
+def runalyze_status(coach_id=DEFAULT_COACH_ID, athlete_id=DEFAULT_ATHLETE_ID):
+    config = integration_config("runalyze")
+    integration = athlete_integration(coach_id, athlete_id, "runalyze")
+    return public_integration_status("runalyze", integration, configured=True, enabled=bool(config.get("enabled", True)))
+
+
+def save_runalyze_token_for_session(session, token):
+    token = str(token or "").strip()
+    if not token:
+        raise AppError("Runalyze token is empty.", 400)
+    coach_id, athlete_id = current_athlete_target(session)
+    integration = {"token": token, "connectedAt": int(time.time()), "lastSync": ""}
+    save_athlete_integration(coach_id, athlete_id, "runalyze", integration)
+    return {"ok": True, "status": runalyze_status(coach_id=coach_id, athlete_id=athlete_id)}
+
+
+def disconnect_integration_for_session(session, provider):
+    provider = str(provider or "").strip().lower()
+    if provider not in {"polar", "strava", "runalyze"}:
+        raise AppError("Unknown integration provider.", 400)
+    coach_id, athlete_id = current_athlete_target(session)
+    save_athlete_integration(coach_id, athlete_id, provider, {})
+    return {"ok": True, "provider": provider}
+
+
+def sync_integration_for_session(session, provider):
+    provider = str(provider or "polar").strip().lower()
+    coach_id, athlete_id = current_athlete_target(session)
+    if provider == "polar":
+        return sync_polar_workouts(coach_id=coach_id, athlete_id=athlete_id)
+    if provider == "strava":
+        return sync_strava_workouts(coach_id=coach_id, athlete_id=athlete_id)
+    if provider == "runalyze":
+        raise AppError("Runalyze read sync is not enabled yet. Store the token now; activity import needs a readable Runalyze API endpoint.", 400)
+    raise AppError("Unknown integration provider.", 400)
+
+def start_polar_sync_worker():
+    polar_enabled = POLAR_CONFIG.get("enabled", True) and POLAR_CONFIG.get("backgroundSync", True)
+    strava_enabled = bool(load_strava_credentials().get("enabled")) and bool(integration_config("strava").get("backgroundSync", True))
+    if not polar_enabled and not strava_enabled:
+        logging.info("Background integration sync is disabled")
         return
     interval = positive_int(POLAR_CONFIG.get("backgroundSyncIntervalSeconds"), 600, minimum=300)
     initial_delay = positive_int(POLAR_CONFIG.get("backgroundSyncInitialDelaySeconds"), 20, minimum=0)
     thread = threading.Thread(
-        target=polar_sync_worker_loop,
+        target=integration_sync_worker_loop,
         args=(interval, initial_delay),
-        name="polar-sync",
+        name="integration-sync",
         daemon=True,
     )
     thread.start()
-    logging.info("Polar background sync enabled: every %s seconds", interval)
+    logging.info("Background integration sync enabled: every %s seconds", interval)
 
 
-def polar_sync_worker_loop(interval, initial_delay):
+def integration_sync_worker_loop(interval, initial_delay):
     if initial_delay:
         time.sleep(initial_delay)
-    waiting_for_connection_logged = False
     while True:
         try:
-            result = sync_polar_workouts(store=True, automatic=True)
-            waiting_for_connection_logged = False
-            if result.get("count") or result.get("added") or result.get("savedTcx"):
+            result = sync_connected_integrations(automatic=True)
+            if result.get("added") or result.get("savedTcx"):
                 logging.info(
-                    "Polar background sync: received=%s added=%s duplicates=%s tcx=%s athlete=%s",
-                    result.get("count", 0),
+                    "Background integration sync: providers=%s added=%s workouts=%s tcx=%s",
+                    ",".join(result.get("providers") or []),
                     result.get("added", 0),
-                    result.get("duplicates", 0),
+                    result.get("count", 0),
                     len(result.get("savedTcx") or []),
-                    result.get("athleteId") or "",
                 )
-        except AppError as exc:
-            if exc.status == 401:
-                if not waiting_for_connection_logged:
-                    logging.info("Polar background sync is waiting for a connected Polar account")
-                waiting_for_connection_logged = True
-            else:
-                logging.warning("Polar background sync failed: %s", exc)
         except Exception:
-            logging.exception("Unexpected Polar background sync error")
+            logging.exception("Unexpected background integration sync error")
         time.sleep(interval)
 
+
+def connected_integration_targets(provider):
+    targets = []
+    seen = set()
+    for coach in load_coaches():
+        coach_id = coach.get("id") or DEFAULT_COACH_ID
+        for athlete in telegram_athletes(coach_id):
+            if not isinstance(athlete, dict):
+                continue
+            athlete_id = str(athlete.get("id") or "")
+            if not athlete_id:
+                continue
+            integration = athlete_integrations(athlete).get(provider, {})
+            token = integration.get("token") if isinstance(integration, dict) else None
+            connected = bool(token.get("access_token")) if isinstance(token, dict) else bool(token)
+            if connected:
+                key = (provider, coach_id, athlete_id)
+                if key not in seen:
+                    targets.append((coach_id, athlete_id))
+                    seen.add(key)
+    if provider == "polar":
+        legacy = load_state_value("polarToken", {})
+        key = (provider, DEFAULT_COACH_ID, DEFAULT_ATHLETE_ID)
+        if isinstance(legacy, dict) and legacy.get("access_token") and key not in seen:
+            targets.append((DEFAULT_COACH_ID, DEFAULT_ATHLETE_ID))
+    return targets
+
+
+def sync_connected_integrations(automatic=False):
+    aggregate = {"ok": True, "providers": [], "count": 0, "added": 0, "duplicates": 0, "savedTcx": [], "results": []}
+    for coach_id, athlete_id in connected_integration_targets("polar"):
+        try:
+            result = sync_polar_workouts(store=True, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
+            aggregate["providers"].append("polar")
+            aggregate["count"] += int(result.get("count") or 0)
+            aggregate["added"] += int(result.get("added") or 0)
+            aggregate["duplicates"] += int(result.get("duplicates") or 0)
+            aggregate["savedTcx"].extend(result.get("savedTcx") or [])
+            aggregate["results"].append(result)
+        except AppError as exc:
+            if exc.status != 401:
+                logging.warning("Polar background sync failed for athlete=%s: %s", athlete_id, exc)
+    if load_strava_credentials().get("enabled"):
+        for coach_id, athlete_id in connected_integration_targets("strava"):
+            try:
+                result = sync_strava_workouts(store=True, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
+                aggregate["providers"].append("strava")
+                aggregate["count"] += int(result.get("count") or 0)
+                aggregate["added"] += int(result.get("added") or 0)
+                aggregate["duplicates"] += int(result.get("duplicates") or 0)
+                aggregate["results"].append(result)
+            except AppError as exc:
+                if exc.status != 401:
+                    logging.warning("Strava background sync failed for athlete=%s: %s", athlete_id, exc)
+    aggregate["providers"] = sorted(set(aggregate["providers"]))
+    return aggregate
 
 def positive_int(value, fallback, minimum=1):
     try:
@@ -1853,7 +2260,10 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
     credentials = load_polar_credentials()
     if not credentials.get("client_id") or not credentials.get("client_secret"):
         raise AppError("Polar credentials not found. Check polar.clientId and polar.clientSecret in conf.json.", 500)
-    token = load_state_value("polarToken", {})
+    target_coach_id = coach_id or polar_sync_target_coach_id()
+    target_athlete_id = athlete_id or polar_sync_target_athlete_id()
+    integration = athlete_integration(target_coach_id, target_athlete_id, "polar")
+    token = integration.get("token") if isinstance(integration.get("token"), dict) else {}
     access_token = token.get("access_token")
     if not access_token:
         raise AppError("Polar is not connected. Open /api/polar/connect first.", 401)
@@ -1862,7 +2272,7 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
-    logging.info("Polar sync started%s", " automatically" if automatic else "")
+    logging.info("Polar sync started%s athlete=%s", " automatically" if automatic else "", target_athlete_id)
     exercises = http_json("https://www.polaraccesslink.com/v3/exercises?zones=true", headers=headers)
     if not isinstance(exercises, list):
         exercises = []
@@ -1880,15 +2290,17 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
                     if enrichment:
                         workouts[index] = merge_polar_workout_enrichment(workouts[index], enrichment)
 
-    target_coach_id = coach_id or polar_sync_target_coach_id()
-    target_athlete_id = athlete_id or polar_sync_target_athlete_id()
     store_result = {"added": 0, "duplicates": 0, "stored": 0}
     if store:
         store_result = merge_polar_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
 
-    save_state_value("polarLastSync", int(time.time()))
+    integration["lastSync"] = int(time.time())
+    save_athlete_integration(target_coach_id, target_athlete_id, "polar", integration)
+    if target_coach_id == DEFAULT_COACH_ID and target_athlete_id == DEFAULT_ATHLETE_ID:
+        save_state_value("polarLastSync", integration["lastSync"])
     return {
         "ok": True,
+        "provider": "polar",
         "count": len(workouts),
         "workouts": workouts,
         "savedTcx": saved_tcx,
@@ -1899,6 +2311,91 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
         "athleteId": target_athlete_id,
     }
 
+
+def strava_token_for_sync(coach_id, athlete_id):
+    credentials = load_strava_credentials()
+    integration = athlete_integration(coach_id, athlete_id, "strava")
+    token = integration.get("token") if isinstance(integration.get("token"), dict) else {}
+    if not token.get("access_token"):
+        raise AppError("Strava is not connected.", 401)
+    expires_at = int(token.get("expires_at") or 0)
+    if token.get("refresh_token") and expires_at and expires_at < int(time.time()) + 120:
+        data = urlencode(
+            {
+                "client_id": credentials["client_id"],
+                "client_secret": credentials["client_secret"],
+                "grant_type": "refresh_token",
+                "refresh_token": token["refresh_token"],
+            }
+        ).encode("utf-8")
+        refreshed = http_json("https://www.strava.com/oauth/token", method="POST", data=data, headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+        token.update(refreshed)
+        integration["token"] = token
+        save_athlete_integration(coach_id, athlete_id, "strava", integration)
+    return token, integration
+
+
+def sync_strava_workouts(store=True, automatic=False, coach_id=None, athlete_id=None):
+    target_coach_id = coach_id or DEFAULT_COACH_ID
+    target_athlete_id = athlete_id or DEFAULT_ATHLETE_ID
+    token, integration = strava_token_for_sync(target_coach_id, target_athlete_id)
+    after = int(integration.get("lastSync") or 0) - 86400 if integration.get("lastSync") else 0
+    params = {"per_page": 100, "page": 1}
+    if after > 0:
+        params["after"] = after
+    headers = {"Authorization": f"Bearer {token['access_token']}", "Accept": "application/json"}
+    activities = []
+    for page in range(1, 4):
+        params["page"] = page
+        batch = http_json("https://www.strava.com/api/v3/athlete/activities?" + urlencode(params), headers=headers)
+        if not isinstance(batch, list) or not batch:
+            break
+        activities.extend(batch)
+        if len(batch) < 100:
+            break
+    workouts = [strava_activity_to_workout(item) for item in activities]
+    store_result = {"added": 0, "duplicates": 0, "stored": 0}
+    if store:
+        store_result = merge_polar_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
+    integration["lastSync"] = int(time.time())
+    save_athlete_integration(target_coach_id, target_athlete_id, "strava", integration)
+    return {
+        "ok": True,
+        "provider": "strava",
+        "count": len(workouts),
+        "workouts": workouts,
+        "savedTcx": [],
+        "added": store_result.get("added", 0),
+        "duplicates": store_result.get("duplicates", 0),
+        "stored": store_result.get("stored", 0),
+        "coachId": target_coach_id,
+        "athleteId": target_athlete_id,
+    }
+
+
+def strava_activity_to_workout(activity):
+    distance_km = round((number_or_none(activity.get("distance")) or 0) / 1000, 2)
+    duration_min = round((number_or_none(activity.get("moving_time")) or number_or_none(activity.get("elapsed_time")) or 0) / 60)
+    avg_speed = number_or_none(activity.get("average_speed"))
+    pace = round(1000 / avg_speed / 60, 2) if avg_speed and avg_speed > 0 else None
+    avg_hr = number_or_none(activity.get("average_heartrate"))
+    load = number_or_none(activity.get("suffer_score"))
+    return {
+        "id": f"strava-{activity.get('id') or activity.get('start_date_local') or int(time.time())}",
+        "source": f"Strava:{activity.get('id')}" if activity.get("id") else "Strava",
+        "date": activity.get("start_date_local") or activity.get("start_date") or datetime.now().isoformat(timespec="seconds"),
+        "sport": activity.get("sport_type") or activity.get("type") or "Strava",
+        "durationMin": duration_min,
+        "distanceKm": distance_km,
+        "avgHr": avg_hr,
+        "paceMinPerKm": pace,
+        "pace": pace,
+        "paceSource": "speed" if pace else "",
+        "avgSpeed": avg_speed,
+        "load": round(load) if load else None,
+        "loadSource": "strava-suffer-score" if load else "",
+        "notes": "Strava sync",
+    }
 
 def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
     if not isinstance(workouts, list):
@@ -1966,6 +2463,11 @@ def workout_dedup_key(workout):
     return f"{date_key}-{sport_key}-{duration_key}-{distance_key}"
 
 
+
+def strava_activity_id_from_source(source):
+    value = str(source or "").strip()
+    direct_match = re.match(r"^Strava:([^/\\]+)$", value, flags=re.IGNORECASE)
+    return direct_match.group(1).lower() if direct_match else ""
 def polar_exercise_id_from_source(source):
     value = str(source or "").strip()
     direct_match = re.match(r"^Polar:([^/\\]+)$", value, flags=re.IGNORECASE)
@@ -2399,13 +2901,14 @@ def urlopen_ipv4(req, timeout):
         finally:
             socket.getaddrinfo = original
 
-def polar_callback_html(payload):
+def integration_callback_html(provider, payload):
+    provider = str(provider or "Источник")
     if payload.get("ok"):
-        message = "Polar Flow подключен. Можно закрыть эту вкладку и вернуться в Training Coach."
-        title = "Polar подключен"
+        message = f"{provider} подключен. Можно закрыть эту вкладку и вернуться в Training Coach."
+        title = f"{provider} подключен"
     else:
-        message = payload.get("error") or "Polar Flow не подключен."
-        title = "Ошибка Polar"
+        message = payload.get("error") or f"{provider} не подключен."
+        title = f"Ошибка {provider}"
     return f"""<!doctype html>
 <html lang="ru">
 <head><meta charset="utf-8"><title>{title}</title></head>
@@ -2416,6 +2919,9 @@ def polar_callback_html(payload):
 </body>
 </html>"""
 
+
+def polar_callback_html(payload):
+    return integration_callback_html("Polar", payload)
 
 def list_workout_files():
     folders = [

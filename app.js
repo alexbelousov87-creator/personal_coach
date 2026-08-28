@@ -326,7 +326,11 @@ function canImportWorkouts() {
 }
 
 function canUsePolar() {
-  return canImportWorkouts() && isSelfAthlete();
+  return canImportWorkouts();
+}
+
+function canUseIntegrations() {
+  return canImportWorkouts();
 }
 
 const views = document.querySelectorAll(".view");
@@ -348,10 +352,19 @@ const sidebarProfilePhoto = document.querySelector("#sidebarProfilePhoto");
 const selectProfilePhotoButton = document.querySelector("#selectProfilePhoto");
 const removeProfilePhotoButton = document.querySelector("#removeProfilePhoto");
 const useDefaultHrZonesButton = document.querySelector("#useDefaultHrZones");
+const integrationsStatus = document.querySelector("#integrationsStatus");
 const polarStatus = document.querySelector("#polarStatus");
 const polarHint = document.querySelector("#polarHint");
 const connectPolarButton = document.querySelector("#connectPolar");
 const syncPolarButton = document.querySelector("#syncPolar");
+const stravaStatus = document.querySelector("#stravaStatus");
+const stravaHint = document.querySelector("#stravaHint");
+const connectStravaButton = document.querySelector("#connectStrava");
+const syncStravaButton = document.querySelector("#syncStrava");
+const runalyzeStatus = document.querySelector("#runalyzeStatus");
+const runalyzeHint = document.querySelector("#runalyzeHint");
+const runalyzeTokenForm = document.querySelector("#runalyzeTokenForm");
+const runalyzeTokenInput = document.querySelector("#runalyzeToken");
 const rolePanel = document.querySelector("#rolePanel");
 const studentManager = document.querySelector("#studentManager");
 const studentModal = document.querySelector("#studentModal");
@@ -367,7 +380,7 @@ async function init() {
   wireAuth();
   wireNavigation();
   wireImport();
-  wirePolar();
+  wireIntegrations();
   wireForms();
   wireStudentManagement();
 
@@ -393,7 +406,7 @@ async function init() {
 
   runStartupBackgroundSync();
   setInterval(() => syncWorkoutFolderChanges(), WORKOUT_SYNC_INTERVAL_MS);
-  setInterval(() => syncPolarWorkouts({ automatic: true }), POLAR_SYNC_INTERVAL_MS);
+  setInterval(() => syncConnectedIntegrations({ automatic: true }), POLAR_SYNC_INTERVAL_MS);
 }
 
 async function runStartupBackgroundSync() {
@@ -405,7 +418,7 @@ async function runStartupBackgroundSync() {
     setAiStatus("Идет фоновая проверка новых тренировок...", "");
     const folderAccepted = await syncWorkoutFolderChanges({ render: false });
     await refreshPolarStatus();
-    const polarAccepted = await syncPolarWorkouts({ automatic: true, render: false });
+    const polarAccepted = await syncConnectedIntegrations({ automatic: true, render: false });
     setAiStatus("Идет уточнение данных тренировок...", "");
     await enrichKnownCsvWorkouts();
     hydrateProfile();
@@ -658,18 +671,21 @@ function wireImport() {
   });
 }
 
-function wirePolar() {
-  if (!connectPolarButton || !syncPolarButton) return;
-  connectPolarButton.addEventListener("click", () => {
-    if (!canUsePolar()) {
-      showToast("Polar Flow доступен только ученику Белоусов Алексей");
-      return;
-    }
-    window.location.href = `${API_BASE_URL}/api/polar/connect`;
-  });
-  syncPolarButton.addEventListener("click", () => syncPolarWorkouts({ automatic: false }));
+function wireIntegrations() {
+  connectPolarButton?.addEventListener("click", () => connectIntegration("polar"));
+  syncPolarButton?.addEventListener("click", () => syncExternalWorkouts("polar", { automatic: false }));
+  connectStravaButton?.addEventListener("click", () => connectIntegration("strava"));
+  syncStravaButton?.addEventListener("click", () => syncExternalWorkouts("strava", { automatic: false }));
+  runalyzeTokenForm?.addEventListener("submit", saveRunalyzeToken);
 }
 
+function connectIntegration(provider) {
+  if (!canUseIntegrations()) {
+    showToast("Подключение источников доступно только ученику");
+    return;
+  }
+  window.location.href = `${API_BASE_URL}/api/integrations/${provider}/connect`;
+}
 function wireForms() {
   const today = new Date().toISOString().slice(0, 10);
   manualForm.elements.date.value = today;
@@ -2116,12 +2132,17 @@ function workoutSourceLabel(workout) {
     const dateLabel = workout?.date ? formatDate(workout.date) : "без даты";
     return `Polar Flow · ${dateLabel}${tcxFile ? ` · ${tcxFile}` : ""}`;
   }
+  if (source.toLowerCase().startsWith("strava:")) {
+    const dateLabel = workout?.date ? formatDate(workout.date) : "без даты";
+    return `Strava · ${dateLabel}`;
+  }
   return fileNameFromSource(source) || source || "без источника";
 }
 
 function importSourceKind(workout) {
   const source = String(workout?.source || "").toLowerCase();
   if (source.startsWith("polar:") || source.includes("polar_")) return "Polar";
+  if (source.startsWith("strava:")) return "Strava";
   if (source.endsWith(".tcx")) return "TCX";
   if (source.endsWith(".csv")) return "CSV";
   if (source.endsWith(".gpx")) return "GPX";
@@ -6101,104 +6122,172 @@ async function syncWorkoutFolderChanges(options = {}) {
 }
 
 async function refreshPolarStatus() {
-  if (!polarStatus) return null;
-  if (!canUsePolar()) {
-    updatePolarUi({ configured: false, connected: false, unavailable: false });
+  return refreshIntegrationsStatus();
+}
+
+async function refreshIntegrationsStatus() {
+  if (!integrationsStatus && !polarStatus) return null;
+  if (!canUseIntegrations()) {
+    updateIntegrationsUi({ providers: {} });
     return null;
   }
   try {
-    const response = await fetch(`${API_BASE_URL}/api/polar/status`);
+    const response = await fetch(`${API_BASE_URL}/api/integrations/status`);
     if (!response.ok) throw new Error("status failed");
     const status = await response.json();
-    updatePolarUi(status);
+    updateIntegrationsUi(status);
     return status;
   } catch {
-    updatePolarUi({ configured: false, connected: false, unavailable: true });
+    updateIntegrationsUi({ unavailable: true, providers: {} });
     return null;
   }
+}
+
+function updateIntegrationsUi(status = {}) {
+  const providers = status.providers || {};
+  updateProviderUi("polar", providers.polar || {}, {
+    statusEl: polarStatus,
+    hintEl: polarHint,
+    connectButton: connectPolarButton,
+    syncButton: syncPolarButton,
+    connectText: "Подключить Polar",
+    connectedText: "Polar подключен",
+    disabledText: "Polar не настроен",
+    notConnectedText: "Polar Flow не подключен",
+    notConnectedHint: "Нажмите «Подключить Polar» и разрешите доступ к тренировкам.",
+    connectedHint: "Сервер автоматически проверяет новые тренировки этого ученика, даже если приложение закрыто.",
+  }, status.unavailable);
+  updateProviderUi("strava", providers.strava || {}, {
+    statusEl: stravaStatus,
+    hintEl: stravaHint,
+    connectButton: connectStravaButton,
+    syncButton: syncStravaButton,
+    connectText: "Подключить Strava",
+    connectedText: "Strava подключена",
+    disabledText: "Strava не настроена",
+    notConnectedText: "Strava не подключена",
+    notConnectedHint: "После настройки clientId/clientSecret ученик сможет подключить Strava одной кнопкой.",
+    connectedHint: "Можно подтягивать новые активности Strava в профиль ученика.",
+  }, status.unavailable);
+  updateProviderUi("runalyze", providers.runalyze || {}, {
+    statusEl: runalyzeStatus,
+    hintEl: runalyzeHint,
+    connectButton: null,
+    syncButton: null,
+    connectText: "",
+    connectedText: "Runalyze token сохранен",
+    disabledText: "Runalyze выключен",
+    notConnectedText: "Runalyze token не указан",
+    notConnectedHint: "Сохраните Personal API token. Чтение активностей включим после подтверждения доступного read API.",
+    connectedHint: "Token сохранен для этого ученика. Полный импорт активностей Runalyze будет включен отдельно.",
+  }, status.unavailable);
+
+  const connectedCount = Object.values(providers).filter((item) => item?.connected).length;
+  if (integrationsStatus) {
+    integrationsStatus.textContent = canUseIntegrations()
+      ? `Подключено источников: ${connectedCount}`
+      : "Источники подключает сам ученик";
+  }
+  if (runalyzeTokenInput && providers.runalyze?.connected) runalyzeTokenInput.value = "";
+}
+
+function updateProviderUi(provider, status, refs, unavailable = false) {
+  const configured = Boolean(status.configured);
+  const enabled = status.enabled !== false;
+  const connected = Boolean(status.connected);
+  const card = document.querySelector(`[data-provider-card="${provider}"]`);
+  card?.classList.toggle("connected", connected);
+  card?.classList.toggle("unavailable", Boolean(unavailable));
+
+  if (!canUseIntegrations()) {
+    if (refs.statusEl) refs.statusEl.textContent = "Доступно ученику";
+    if (refs.hintEl) refs.hintEl.textContent = "Тренер видит результат, но источники тренировок подключает сам ученик.";
+    if (refs.connectButton) refs.connectButton.disabled = true;
+    if (refs.syncButton) refs.syncButton.disabled = true;
+    return;
+  }
+  if (unavailable) {
+    if (refs.statusEl) refs.statusEl.textContent = "Backend недоступен";
+    if (refs.hintEl) refs.hintEl.textContent = "Проверьте, что сервер приложения запущен.";
+    if (refs.connectButton) refs.connectButton.disabled = true;
+    if (refs.syncButton) refs.syncButton.disabled = true;
+    return;
+  }
+  if (!enabled || !configured) {
+    if (refs.statusEl) refs.statusEl.textContent = !enabled ? "Источник выключен" : refs.disabledText;
+    if (refs.connectButton) refs.connectButton.disabled = true;
+    if (refs.syncButton) refs.syncButton.disabled = true;
+    return;
+  }
+  if (refs.connectButton) {
+    refs.connectButton.textContent = connected ? refs.connectedText : refs.connectText;
+    refs.connectButton.classList.toggle("connected", connected);
+    refs.connectButton.disabled = connected;
+  }
+  if (refs.syncButton) refs.syncButton.disabled = !connected;
+  if (!connected) {
+    if (refs.statusEl) refs.statusEl.textContent = refs.notConnectedText;
+    if (refs.hintEl) refs.hintEl.textContent = refs.notConnectedHint;
+    return;
+  }
+  const lastSync = status.lastSync ? new Date(Number(status.lastSync) * 1000).toLocaleString("ru-RU") : "еще не выполнялась";
+  if (refs.statusEl) refs.statusEl.textContent = `${refs.connectedText} · последняя синхронизация: ${lastSync}`;
+  if (refs.hintEl) refs.hintEl.textContent = refs.connectedHint;
 }
 
 function updatePolarUi(status) {
-  if (!polarStatus || !connectPolarButton || !syncPolarButton) return;
-  const configured = Boolean(status?.configured);
-  const connected = Boolean(status?.connected);
-  if (!canImportWorkouts()) {
-    connectPolarButton.textContent = "Polar доступен ученику";
-    connectPolarButton.classList.remove("connected");
-    connectPolarButton.disabled = true;
-    syncPolarButton.disabled = true;
-    polarStatus.textContent = "Тренер не импортирует тренировки спортсменов.";
-    polarHint.textContent = "Войдите как ученик Белоусов Алексей, чтобы синхронизировать его тренировки Polar Flow.";
-    return;
-  }
-  if (!isSelfAthlete()) {
-    connectPolarButton.textContent = "Polar привязан к тренеру";
-    connectPolarButton.classList.remove("connected");
-    connectPolarButton.disabled = true;
-    syncPolarButton.disabled = true;
-    polarStatus.textContent = "Polar Flow используется только для профиля Белоусов Алексей.";
-    polarHint.textContent = "Для других учеников импортируйте файлы вручную или добавьте отдельный источник данных позже.";
-    return;
-  }
-  connectPolarButton.textContent = connected ? "Polar подключен" : "Подключить Polar";
-  connectPolarButton.classList.toggle("connected", connected);
-  connectPolarButton.disabled = !configured || connected;
-  syncPolarButton.disabled = !configured || !connected;
-
-  if (status?.unavailable) {
-    polarStatus.textContent = "Backend недоступен";
-    polarHint.textContent = "Запустите server.py, чтобы подключить Polar Flow.";
-    return;
-  }
-  if (!configured) {
-    polarStatus.textContent = "Не найдены client_id/client_secret";
-    polarHint.textContent = "Добавьте данные клиента Polar в секцию polar файла conf.json.";
-    return;
-  }
-  if (!connected) {
-    polarStatus.textContent = "Polar Flow не подключен";
-    polarHint.textContent = "Нажмите «Подключить Polar» и разрешите доступ к тренировкам.";
-    return;
-  }
-
-  const lastSync = status.lastSync ? new Date(Number(status.lastSync) * 1000).toLocaleString("ru-RU") : "еще не выполнялась";
-  polarStatus.textContent = `Polar Flow подключен · последняя синхронизация: ${lastSync}`;
-  polarHint.textContent = "Сервер автоматически проверяет новые тренировки, даже если приложение закрыто.";
+  updateIntegrationsUi({ providers: { polar: status || {} }, unavailable: status?.unavailable });
 }
 
 function updatePolarUiForRole() {
-  if (!canUsePolar() && polarStatus && connectPolarButton && syncPolarButton) {
-    updatePolarUi({ configured: false, connected: false });
-  }
+  if (!canUseIntegrations()) updateIntegrationsUi({ providers: {} });
 }
 
 async function syncPolarWorkouts(options = {}) {
-  if (!canUsePolar()) {
-    if (!options.automatic) showToast("Polar Flow подключен только к профилю Белоусов Алексей");
+  return syncExternalWorkouts("polar", options);
+}
+
+async function syncConnectedIntegrations(options = {}) {
+  if (!canUseIntegrations()) return 0;
+  const status = await refreshIntegrationsStatus();
+  const providers = status?.providers || {};
+  let accepted = 0;
+  for (const provider of ["polar", "strava"]) {
+    if (providers[provider]?.connected) {
+      accepted += await syncExternalWorkouts(provider, { ...options, skipStatus: true });
+    }
+  }
+  return accepted;
+}
+
+async function syncExternalWorkouts(provider, options = {}) {
+  if (!canUseIntegrations()) {
+    if (!options.automatic) showToast("Синхронизация источников доступна только ученику");
     return 0;
   }
-  const status = await refreshPolarStatus();
-  if (!status?.connected) return 0;
+  const status = options.skipStatus ? null : await refreshIntegrationsStatus();
+  if (!options.skipStatus && !status?.providers?.[provider]?.connected) return 0;
 
-  if (!options.automatic && polarStatus) {
-    polarStatus.textContent = "Синхронизация Polar Flow...";
-    if (polarHint) polarHint.textContent = "Получаем новые тренировки и обновляем локальную БД...";
-  }
-  if (syncPolarButton) syncPolarButton.disabled = true;
+  const statusEl = provider === "strava" ? stravaStatus : polarStatus;
+  const syncButton = provider === "strava" ? syncStravaButton : syncPolarButton;
+  if (!options.automatic && statusEl) statusEl.textContent = `Синхронизация ${providerLabel(provider)}...`;
+  if (syncButton) syncButton.disabled = true;
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/polar/sync`, { method: "POST" });
+    const response = await fetch(`${API_BASE_URL}/api/integrations/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Polar sync failed");
+    if (!response.ok) throw new Error(payload.error || `${provider} sync failed`);
 
     const summary = addWorkouts(Array.isArray(payload.workouts) ? payload.workouts : [], false);
-    const folderAccepted = await autoImportKnownWorkoutFiles();
-    await enrichKnownCsvWorkouts();
+    const folderAccepted = provider === "polar" ? await autoImportKnownWorkoutFiles() : 0;
+    if (provider === "polar") await enrichKnownCsvWorkouts();
 
     const hasSyncChanges = summary.accepted || folderAccepted || payload.savedTcx?.length;
-    if (hasSyncChanges) {
-      persistWorkouts();
-    }
+    if (hasSyncChanges) persistWorkouts();
     if (options.render !== false) {
       autoAdjustActiveLocalPlanIfNeeded();
       renderAll();
@@ -6208,19 +6297,48 @@ async function syncPolarWorkouts(options = {}) {
     const backendAccepted = Number(payload.added) || 0;
     const accepted = Math.max(summary.accepted, backendAccepted);
     if (!options.automatic) {
-      showToast(`Polar Flow: получено ${payload.count || 0}, добавлено ${accepted}, TCX ${payload.savedTcx?.length || 0}`);
+      showToast(`${providerLabel(provider)}: получено ${payload.count || 0}, добавлено ${accepted}`);
     }
     return accepted + folderAccepted;
   } catch (error) {
-    if (!options.automatic) {
-      showToast(`Polar Flow: ${error.message}`);
-    }
+    if (!options.automatic) showToast(`${providerLabel(provider)}: ${error.message}`);
     return 0;
   } finally {
-    await refreshPolarStatus();
+    if (syncButton) syncButton.disabled = false;
+    await refreshIntegrationsStatus();
   }
 }
 
+async function saveRunalyzeToken(event) {
+  event.preventDefault();
+  if (!canUseIntegrations()) {
+    showToast("Runalyze подключает сам ученик");
+    return;
+  }
+  const token = String(runalyzeTokenInput?.value || "").trim();
+  if (!token) {
+    showToast("Укажите Runalyze token");
+    return;
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/integrations/runalyze/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Runalyze token failed");
+    runalyzeTokenInput.value = "";
+    showToast("Runalyze token сохранен");
+    await refreshIntegrationsStatus();
+  } catch (error) {
+    showToast(`Runalyze: ${error.message}`);
+  }
+}
+
+function providerLabel(provider) {
+  return { polar: "Polar Flow", strava: "Strava", runalyze: "Runalyze" }[provider] || provider;
+}
 async function autoImportKnownWorkoutFiles() {
   try {
     const response = await fetch(`${API_BASE_URL}/api/workout-files`);

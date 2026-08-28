@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260827-subjective-fatigue">
+    <link rel="stylesheet" href="styles.css?v=20260828-integrations">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -168,20 +168,49 @@
             </div>
           </div>
 
-          <section class="panel polar-panel">
+          <section class="panel integrations-panel">
             <div class="panel-head compact-head">
               <div>
-                <h2>Polar Flow</h2>
-                <span id="polarStatus">Проверяем подключение...</span>
-              </div>
-              <div class="button-row">
-                <button class="ghost-btn" id="connectPolar" type="button">Подключить Polar</button>
-                <button class="primary-btn" id="syncPolar" type="button">Синхронизировать</button>
+                <h2>Источники тренировок</h2>
+                <span id="integrationsStatus">Проверяем подключения...</span>
               </div>
             </div>
-            <p id="polarHint">Тренировки будут подтягиваться через Polar AccessLink и сохраняться в локальной БД.</p>
+            <div class="integration-grid">
+              <article class="integration-card" data-provider-card="polar">
+                <div>
+                  <h3>Polar Flow</h3>
+                  <span id="polarStatus">Проверяем подключение...</span>
+                </div>
+                <p id="polarHint">Тренировки будут подтягиваться через Polar AccessLink и сохраняться в БД выбранного ученика.</p>
+                <div class="button-row">
+                  <button class="ghost-btn" id="connectPolar" type="button">Подключить Polar</button>
+                  <button class="primary-btn" id="syncPolar" type="button">Синхронизировать</button>
+                </div>
+              </article>
+              <article class="integration-card" data-provider-card="strava">
+                <div>
+                  <h3>Strava</h3>
+                  <span id="stravaStatus">Не настроена</span>
+                </div>
+                <p id="stravaHint">Удобный общий источник для Garmin, COROS, Suunto, Polar и других сервисов, если они синхронизируются со Strava.</p>
+                <div class="button-row">
+                  <button class="ghost-btn" id="connectStrava" type="button">Подключить Strava</button>
+                  <button class="primary-btn" id="syncStrava" type="button">Синхронизировать</button>
+                </div>
+              </article>
+              <article class="integration-card" data-provider-card="runalyze">
+                <div>
+                  <h3>Runalyze</h3>
+                  <span id="runalyzeStatus">Токен не указан</span>
+                </div>
+                <p id="runalyzeHint">Можно сохранить Personal API token. Автоматическое чтение активностей включим после подтверждения доступного read API.</p>
+                <form class="inline-token-form" id="runalyzeTokenForm">
+                  <input id="runalyzeToken" name="token" type="password" placeholder="Personal API token">
+                  <button class="ghost-btn" id="saveRunalyzeToken" type="submit">Сохранить</button>
+                </form>
+              </article>
+            </div>
           </section>
-
           <div class="dropzone" id="dropzone">
             <input id="fileInput" type="file" multiple accept=".tcx,.gpx,.csv,.json,.xml">
             <button class="primary-btn" id="selectWorkoutFiles" type="button">Выберите файлы тренировок</button>
@@ -798,6 +827,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260827-subjective-fatigue"></script>
+    <script src="app.js?v=20260828-integrations"></script>
   </body>
 </html>

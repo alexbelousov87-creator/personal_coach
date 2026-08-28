@@ -23,5 +23,64 @@
     "jsonMode": true,
     "siteUrl": "http://127.0.0.1:8765",
     "appName": "Training Coach"
+  },
+  "polar": {
+    "enabled": true,
+    "clientId": "",
+    "clientSecret": "",
+    "clientIdEnv": "POLAR_CLIENT_ID",
+    "clientSecretEnv": "POLAR_CLIENT_SECRET",
+    "redirectUri": "http://127.0.0.1:8765/api/polar/callback",
+    "scope": "accesslink.read_all",
+    "downloadTcx": true,
+    "timeoutSeconds": 45,
+    "backgroundSync": true,
+    "backgroundSyncIntervalSeconds": 600,
+    "backgroundSyncInitialDelaySeconds": 20
+  },
+  "integrations": {
+    "strava": {
+      "enabled": false,
+      "clientId": "",
+      "clientSecret": "",
+      "clientIdEnv": "STRAVA_CLIENT_ID",
+      "clientSecretEnv": "STRAVA_CLIENT_SECRET",
+      "redirectUri": "http://127.0.0.1:8765/api/strava/callback",
+      "scope": "read,activity:read_all",
+      "timeoutSeconds": 45,
+      "backgroundSync": true
+    },
+    "runalyze": {
+      "enabled": true,
+      "timeoutSeconds": 45
+    }
+  },
+  "auth": {
+    "enabled": true,
+    "coachPassword": "",
+    "coachPasswordEnv": "TRAINING_COACH_PASSWORD",
+    "defaultCoachLogin": "coach",
+    "allowCoachRegistration": true,
+    "coachRegistrationCode": "",
+    "coachRegistrationCodeEnv": "TRAINING_COACH_REGISTRATION_CODE",
+    "sessionTtlHours": 24
+  },
+  "notifications": {
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "botTokenEnv": "TELEGRAM_BOT_TOKEN",
+      "chatId": "",
+      "chatIdEnv": "TELEGRAM_CHAT_ID",
+      "dailyTime": "08:00",
+      "sendOnRestDays": true,
+      "removeKeyboard": true,
+      "showTodayButton": true,
+      "todayButtonText": "Получить план на сегодня",
+      "pollCommands": true,
+      "clearMenu": true,
+      "timeoutSeconds": 45,
+      "forceIPv4": true
+    }
   }
 }
