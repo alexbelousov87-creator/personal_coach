@@ -491,6 +491,8 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
 
     def serve_static(self):
         clean_path = self.path.split("?", 1)[0].lstrip("/") or "index.html"
+        if clean_path in {"legal", "legal.html", "privacy", "terms"}:
+            clean_path = "legal.html"
         target = (ROOT / clean_path).resolve()
 
         if ROOT not in target.parents and target != ROOT:
@@ -502,6 +504,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             return
         public_files = {
             "index.html",
+            "legal.html",
             "app.js",
             "styles.css",
             "AvaBotTrainingPlan.png",

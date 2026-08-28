@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260828-hide-strava">
+    <link rel="stylesheet" href="styles.css?v=20260828-legal">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -51,6 +51,7 @@
         <button class="primary-btn" id="authSubmit" type="submit">Войти</button>
         <button class="ghost-btn auth-toggle" data-toggle-coach-register type="button" hidden>Зарегистрировать тренера</button>
         <p id="authStatus">Проверяем доступ...</p>
+        <p class="auth-legal"><a href="legal.html" target="_blank" rel="noopener">Правовая информация</a></p>
       </form>
     </section>
 
@@ -525,6 +526,34 @@
               Пульсовые зоны не стоит использовать как основной способ контроля коротких ускорений, strides, спринтов и коротких интервалов из-за запаздывания реакции ЧСС.
             </div>
           </section>
+
+          <section class="panel reference-panel legal-summary-panel">
+            <div class="panel-head compact-head">
+              <div>
+                <h2>Правовая информация</h2>
+                <span>лицензия, данные, внешние сервисы и ограничения рекомендаций</span>
+              </div>
+              <a class="ghost-link" href="legal.html" target="_blank" rel="noopener">Открыть полностью</a>
+            </div>
+            <div class="reference-grid legal-grid">
+              <article class="reference-item">
+                <strong>Тренировочные рекомендации</strong>
+                <p>Планы и оценки являются информационной поддержкой для тренера и спортсмена. Они не являются медицинской консультацией, диагнозом или гарантией результата.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Данные спортсмена</strong>
+                <p>Приложение хранит профиль, тренировки, планы, ощущения, комментарии, фото профиля, Telegram chat id и токены подключенных источников тренировок.</p>
+              </article>
+              <article class="reference-item">
+                <strong>ИИ и внешние сервисы</strong>
+                <p>При генерации плана часть тренировочного контекста отправляется в OpenRouter и выбранному провайдеру модели. Polar, Telegram и Runalyze работают по своим условиям.</p>
+              </article>
+              <article class="reference-item">
+                <strong>Лицензия кода</strong>
+                <p>Код проекта опубликован как source-available с сохранением всех прав владельца. Использование, копирование и распространение требуют отдельного разрешения.</p>
+              </article>
+            </div>
+          </section>
         </section>
 
         <section class="view" id="settings">
@@ -816,6 +845,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260828-hide-strava"></script>
+    <script src="app.js?v=20260828-legal"></script>
   </body>
 </html>

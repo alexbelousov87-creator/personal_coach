@@ -2730,3 +2730,70 @@ textarea {
     flex-direction: column;
   }
 }
+.auth-legal {
+  text-align: center;
+  font-size: 13px;
+}
+
+.auth-legal a,
+.ghost-link {
+  color: var(--accent-2);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-legal a:hover,
+.ghost-link:hover {
+  text-decoration: underline;
+}
+
+.legal-summary-panel .panel-head {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.legal-grid .reference-item {
+  border-left: 4px solid rgba(17, 106, 123, 0.35);
+}
+
+.legal-page {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 28px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.legal-page header,
+.legal-page section {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.legal-page h1,
+.legal-page h2 {
+  margin: 0 0 10px;
+}
+
+.legal-page p,
+.legal-page li {
+  color: #42545f;
+  line-height: 1.58;
+}
+
+.legal-page ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.legal-page a {
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+.legal-note {
+  border-left: 4px solid var(--accent);
+}
