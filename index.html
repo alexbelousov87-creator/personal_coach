@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260831-integration-controls">
+    <link rel="stylesheet" href="styles.css?v=20260831-password-change">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -734,6 +734,30 @@
             <button class="primary-btn wide" type="submit">Сохранить профиль</button>
           </form>
 
+          <section class="panel coach-only coach-password-panel" id="coachPasswordPanel" hidden>
+            <div class="panel-head compact-head">
+              <div>
+                <h2>Пароль тренера</h2>
+                <span>После изменения остальные сеансы этого тренера будут завершены.</span>
+              </div>
+            </div>
+            <form class="form-grid" id="coachPasswordForm">
+              <label>
+                Текущий пароль
+                <input name="currentPassword" type="password" autocomplete="current-password" required>
+              </label>
+              <label>
+                Новый пароль
+                <input name="newPassword" type="password" autocomplete="new-password" minlength="8" required>
+              </label>
+              <label>
+                Повторите новый пароль
+                <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required>
+              </label>
+              <button class="primary-btn wide" type="submit">Изменить пароль</button>
+            </form>
+          </section>
+
           <section class="panel hr-zones-panel" id="profileHrZones"></section>
         </section>
       </main>
@@ -850,6 +874,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260831-integration-controls"></script>
+    <script src="app.js?v=20260831-password-change"></script>
   </body>
 </html>

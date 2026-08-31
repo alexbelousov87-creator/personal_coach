@@ -380,6 +380,25 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True}, headers={"Set-Cookie": cookie})
             return
 
+        if clean_path == "/api/auth/change-password":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
+            try:
+                payload = self.read_json()
+                result = change_coach_password(
+                    session,
+                    payload,
+                    current_session_id=self.session_id_from_cookie(),
+                )
+                self.send_json(result)
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                logging.exception("Unexpected coach password change error")
+                self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
         if clean_path == "/api/state":
             session = self.require_session()
             if session is None:
@@ -995,6 +1014,63 @@ def verify_password(stored_hash, password):
     return hmac.compare_digest(digest, expected)
 
 
+def coach_password_matches(coach, provided_password):
+    if not isinstance(coach, dict):
+        return False
+    saved_coaches = load_saved_coaches()
+    legacy_default = not saved_coaches and coach.get("id") == DEFAULT_COACH_ID and coach_password()
+    if legacy_default:
+        return hmac.compare_digest(str(provided_password or ""), coach_password())
+    return verify_password(coach.get("passwordHash"), provided_password)
+
+
+def change_coach_password(session, payload, current_session_id=""):
+    if not isinstance(payload, dict):
+        raise AppError("password payload must be an object", 400)
+    coach_id = str((session or {}).get("coach_id") or DEFAULT_COACH_ID)
+    current_password = str(payload.get("currentPassword") or "")
+    new_password = str(payload.get("newPassword") or "")
+    confirm_password = str(payload.get("confirmPassword") or "")
+    if not current_password:
+        raise AppError("Укажите текущий пароль.", 400)
+    if len(new_password) < 8:
+        raise AppError("Новый пароль должен содержать не менее 8 символов.", 400)
+    if new_password != confirm_password:
+        raise AppError("Подтверждение нового пароля не совпадает.", 400)
+    if hmac.compare_digest(current_password, new_password):
+        raise AppError("Новый пароль должен отличаться от текущего.", 400)
+
+    coach = coach_by_id(coach_id)
+    if not coach or not coach_password_matches(coach, current_password):
+        raise AppError("Текущий пароль указан неверно.", 401)
+
+    coaches = load_coaches()
+    updated = False
+    now = datetime.now().isoformat(timespec="seconds")
+    for index, item in enumerate(coaches):
+        if str(item.get("id") or "") != coach_id:
+            continue
+        changed = dict(item)
+        changed["passwordHash"] = password_hash(new_password)
+        changed["updatedAt"] = now
+        coaches[index] = changed
+        updated = True
+        break
+    if not updated:
+        raise AppError("Тренер не найден.", 404)
+    save_coaches(coaches)
+
+    revoked = 0
+    for session_id, existing in list(SESSIONS.items()):
+        if session_id == current_session_id:
+            continue
+        if existing.get("role") == "coach" and str(existing.get("coach_id") or DEFAULT_COACH_ID) == coach_id:
+            SESSIONS.pop(session_id, None)
+            revoked += 1
+    logging.info("Coach password changed coach=%s revoked_sessions=%s", coach_id, revoked)
+    return {"ok": True, "revokedSessions": revoked}
+
+
 def default_coach_record():
     profile = load_state_value("coachProfile", {}) or {}
     login = normalize_coach_login(AUTH_CONFIG.get("defaultCoachLogin") or "coach") or "coach"
@@ -1184,9 +1260,7 @@ def login_response(payload):
         coach = coach_by_login(login)
         if not coach:
             raise AppError("Неверный логин или пароль тренера.", 401)
-        saved_coaches = load_saved_coaches()
-        legacy_default = not saved_coaches and coach.get("id") == DEFAULT_COACH_ID and coach_password()
-        password_ok = hmac.compare_digest(provided, coach_password()) if legacy_default else verify_password(coach.get("passwordHash"), provided)
+        password_ok = coach_password_matches(coach, provided)
         if not password_ok:
             raise AppError("Неверный логин или пароль тренера.", 401)
         coach_id = coach.get("id") or DEFAULT_COACH_ID

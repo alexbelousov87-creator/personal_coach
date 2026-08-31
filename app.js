@@ -346,6 +346,8 @@ const importDiagnostics = document.querySelector("#importDiagnostics");
 const workoutList = document.querySelector("#workoutList");
 const manualForm = document.querySelector("#manualForm");
 const settingsForm = document.querySelector("#settingsForm");
+const coachPasswordPanel = document.querySelector("#coachPasswordPanel");
+const coachPasswordForm = document.querySelector("#coachPasswordForm");
 const planJsonInput = document.querySelector("#planJsonInput");
 const planEditModal = document.querySelector("#planEditModal");
 const planEditForm = document.querySelector("#planEditForm");
@@ -698,6 +700,7 @@ function connectIntegration(provider) {
 }
 function wireForms() {
   const today = new Date().toISOString().slice(0, 10);
+  coachPasswordForm?.addEventListener("submit", changeCoachPassword);
   manualForm.elements.date.value = today;
   selectProfilePhotoButton.addEventListener("click", () => {
     if (isCoachRole()) return;
@@ -782,6 +785,48 @@ function wireForms() {
       ? "Профиль сохранен, но пульсовые зоны возвращены к HRR по умолчанию: границы должны возрастать между пульсом покоя и максимумом"
       : "Профиль сохранен");
   });
+}
+
+async function changeCoachPassword(event) {
+  event.preventDefault();
+  if (!isCoachRole() || !state.auth.enabled) return;
+
+  const data = new FormData(coachPasswordForm);
+  const currentPassword = String(data.get("currentPassword") || "");
+  const newPassword = String(data.get("newPassword") || "");
+  const confirmPassword = String(data.get("confirmPassword") || "");
+  if (newPassword.length < 8) {
+    showToast("Новый пароль должен содержать не менее 8 символов");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    showToast("Подтверждение нового пароля не совпадает");
+    return;
+  }
+
+  const submitButton = coachPasswordForm.querySelector('button[type="submit"]');
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Сохраняем...";
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/change-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Не удалось изменить пароль");
+    coachPasswordForm.reset();
+    showToast("Пароль изменён. Остальные сеансы тренера завершены.");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Изменить пароль";
+    }
+  }
 }
 
 async function handleProfilePhotoFile(event) {
@@ -1385,6 +1430,7 @@ function renderAll() {
 function renderUserContext() {
   document.body.classList.toggle("role-coach", isCoachRole());
   document.body.classList.toggle("role-student", !isCoachRole());
+  if (coachPasswordPanel) coachPasswordPanel.hidden = !isCoachRole() || !state.auth.enabled;
   if (logoutButton) logoutButton.hidden = true;
   renderRolePanel();
   renderStudentManager();

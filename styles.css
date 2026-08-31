@@ -1121,6 +1121,15 @@ p {
   max-width: 900px;
 }
 
+.coach-password-panel {
+  width: min(900px, 100%);
+  margin-top: 16px;
+}
+
+.coach-password-panel .panel-head {
+  margin-bottom: 14px;
+}
+
 .profile-photo-field {
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
