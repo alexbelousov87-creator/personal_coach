@@ -2696,6 +2696,9 @@ def merge_duplicate_backend_workouts(a, b):
     if (not base.get("loadSource") or base.get("loadSource") == "duration") and other.get("loadSource") and other.get("loadSource") != "duration":
         base["load"] = other.get("load")
         base["loadSource"] = other.get("loadSource")
+    if base.get("paceSource") == "distance-duration" and tcx_file_name_from_backend_workout(base):
+        base["paceSource"] = "tcx"
+        base["pace"] = base.get("pace") or base.get("paceMinPerKm")
     return base
 
 
@@ -2768,7 +2771,8 @@ def enrich_stored_polar_workouts_from_tcx():
 def workout_has_tcx_enrichment(workout):
     if not isinstance(workout, dict):
         return False
-    return bool(workout.get("lapSignals") and workout.get("paceSource") and workout.get("maxSpeed") and workout.get("workoutType"))
+    pace_source = str(workout.get("paceSource") or "")
+    return bool(workout.get("lapSignals") and pace_source and pace_source != "distance-duration" and workout.get("maxSpeed") and workout.get("workoutType"))
 
 
 def find_polar_tcx_file(polar_id):

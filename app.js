@@ -1272,7 +1272,16 @@ function normalizeWorkout(input) {
   const paceFromImportedDistance = paceFromDistanceDuration(distanceKm, durationMin);
   const paceFromImportedSpeed = paceFromSpeed(avgSpeed);
   const paceMinPerKm = input.paceMinPerKm || paceFromImportedDistance || paceFromImportedSpeed || null;
-  const paceSource = input.paceMinPerKm ? "imported" : paceFromImportedDistance ? "distance-duration" : paceFromImportedSpeed ? "speed" : "";
+  const explicitPaceSource = String(input.paceSource || "").trim();
+  const sourceName = fileNameFromSource(input.source);
+  const sourceIsTcx = /\.tcx$/i.test(sourceName);
+  const paceSource = input.paceMinPerKm
+    ? (explicitPaceSource || (sourceIsTcx ? "tcx" : "imported"))
+    : paceFromImportedDistance
+      ? (explicitPaceSource || (sourceIsTcx ? "tcx" : "distance-duration"))
+      : paceFromImportedSpeed
+        ? (explicitPaceSource || "speed")
+        : "";
   const isoDate = date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
   const sport = String(input.sport || "Другое").trim();
   return {
