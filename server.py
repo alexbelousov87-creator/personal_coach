@@ -32,6 +32,9 @@ DEFAULT_CONFIG = {
     },
     "storage": {
         "databasePath": "data/training_coach.sqlite3",
+        "databaseTimeoutSeconds": 30,
+        "databaseRetryCount": 3,
+        "databaseRetryDelaySeconds": 0.25,
     },
     "logging": {
         "file": "data/logs/training_coach.log",
@@ -148,6 +151,8 @@ DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite
 LOG_PATH = (ROOT / LOGGING_CONFIG.get("file", "data/logs/training_coach.log")).resolve()
 SESSIONS = {}
 POLAR_SYNC_LOCK = threading.Lock()
+DB_LOCK = threading.RLock()
+DB_INITIALIZED = False
 ORIGINAL_GETADDRINFO = socket.getaddrinfo
 GETADDRINFO_LOCK = threading.Lock()
 SESSION_COOKIE = "training_coach_session"
@@ -242,6 +247,11 @@ def is_self_student_session(session):
     if not auth_enabled():
         return True
     return session.get("role") == "student" and session.get("athlete_id") == DEFAULT_ATHLETE_ID and (session.get("coach_id") or DEFAULT_COACH_ID) == DEFAULT_COACH_ID
+
+class TrainingCoachHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 64
+
 
 class TrainingCoachHandler(BaseHTTPRequestHandler):
     server_version = "TrainingCoach/0.1"
@@ -633,18 +643,62 @@ class AppError(Exception):
         self.status = status
 
 
+def db_setting_number(key, fallback, minimum=0):
+    try:
+        parsed = float(STORAGE_CONFIG.get(key, fallback))
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, parsed)
+
+
+def db_connect():
+    timeout = db_setting_number("databaseTimeoutSeconds", 30, minimum=1)
+    retry_count = int(db_setting_number("databaseRetryCount", 3, minimum=0))
+    retry_delay = db_setting_number("databaseRetryDelaySeconds", 0.25, minimum=0)
+    attempts = retry_count + 1
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(str(DB_PATH), timeout=timeout)
+            connection.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+            return connection
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if attempt >= attempts:
+                logging.exception(
+                    "SQLite open failed path=%s parent_exists=%s db_exists=%s writable=%s",
+                    DB_PATH,
+                    DB_PATH.parent.exists(),
+                    DB_PATH.exists(),
+                    os.access(DB_PATH.parent, os.W_OK),
+                )
+                raise
+            logging.warning("SQLite open failed, retry %s/%s: %s", attempt, attempts - 1, exc)
+            time.sleep(retry_delay * attempt)
+    raise last_error
+
+
 def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    global DB_INITIALIZED
+    if DB_INITIALIZED:
+        return
+    with DB_LOCK:
+        if DB_INITIALIZED:
+            return
+        with db_connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
-        )
+        DB_INITIALIZED = True
 
 
 def scoped_state_key(key, coach_id=DEFAULT_COACH_ID):
@@ -786,8 +840,9 @@ def save_state_from_coach(payload, coach_id=DEFAULT_COACH_ID):
 def load_state_value(key, fallback, coach_id=DEFAULT_COACH_ID):
     init_db()
     key = scoped_state_key(key, coach_id)
-    with sqlite3.connect(DB_PATH) as connection:
-        row = connection.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    with DB_LOCK:
+        with db_connect() as connection:
+            row = connection.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
     if not row:
         return fallback
     try:
@@ -882,17 +937,18 @@ def save_state_value(key, value, coach_id=DEFAULT_COACH_ID):
     init_db()
     key = scoped_state_key(key, coach_id)
     raw = json.dumps(value, ensure_ascii=False)
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
-            """
-            INSERT INTO app_state (key, value, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (key, raw),
-        )
+    with DB_LOCK:
+        with db_connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO app_state (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key, raw),
+            )
 
 
 def auth_enabled():
@@ -2251,7 +2307,7 @@ def polar_sync_target_athlete_id():
 
 
 def sync_polar_workouts(store=True, automatic=False, coach_id=None, athlete_id=None):
-    acquired = POLAR_SYNC_LOCK.acquire(blocking=not automatic)
+    acquired = POLAR_SYNC_LOCK.acquire(blocking=False)
     if not acquired:
         return {
             "ok": True,
@@ -2261,7 +2317,7 @@ def sync_polar_workouts(store=True, automatic=False, coach_id=None, athlete_id=N
             "added": 0,
             "duplicates": 0,
             "skipped": True,
-            "message": "Polar sync is already running.",
+            "message": "Синхронизация Polar уже выполняется.",
         }
     try:
         return sync_polar_workouts_locked(store=store, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
@@ -3331,7 +3387,7 @@ def main():
     logging.info("Config: %s", CONF_FILE)
     logging.info("Database: %s", DB_PATH)
     logging.info("Log: %s", LOG_PATH)
-    ThreadingHTTPServer((HOST, PORT), TrainingCoachHandler).serve_forever()
+    TrainingCoachHTTPServer((HOST, PORT), TrainingCoachHandler).serve_forever()
 
 
 if __name__ == "__main__":

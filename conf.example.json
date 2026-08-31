@@ -4,7 +4,10 @@
     "port": 8765
   },
   "storage": {
-    "databasePath": "data/training_coach.sqlite3"
+    "databasePath": "data/training_coach.sqlite3",
+    "databaseTimeoutSeconds": 30,
+    "databaseRetryCount": 3,
+    "databaseRetryDelaySeconds": 0.25
   },
   "llm": {
     "provider": "openrouter",

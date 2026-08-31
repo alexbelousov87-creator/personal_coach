@@ -13,7 +13,7 @@ const CURRENT_ROLE_KEY = "training-coach-current-role";
 const AUTH_ROLE_KEY = "training-coach-login-role";
 const DEFAULT_COACH_ID = "coach-belousov-aleksey";
 const DEFAULT_ATHLETE_ID = "athlete-belousov-aleksey";
-const WORKOUT_SYNC_INTERVAL_MS = 60000;
+const WORKOUT_SYNC_INTERVAL_MS = 5 * 60000;
 const POLAR_SYNC_INTERVAL_MS = 10 * 60000;
 const API_BASE_URL = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
 const WORKOUT_TYPE_OPTIONS = [
@@ -64,6 +64,8 @@ const state = {
 };
 
 let authRegisterMode = false;
+let workoutFolderSyncInProgress = false;
+let connectedIntegrationsSyncInProgress = false;
 
 function defaultAthleteProfile(name = "") {
   return {
@@ -6108,17 +6110,22 @@ async function loadBackendState() {
 }
 
 async function syncWorkoutFolderChanges(options = {}) {
-  if (!canImportWorkouts()) return 0;
-  const accepted = await autoImportKnownWorkoutFiles();
-  if (!accepted) return 0;
+  if (!canImportWorkouts() || workoutFolderSyncInProgress) return 0;
+  workoutFolderSyncInProgress = true;
+  try {
+    const accepted = await autoImportKnownWorkoutFiles();
+    if (!accepted) return 0;
 
-  await enrichKnownCsvWorkouts();
-  if (options.render !== false) {
-    autoAdjustActiveLocalPlanIfNeeded();
-    renderAll();
-    restoreCurrentPlanOrGenerate();
+    await enrichKnownCsvWorkouts();
+    if (options.render !== false) {
+      autoAdjustActiveLocalPlanIfNeeded();
+      renderAll();
+      restoreCurrentPlanOrGenerate();
+    }
+    return accepted;
+  } finally {
+    workoutFolderSyncInProgress = false;
   }
-  return accepted;
 }
 
 async function refreshPolarStatus() {
@@ -6255,16 +6262,21 @@ async function syncPolarWorkouts(options = {}) {
 }
 
 async function syncConnectedIntegrations(options = {}) {
-  if (!canUseIntegrations()) return 0;
-  const status = await refreshIntegrationsStatus();
-  const providers = status?.providers || {};
-  let accepted = 0;
-  for (const provider of ["polar", "strava"]) {
-    if (providers[provider]?.connected) {
-      accepted += await syncExternalWorkouts(provider, { ...options, skipStatus: true });
+  if (!canUseIntegrations() || connectedIntegrationsSyncInProgress) return 0;
+  connectedIntegrationsSyncInProgress = true;
+  try {
+    const status = await refreshIntegrationsStatus();
+    const providers = status?.providers || {};
+    let accepted = 0;
+    for (const provider of ["polar", "strava"]) {
+      if (providers[provider]?.connected) {
+        accepted += await syncExternalWorkouts(provider, { ...options, skipStatus: true });
+      }
     }
+    return accepted;
+  } finally {
+    connectedIntegrationsSyncInProgress = false;
   }
-  return accepted;
 }
 
 async function syncExternalWorkouts(provider, options = {}) {
@@ -6288,6 +6300,10 @@ async function syncExternalWorkouts(provider, options = {}) {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `${provider} sync failed`);
+    if (payload.skipped) {
+      if (!options.automatic) showToast(payload.message || `${providerLabel(provider)}: синхронизация уже выполняется`);
+      return 0;
+    }
 
     const summary = addWorkouts(Array.isArray(payload.workouts) ? payload.workouts : [], false);
     const folderAccepted = provider === "polar" ? await autoImportKnownWorkoutFiles() : 0;
@@ -6401,9 +6417,9 @@ function fileStem(name) {
 function importedWorkoutFileNames() {
   return new Set(
     state.workouts
-      .map((workout) => fileNameFromSource(workout.source))
+      .flatMap((workout) => [fileNameFromSource(workout.source), workout?.tcxFile])
       .filter(Boolean)
-      .map((name) => name.toLowerCase())
+      .map((name) => String(name).toLowerCase())
   );
 }
 
