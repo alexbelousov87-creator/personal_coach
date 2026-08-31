@@ -2991,10 +2991,13 @@ def download_polar_tcx(exercise, access_token):
         if raw.strip():
             target.write_bytes(raw)
             return target.name
-    except AppError:
+    except AppError as exc:
+        logging.warning("Could not download Polar TCX exercise=%s target=%s: %s", exercise_id, target.name, exc)
+        return ""
+    except Exception:
+        logging.exception("Unexpected Polar TCX download error exercise=%s target=%s", exercise_id, target.name)
         return ""
     return ""
-
 
 def polar_start_to_iso(value, offset_minutes=None):
     if not value:
