@@ -1068,30 +1068,96 @@ function addWorkouts(workouts, shouldPersist = true) {
   const uniqueIncoming = [...byIncomingKey.values()];
   const skipped = workouts.length - validIncoming.length;
   const duplicateRows = validIncoming.length - uniqueIncoming.length;
-  const existingKeys = new Set(state.workouts.map(workoutDedupKey));
-  const duplicates = duplicateRows + uniqueIncoming.filter((workout) => existingKeys.has(workoutDedupKey(workout))).length;
-  const accepted = uniqueIncoming.filter((workout) => !existingKeys.has(workoutDedupKey(workout))).length;
-  const merged = [...state.workouts, ...uniqueIncoming].filter((workout) => workout.date && workout.durationMin);
-  state.workouts = dedupeWorkouts(merged).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const mergeResult = mergeWorkoutLists(state.workouts, uniqueIncoming);
+  state.workouts = dedupeWorkouts(mergeResult.workouts).sort((a, b) => new Date(b.date) - new Date(a.date));
   if (shouldPersist) {
     persistWorkouts();
     autoAdjustActiveLocalPlanIfNeeded();
     renderAll();
     restoreCurrentPlanOrGenerate();
   }
-  return { accepted, skipped, duplicates, parsed: workouts.length };
+  return { accepted: mergeResult.accepted, skipped, duplicates: duplicateRows + mergeResult.duplicates, parsed: workouts.length };
 }
 
 function dedupeWorkouts(workouts) {
-  const byKey = new Map();
-  for (const workout of workouts) {
-    const key = workoutDedupKey(workout);
-    const existing = byKey.get(key);
-    byKey.set(key, existing ? mergeDuplicateWorkouts(existing, workout) : workout);
-  }
-  return [...byKey.values()];
+  return mergeWorkoutLists([], workouts).workouts;
 }
 
+function mergeWorkoutLists(existingWorkouts, incomingWorkouts) {
+  const merged = [];
+  let accepted = 0;
+  let duplicates = 0;
+
+  for (const workout of [...(existingWorkouts || []), ...(incomingWorkouts || [])]) {
+    if (!workout || !workout.date || !workout.durationMin) continue;
+    const existingIndex = findMergeableWorkoutIndex(workout, merged);
+    if (existingIndex >= 0) {
+      merged[existingIndex] = mergeDuplicateWorkouts(merged[existingIndex], workout);
+      duplicates += existingWorkouts.includes(workout) ? 0 : 1;
+    } else {
+      merged.push(workout);
+      accepted += incomingWorkouts.includes(workout) ? 1 : 0;
+    }
+  }
+
+  return { workouts: merged, accepted, duplicates };
+}
+
+function findMergeableWorkoutIndex(workout, candidates) {
+  const key = workoutDedupKey(workout);
+  const exactIndex = candidates.findIndex((candidate) => workoutDedupKey(candidate) === key);
+  if (exactIndex >= 0) return exactIndex;
+  return candidates.findIndex((candidate) => areSimilarImportedWorkouts(workout, candidate));
+}
+
+function areSimilarImportedWorkouts(a, b) {
+  if (!a || !b) return false;
+  if (!isImportedWorkoutPair(a, b)) return false;
+  const aDate = dateFromAny(a.date);
+  const bDate = dateFromAny(b.date);
+  if (!aDate || !bDate || Number.isNaN(aDate.getTime()) || Number.isNaN(bDate.getTime())) return false;
+  const sameDay = aDate.toISOString().slice(0, 10) === bDate.toISOString().slice(0, 10);
+  const closeStart = Math.abs(aDate.getTime() - bDate.getTime()) <= 12 * 60 * 60 * 1000;
+  if (!sameDay && !closeStart) return false;
+
+  const aSport = normalizedSportKey(a.sport);
+  const bSport = normalizedSportKey(b.sport);
+  const sportCompatible = aSport === bSport || isGenericSport(a.sport) || isGenericSport(b.sport);
+  if (!sportCompatible) return false;
+
+  const durationA = Number(a.durationMin) || 0;
+  const durationB = Number(b.durationMin) || 0;
+  const durationTolerance = Math.max(2, Math.min(durationA, durationB) * 0.05);
+  const closeDuration = durationA > 0 && durationB > 0 && Math.abs(durationA - durationB) <= durationTolerance;
+  if (!closeDuration) return false;
+
+  const distanceA = Number(a.distanceKm) || 0;
+  const distanceB = Number(b.distanceKm) || 0;
+  if (distanceA > 0 && distanceB > 0) {
+    const distanceTolerance = Math.max(0.25, Math.min(distanceA, distanceB) * 0.03);
+    return Math.abs(distanceA - distanceB) <= distanceTolerance;
+  }
+  return distanceA === 0 || distanceB === 0;
+}
+
+function isImportedWorkoutPair(a, b) {
+  const aSource = String(a?.source || "");
+  const bSource = String(b?.source || "");
+  return isPolarLikeWorkout(a) || isPolarLikeWorkout(b) || (sourceLooksLikeWorkoutFile(aSource) && sourceLooksLikeWorkoutFile(bSource));
+}
+
+function isPolarLikeWorkout(workout) {
+  const source = String(workout?.source || "");
+  return isPolarApiSource(source) || /^Polar_.+\.TCX$/i.test(fileNameFromSource(source)) || /^Polar_.+\.TCX$/i.test(String(workout?.tcxFile || ""));
+}
+
+function isPolarApiSource(source) {
+  return String(source || "").trim().toLowerCase().startsWith("polar:");
+}
+
+function sourceLooksLikeWorkoutFile(source) {
+  return /\.(csv|tcx|gpx|json)$/i.test(fileNameFromSource(source));
+}
 function workoutDedupKey(workout) {
   const polarId = polarExerciseIdFromSource(workout?.source);
   if (polarId) return `polar-${polarId}`;
@@ -1126,10 +1192,29 @@ function isGenericSport(sport) {
   return ["", "other", "polar", "unknown"].includes(String(sport || "").trim().toLowerCase());
 }
 
+function tcxFileNameFromWorkout(workout) {
+  const explicit = String(workout?.tcxFile || "").trim();
+  if (explicit) return fileNameFromSource(explicit);
+  const sourceName = fileNameFromSource(workout?.source || "");
+  return /\.tcx$/i.test(sourceName) ? sourceName : "";
+}
+
 function mergeDuplicateWorkouts(a, b) {
   const useB = workoutRichnessScore(b) > workoutRichnessScore(a);
   const base = { ...(useB ? b : a) };
   const other = useB ? a : b;
+  const baseTcxFile = tcxFileNameFromWorkout(base);
+  const otherTcxFile = tcxFileNameFromWorkout(other);
+  if (!base.tcxFile && otherTcxFile) base.tcxFile = otherTcxFile;
+  if (!base.tcxFile && baseTcxFile) base.tcxFile = baseTcxFile;
+  if (!isPolarApiSource(base.source) && isPolarApiSource(other.source)) {
+    base.source = other.source;
+    if (other.notes && (!base.notes || /^TCX/i.test(base.notes))) base.notes = other.notes;
+  }
+  if (other.loadSource === "imported" && other.load) {
+    base.load = other.load;
+    base.loadSource = other.loadSource;
+  }
   if (isGenericSport(base.sport) && other.sport) {
     base.sport = other.sport;
   }
@@ -1193,6 +1278,7 @@ function normalizeWorkout(input) {
   return {
     id: `${isoDate.slice(0, 16)}-${normalizedSportKey(sport)}-${durationMin}-${distanceKm}`,
     source: input.source || "manual",
+    tcxFile: input.tcxFile || (/\.tcx$/i.test(fileNameFromSource(input.source)) ? fileNameFromSource(input.source) : ""),
     date: isoDate,
     sport,
     durationMin,

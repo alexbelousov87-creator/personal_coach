@@ -2483,13 +2483,12 @@ def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
     if not existing_workouts and athlete_id == DEFAULT_ATHLETE_ID:
         existing_workouts = load_state_value("workouts", [], coach_id=coach_id)
 
-    existing_keys = {workout_dedup_key(workout) for workout in existing_workouts if workout_dedup_key(workout)}
     incoming_unique = dedupe_backend_workouts(valid)
     duplicate_rows = len(valid) - len(incoming_unique)
-    incoming_existing_duplicates = sum(1 for workout in incoming_unique if workout_dedup_key(workout) in existing_keys)
-    added = len(incoming_unique) - incoming_existing_duplicates
+    merge_result = merge_backend_workout_lists(existing_workouts, incoming_unique)
+    added = merge_result["added"]
 
-    merged_workouts = dedupe_backend_workouts([*existing_workouts, *incoming_unique])
+    merged_workouts = merge_result["workouts"]
     merged_workouts.sort(key=workout_sort_timestamp, reverse=True)
     target["workouts"] = merged_workouts
     athletes[target_index] = target
@@ -2501,25 +2500,122 @@ def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
 
     if added:
         logging.info("Polar sync stored %s new workout(s) for athlete %s", added, athlete_id)
-    return {"added": added, "duplicates": duplicate_rows + incoming_existing_duplicates, "stored": len(merged_workouts)}
+    return {"added": added, "duplicates": duplicate_rows + merge_result["duplicates"], "stored": len(merged_workouts)}
 
 
 def dedupe_backend_workouts(workouts):
-    by_key = {}
-    order = []
-    for workout in workouts:
-        if not isinstance(workout, dict):
-            continue
-        key = workout_dedup_key(workout)
-        if not key:
-            continue
-        if key not in by_key:
-            by_key[key] = workout
-            order.append(key)
-        else:
-            by_key[key] = merge_duplicate_backend_workouts(by_key[key], workout)
-    return [by_key[key] for key in order]
+    return merge_backend_workout_lists([], workouts).get("workouts", [])
 
+
+def merge_backend_workout_lists(existing_workouts, incoming_workouts):
+    merged = []
+    for workout in existing_workouts or []:
+        if not isinstance(workout, dict) or not workout.get("date") or not number_or_none(workout.get("durationMin")):
+            continue
+        index = find_mergeable_backend_workout_index(workout, merged)
+        if index >= 0:
+            merged[index] = merge_duplicate_backend_workouts(merged[index], workout)
+        else:
+            merged.append(workout)
+
+    added = 0
+    duplicates = 0
+    for workout in incoming_workouts or []:
+        if not isinstance(workout, dict) or not workout.get("date") or not number_or_none(workout.get("durationMin")):
+            continue
+        index = find_mergeable_backend_workout_index(workout, merged)
+        if index >= 0:
+            merged[index] = merge_duplicate_backend_workouts(merged[index], workout)
+            duplicates += 1
+        else:
+            merged.append(workout)
+            added += 1
+    return {"workouts": merged, "added": added, "duplicates": duplicates}
+
+
+def find_mergeable_backend_workout_index(workout, candidates):
+    key = workout_dedup_key(workout)
+    for index, candidate in enumerate(candidates):
+        if workout_dedup_key(candidate) == key:
+            return index
+    for index, candidate in enumerate(candidates):
+        if are_similar_imported_backend_workouts(workout, candidate):
+            return index
+    return -1
+
+
+def are_similar_imported_backend_workouts(a, b):
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    if not is_imported_backend_workout_pair(a, b):
+        return False
+    a_date = backend_workout_datetime(a.get("date"))
+    b_date = backend_workout_datetime(b.get("date"))
+    if not a_date or not b_date:
+        return False
+    same_day = a_date.date() == b_date.date()
+    close_start = abs((a_date - b_date).total_seconds()) <= 12 * 60 * 60
+    if not same_day and not close_start:
+        return False
+
+    a_sport = normalized_sport_key(a.get("sport"))
+    b_sport = normalized_sport_key(b.get("sport"))
+    if a_sport != b_sport and not is_generic_sport(a.get("sport")) and not is_generic_sport(b.get("sport")):
+        return False
+
+    duration_a = number_or_none(a.get("durationMin")) or 0
+    duration_b = number_or_none(b.get("durationMin")) or 0
+    duration_tolerance = max(2, min(duration_a, duration_b) * 0.05)
+    if not duration_a or not duration_b or abs(duration_a - duration_b) > duration_tolerance:
+        return False
+
+    distance_a = number_or_none(a.get("distanceKm")) or 0
+    distance_b = number_or_none(b.get("distanceKm")) or 0
+    if distance_a and distance_b:
+        distance_tolerance = max(0.25, min(distance_a, distance_b) * 0.03)
+        return abs(distance_a - distance_b) <= distance_tolerance
+    return not distance_a or not distance_b
+
+
+def backend_workout_datetime(value):
+    text = str(value or "").replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed.replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def is_imported_backend_workout_pair(a, b):
+    a_source = str(a.get("source") or "")
+    b_source = str(b.get("source") or "")
+    return is_polar_like_backend_workout(a) or is_polar_like_backend_workout(b) or (
+        source_looks_like_workout_file_backend(a_source) and source_looks_like_workout_file_backend(b_source)
+    )
+
+
+def is_polar_like_backend_workout(workout):
+    source = str(workout.get("source") if isinstance(workout, dict) else "")
+    tcx_file = str(workout.get("tcxFile") if isinstance(workout, dict) else "")
+    return is_polar_api_source_backend(source) or bool(re.match(r"^Polar_.+\.TCX$", Path(source).name, flags=re.IGNORECASE)) or bool(re.match(r"^Polar_.+\.TCX$", Path(tcx_file).name, flags=re.IGNORECASE))
+
+
+def is_polar_api_source_backend(source):
+    return str(source or "").strip().lower().startswith("polar:")
+
+
+def source_looks_like_workout_file_backend(source):
+    return Path(str(source or "")).suffix.lower() in {".csv", ".tcx", ".gpx", ".json"}
+
+
+def tcx_file_name_from_backend_workout(workout):
+    if not isinstance(workout, dict):
+        return ""
+    explicit = str(workout.get("tcxFile") or "").strip()
+    if explicit:
+        return Path(explicit).name
+    source_name = Path(str(workout.get("source") or "")).name
+    return source_name if source_name.lower().endswith(".tcx") else ""
 
 def workout_dedup_key(workout):
     polar_id = polar_exercise_id_from_source(workout.get("source") if isinstance(workout, dict) else "")
@@ -2575,6 +2671,19 @@ def merge_duplicate_backend_workouts(a, b):
     use_b = workout_richness_score(b) > workout_richness_score(a)
     base = dict(b if use_b else a)
     other = a if use_b else b
+    base_tcx_file = tcx_file_name_from_backend_workout(base)
+    other_tcx_file = tcx_file_name_from_backend_workout(other)
+    if not base.get("tcxFile") and other_tcx_file:
+        base["tcxFile"] = other_tcx_file
+    if not base.get("tcxFile") and base_tcx_file:
+        base["tcxFile"] = base_tcx_file
+    if not is_polar_api_source_backend(base.get("source")) and is_polar_api_source_backend(other.get("source")):
+        base["source"] = other.get("source")
+        if other.get("notes") and (not base.get("notes") or str(base.get("notes")).upper().startswith("TCX")):
+            base["notes"] = other.get("notes")
+    if other.get("loadSource") == "imported" and other.get("load"):
+        base["load"] = other.get("load")
+        base["loadSource"] = other.get("loadSource")
     if is_generic_sport(base.get("sport")) and other.get("sport"):
         base["sport"] = other.get("sport")
     for key in ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "hrMax", "hrRest", "feedback", "workoutTypeOverride"]:
@@ -2644,9 +2753,9 @@ def enrich_stored_polar_workouts_from_tcx():
         else:
             enriched_workouts.append(workout)
 
-    if not changed:
-        return
     merged_workouts = dedupe_backend_workouts(enriched_workouts)
+    if not changed and len(merged_workouts) == len(enriched_workouts):
+        return
     merged_workouts.sort(key=workout_sort_timestamp, reverse=True)
     target["workouts"] = merged_workouts
     athletes[target_index] = target
