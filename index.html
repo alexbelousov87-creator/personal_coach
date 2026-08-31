@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260831-polar-merge">
+    <link rel="stylesheet" href="styles.css?v=20260831-integration-controls">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -186,6 +186,7 @@
                 <div class="button-row">
                   <button class="ghost-btn" id="connectPolar" type="button">Подключить Polar</button>
                   <button class="primary-btn" id="syncPolar" type="button">Синхронизировать</button>
+                  <button class="ghost-btn disconnect-btn" id="disconnectPolar" type="button" hidden>Отключить</button>
                 </div>
               </article>
               <article class="integration-card" data-provider-card="runalyze">
@@ -194,10 +195,14 @@
                   <span id="runalyzeStatus">Токен не указан</span>
                 </div>
                 <p id="runalyzeHint">Можно сохранить Personal API token. Автоматическое чтение активностей включим после подтверждения доступного read API.</p>
-                <form class="inline-token-form" id="runalyzeTokenForm">
+                <form class="inline-token-form" id="runalyzeTokenForm" hidden>
                   <input id="runalyzeToken" name="token" type="password" placeholder="Personal API token">
-                  <button class="ghost-btn" id="saveRunalyzeToken" type="submit">Сохранить</button>
+                  <button class="ghost-btn" id="saveRunalyzeToken" type="submit">Сохранить токен</button>
                 </form>
+                <div class="button-row integration-manage-row" id="runalyzeManageActions" hidden>
+                  <button class="ghost-btn" id="changeRunalyzeToken" type="button">Изменить токен</button>
+                  <button class="ghost-btn disconnect-btn" id="disconnectRunalyze" type="button">Отключить</button>
+                </div>
               </article>
             </div>
           </section>
@@ -845,6 +850,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260831-polar-merge"></script>
+    <script src="app.js?v=20260831-integration-controls"></script>
   </body>
 </html>

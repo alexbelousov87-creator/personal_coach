@@ -412,6 +412,16 @@ p {
   color: var(--ink);
 }
 
+.disconnect-btn {
+  border-color: rgba(185, 50, 50, 0.35);
+  color: var(--bad);
+}
+
+.disconnect-btn:hover {
+  border-color: rgba(185, 50, 50, 0.65);
+  background: rgba(185, 50, 50, 0.06);
+}
+
 .ghost-btn.active,
 .primary-btn.active {
   border-color: rgba(17, 106, 123, 0.45);
@@ -2719,6 +2729,10 @@ textarea {
 .inline-token-form input {
   min-width: 0;
   flex: 1;
+}
+
+.integration-manage-row {
+  margin-top: auto;
 }
 
 @media (max-width: 980px) {

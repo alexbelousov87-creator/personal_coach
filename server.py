@@ -2183,6 +2183,8 @@ def disconnect_integration_for_session(session, provider):
         raise AppError("Unknown integration provider.", 400)
     coach_id, athlete_id = current_athlete_target(session)
     save_athlete_integration(coach_id, athlete_id, provider, {})
+    if provider == "polar" and str(coach_id) == DEFAULT_COACH_ID and str(athlete_id) == DEFAULT_ATHLETE_ID:
+        save_state_value("polarToken", {})
     return {"ok": True, "provider": provider}
 
 
@@ -2363,10 +2365,15 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
     if store:
         store_result = merge_polar_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
 
-    integration["lastSync"] = int(time.time())
-    save_athlete_integration(target_coach_id, target_athlete_id, "polar", integration)
-    if target_coach_id == DEFAULT_COACH_ID and target_athlete_id == DEFAULT_ATHLETE_ID:
-        save_state_value("polarLastSync", integration["lastSync"])
+    current_integration = athlete_integration(target_coach_id, target_athlete_id, "polar")
+    current_token = current_integration.get("token") if isinstance(current_integration.get("token"), dict) else {}
+    if current_token.get("access_token") == access_token:
+        integration["lastSync"] = int(time.time())
+        save_athlete_integration(target_coach_id, target_athlete_id, "polar", integration)
+        if target_coach_id == DEFAULT_COACH_ID and target_athlete_id == DEFAULT_ATHLETE_ID:
+            save_state_value("polarLastSync", integration["lastSync"])
+    else:
+        logging.info("Polar was disconnected while sync was running; token state was not restored athlete=%s", target_athlete_id)
     return {
         "ok": True,
         "provider": "polar",

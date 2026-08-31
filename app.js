@@ -66,6 +66,7 @@ const state = {
 let authRegisterMode = false;
 let workoutFolderSyncInProgress = false;
 let connectedIntegrationsSyncInProgress = false;
+let runalyzeTokenEditing = false;
 
 function defaultAthleteProfile(name = "") {
   return {
@@ -359,6 +360,7 @@ const polarStatus = document.querySelector("#polarStatus");
 const polarHint = document.querySelector("#polarHint");
 const connectPolarButton = document.querySelector("#connectPolar");
 const syncPolarButton = document.querySelector("#syncPolar");
+const disconnectPolarButton = document.querySelector("#disconnectPolar");
 const stravaStatus = document.querySelector("#stravaStatus");
 const stravaHint = document.querySelector("#stravaHint");
 const connectStravaButton = document.querySelector("#connectStrava");
@@ -367,6 +369,9 @@ const runalyzeStatus = document.querySelector("#runalyzeStatus");
 const runalyzeHint = document.querySelector("#runalyzeHint");
 const runalyzeTokenForm = document.querySelector("#runalyzeTokenForm");
 const runalyzeTokenInput = document.querySelector("#runalyzeToken");
+const runalyzeManageActions = document.querySelector("#runalyzeManageActions");
+const changeRunalyzeTokenButton = document.querySelector("#changeRunalyzeToken");
+const disconnectRunalyzeButton = document.querySelector("#disconnectRunalyze");
 const rolePanel = document.querySelector("#rolePanel");
 const studentManager = document.querySelector("#studentManager");
 const studentModal = document.querySelector("#studentModal");
@@ -676,9 +681,12 @@ function wireImport() {
 function wireIntegrations() {
   connectPolarButton?.addEventListener("click", () => connectIntegration("polar"));
   syncPolarButton?.addEventListener("click", () => syncExternalWorkouts("polar", { automatic: false }));
+  disconnectPolarButton?.addEventListener("click", () => disconnectIntegration("polar"));
   connectStravaButton?.addEventListener("click", () => connectIntegration("strava"));
   syncStravaButton?.addEventListener("click", () => syncExternalWorkouts("strava", { automatic: false }));
   runalyzeTokenForm?.addEventListener("submit", saveRunalyzeToken);
+  changeRunalyzeTokenButton?.addEventListener("click", beginRunalyzeTokenEdit);
+  disconnectRunalyzeButton?.addEventListener("click", () => disconnectIntegration("runalyze"));
 }
 
 function connectIntegration(provider) {
@@ -6287,13 +6295,36 @@ function updateIntegrationsUi(status = {}) {
     connectedHint: "Token сохранен для этого ученика. Полный импорт активностей Runalyze будет включен отдельно.",
   }, status.unavailable);
 
+  const polarConnected = Boolean(providers.polar?.connected);
+  if (connectPolarButton) connectPolarButton.hidden = polarConnected;
+  if (disconnectPolarButton) disconnectPolarButton.hidden = !polarConnected || !canUseIntegrations();
+  updateRunalyzeIntegrationControls(providers.runalyze || {}, Boolean(status.unavailable));
+
   const connectedCount = Object.values(providers).filter((item) => item?.connected).length;
   if (integrationsStatus) {
     integrationsStatus.textContent = canUseIntegrations()
       ? `Подключено источников: ${connectedCount}`
       : "Источники подключает сам ученик";
   }
-  if (runalyzeTokenInput && providers.runalyze?.connected) runalyzeTokenInput.value = "";
+  if (runalyzeTokenInput && providers.runalyze?.connected && !runalyzeTokenEditing) runalyzeTokenInput.value = "";
+}
+
+function updateRunalyzeIntegrationControls(status = {}, unavailable = false) {
+  const connected = Boolean(status.connected);
+  const canManage = canUseIntegrations()
+    && !unavailable
+    && status.enabled !== false
+    && Boolean(status.configured);
+  const editing = connected && runalyzeTokenEditing;
+
+  if (runalyzeTokenForm) runalyzeTokenForm.hidden = !canManage || (connected && !editing);
+  if (runalyzeManageActions) runalyzeManageActions.hidden = !canManage || !connected;
+  if (changeRunalyzeTokenButton) {
+    changeRunalyzeTokenButton.textContent = editing ? "Отменить изменение" : "Изменить токен";
+    changeRunalyzeTokenButton.disabled = !canManage;
+  }
+  if (disconnectRunalyzeButton) disconnectRunalyzeButton.disabled = !canManage;
+  if (runalyzeTokenInput) runalyzeTokenInput.disabled = !canManage;
 }
 
 function updateProviderUi(provider, status, refs, unavailable = false) {
@@ -6427,6 +6458,48 @@ async function syncExternalWorkouts(provider, options = {}) {
   }
 }
 
+function beginRunalyzeTokenEdit() {
+  if (!canUseIntegrations()) return;
+  runalyzeTokenEditing = !runalyzeTokenEditing;
+  if (runalyzeTokenForm) runalyzeTokenForm.hidden = !runalyzeTokenEditing;
+  if (changeRunalyzeTokenButton) {
+    changeRunalyzeTokenButton.textContent = runalyzeTokenEditing ? "Отменить изменение" : "Изменить токен";
+  }
+  if (!runalyzeTokenEditing && runalyzeTokenInput) runalyzeTokenInput.value = "";
+  if (runalyzeTokenEditing) runalyzeTokenInput?.focus();
+}
+
+async function disconnectIntegration(provider) {
+  if (!canUseIntegrations()) {
+    showToast("Отключение источников доступно только ученику");
+    return;
+  }
+  const label = providerLabel(provider);
+  if (!window.confirm(`Отключить ${label}? Уже импортированные тренировки останутся в приложении.`)) return;
+
+  const button = provider === "polar" ? disconnectPolarButton : disconnectRunalyzeButton;
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/integrations/disconnect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `${label}: disconnect failed`);
+    if (provider === "runalyze") {
+      runalyzeTokenEditing = false;
+      if (runalyzeTokenInput) runalyzeTokenInput.value = "";
+    }
+    showToast(`${label} отключен. Импортированные тренировки сохранены.`);
+    await refreshIntegrationsStatus();
+  } catch (error) {
+    showToast(`${label}: ${error.message}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function saveRunalyzeToken(event) {
   event.preventDefault();
   if (!canUseIntegrations()) {
@@ -6447,6 +6520,7 @@ async function saveRunalyzeToken(event) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Runalyze token failed");
     runalyzeTokenInput.value = "";
+    runalyzeTokenEditing = false;
     showToast("Runalyze token сохранен");
     await refreshIntegrationsStatus();
   } catch (error) {
