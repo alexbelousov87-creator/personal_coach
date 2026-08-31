@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260831-password-change">
+    <link rel="stylesheet" href="styles.css?v=20260831-phase-context">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -643,6 +643,25 @@
               </select>
             </label>
             <label>
+              Начало текущего этапа
+              <input name="prepPhaseStartedAt" type="date">
+            </label>
+            <label>
+              Плановая длительность этапа
+              <input name="prepPhasePlannedWeeks" type="number" min="1" max="24" step="1" placeholder="Например: 3">
+            </label>
+            <label>
+              Следующий этап
+              <select name="nextPrepPhase">
+                <option value="">Не указан</option>
+                <option value="base">Базовый период</option>
+                <option value="speed">Развитие скорости</option>
+                <option value="specific">Специфическая подготовка</option>
+                <option value="taper">Подводка</option>
+                <option value="recovery">Восстановительная неделя</option>
+              </select>
+            </label>
+            <label>
               Режим планирования
               <select name="planningMode">
                 <option value="conservative">Консервативный</option>
@@ -874,6 +893,6 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260831-password-change"></script>
+    <script src="app.js?v=20260831-phase-context"></script>
   </body>
 </html>

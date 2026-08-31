@@ -76,9 +76,14 @@ function defaultAthleteProfile(name = "") {
     athleteLevel: "intermediate",
     ageGroup: "adult",
     prepPhase: "auto",
+    prepPhaseStartedAt: "",
+    prepPhasePlannedWeeks: 0,
+    nextPrepPhase: "",
+    phaseHistory: [],
     raceDate: "",
     raceDistance: "",
     raceName: "",
+    raceHistory: [],
     photoDataUrl: "",
     planningMode: "normal",
     subjectiveFatigue: 3,
@@ -101,7 +106,115 @@ function normalizeAthleteProfile(profile, fallbackName = "") {
   normalized.subjectiveFatigue = normalizeSubjectiveFatigueValue(normalized.subjectiveFatigue);
   normalized.subjectiveFatigueNotes = String(normalized.subjectiveFatigueNotes || "").trim();
   normalized.subjectiveFatigueUpdatedAt = String(normalized.subjectiveFatigueUpdatedAt || "").trim();
+  normalized.prepPhaseStartedAt = normalizeDateInput(normalized.prepPhaseStartedAt);
+  normalized.prepPhasePlannedWeeks = Math.max(0, Math.round(Number(normalized.prepPhasePlannedWeeks) || 0));
+  normalized.nextPrepPhase = validPreparationPhaseId(normalized.nextPrepPhase) ? normalized.nextPrepPhase : "";
+  normalized.phaseHistory = normalizePhaseHistory(normalized.phaseHistory);
+  normalized.raceHistory = normalizeRaceHistory(normalized.raceHistory);
   return normalized;
+}
+
+function normalizeDateInput(value) {
+  const date = dateFromAny(value);
+  return date && !Number.isNaN(date.getTime()) ? toDateInputValue(date) : "";
+}
+
+function validPreparationPhaseId(value) {
+  return ["base", "speed", "specific", "taper", "recovery"].includes(String(value || ""));
+}
+
+function normalizePhaseHistory(history) {
+  const normalized = (Array.isArray(history) ? history : [])
+    .map((item) => {
+      const phase = String(item?.phase || item?.id || "");
+      const start = normalizeDateInput(item?.start || item?.startedAt);
+      const end = normalizeDateInput(item?.end || item?.endedAt);
+      if (!validPreparationPhaseId(phase) || !start) return null;
+      return { phase, start, end: end || null };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start.localeCompare(b.start));
+
+  const unique = new Map();
+  normalized.forEach((item) => unique.set(item.phase + "|" + item.start, item));
+  return [...unique.values()];
+}
+
+function normalizeRaceHistory(history) {
+  const normalized = (Array.isArray(history) ? history : [])
+    .map((item) => {
+      const date = normalizeDateInput(item?.date);
+      if (!date) return null;
+      const distance = String(item?.distance || "").trim();
+      return {
+        date,
+        name: String(item?.name || "").trim(),
+        distance,
+        status: String(item?.status || "past_target").trim(),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const unique = new Map();
+  normalized.forEach((item) => unique.set(item.date + "|" + item.distance + "|" + item.name, item));
+  return [...unique.values()];
+}
+
+function previousDateInput(value) {
+  const date = dateFromAny(value);
+  if (!date || Number.isNaN(date.getTime())) return toDateInputValue(new Date());
+  date.setDate(date.getDate() - 1);
+  return toDateInputValue(date);
+}
+
+function syncPreparationPhaseHistory(previousProfile, nextProfile) {
+  const previousPhase = validPreparationPhaseId(previousProfile?.prepPhase) ? previousProfile.prepPhase : "";
+  const previousStart = normalizeDateInput(previousProfile?.prepPhaseStartedAt);
+  const nextPhase = validPreparationPhaseId(nextProfile?.prepPhase) ? nextProfile.prepPhase : "";
+  const nextStart = normalizeDateInput(nextProfile?.prepPhaseStartedAt);
+  let history = normalizePhaseHistory(previousProfile?.phaseHistory);
+
+  if (previousPhase && previousStart && !history.some((item) => item.phase === previousPhase && item.start === previousStart)) {
+    history.push({ phase: previousPhase, start: previousStart, end: null });
+  }
+
+  if (previousPhase === nextPhase && previousStart && nextStart && previousStart !== nextStart) {
+    history = history.map((item) =>
+      item.phase === previousPhase && item.start === previousStart && !item.end
+        ? { ...item, start: nextStart }
+        : item
+    );
+  } else if (previousPhase && previousStart && previousPhase !== nextPhase) {
+    const closeAt = previousDateInput(nextStart || toDateInputValue(new Date()));
+    history = history.map((item) =>
+      item.phase === previousPhase && item.start === previousStart && !item.end
+        ? { ...item, end: closeAt < item.start ? item.start : closeAt }
+        : item
+    );
+  }
+
+  if (nextPhase && nextStart) {
+    const existing = history.find((item) => item.phase === nextPhase && item.start === nextStart);
+    if (existing) existing.end = null;
+    else history.push({ phase: nextPhase, start: nextStart, end: null });
+  }
+
+  return normalizePhaseHistory(history);
+}
+
+function syncRaceHistory(previousProfile, nextProfile) {
+  const history = normalizeRaceHistory(previousProfile?.raceHistory);
+  const previousRace = {
+    date: normalizeDateInput(previousProfile?.raceDate),
+    distance: String(previousProfile?.raceDistance || previousProfile?.targetDistance || "").trim(),
+    name: String(previousProfile?.raceName || "").trim(),
+    status: "past_target",
+  };
+  const nextRaceDate = normalizeDateInput(nextProfile?.raceDate);
+
+  if (previousRace.date && previousRace.date !== nextRaceDate) history.push(previousRace);
+  return normalizeRaceHistory(history);
 }
 
 function normalizeSubjectiveFatigueValue(value) {
@@ -714,6 +827,11 @@ function wireForms() {
   });
   profilePhotoInput.addEventListener("change", handleProfilePhotoFile);
   settingsForm.elements.hrZoneMode?.addEventListener("change", updateHrZoneInputsMode);
+  settingsForm.elements.prepPhase?.addEventListener("change", () => {
+    if (settingsForm.elements.prepPhase.value !== "auto" && !settingsForm.elements.prepPhaseStartedAt.value) {
+      settingsForm.elements.prepPhaseStartedAt.value = toDateInputValue(new Date());
+    }
+  });
   settingsForm.elements.maxHr?.addEventListener("input", updateDefaultHrZoneInputs);
   settingsForm.elements.restHr?.addEventListener("input", updateDefaultHrZoneInputs);
   useDefaultHrZonesButton?.addEventListener("click", () => {
@@ -750,16 +868,22 @@ function wireForms() {
     event.preventDefault();
     const data = new FormData(settingsForm);
     const hrZones = hrZoneSettingsFromForm(data);
-    state.profile = {
+    const previousProfile = normalizeAthleteProfile(state.profile);
+    const nextProfile = {
       name: data.get("name").trim(),
       goal: data.get("goal"),
       targetDistance: data.get("targetDistance") || "10k",
       athleteLevel: data.get("athleteLevel") || "intermediate",
       ageGroup: data.get("ageGroup") || "adult",
       prepPhase: data.get("prepPhase") || "auto",
+      prepPhaseStartedAt: data.get("prepPhaseStartedAt") || "",
+      prepPhasePlannedWeeks: Number(data.get("prepPhasePlannedWeeks")) || 0,
+      nextPrepPhase: data.get("nextPrepPhase") || "",
+      phaseHistory: previousProfile.phaseHistory,
       raceDate: data.get("raceDate") || "",
       raceDistance: data.get("raceDistance") || "",
       raceName: data.get("raceName").trim(),
+      raceHistory: previousProfile.raceHistory,
       photoDataUrl: state.profile.photoDataUrl || "",
       planningMode: data.get("planningMode") || "normal",
       subjectiveFatigue: canEditSubjectiveState() ? normalizeSubjectiveFatigueValue(data.get("subjectiveFatigue")) : normalizeSubjectiveFatigueValue(state.profile.subjectiveFatigue),
@@ -772,6 +896,9 @@ function wireForms() {
       daysPerWeek: Number(data.get("daysPerWeek")) || 4,
       constraints: data.get("constraints").trim(),
     };
+    nextProfile.phaseHistory = syncPreparationPhaseHistory(previousProfile, nextProfile);
+    nextProfile.raceHistory = syncRaceHistory(previousProfile, nextProfile);
+    state.profile = normalizeAthleteProfile(nextProfile);
     saveJson(PROFILE_KEY, state.profile);
     saveBackendState();
     hydrateProfile();
@@ -2935,7 +3062,7 @@ function buildPlanReviewRequest(planState) {
       "Проверь расстояние между тяжелыми беговыми стимулами, особенно интервалы, темпо, гонка и длительная.",
       "Проверь, что цель, этап подготовки, режим planningMode и ближайшая гонка учтены.",
       "Проверь, что тренировки достаточно конкретны: интервалы, темпо, горки и силовая должны иметь объем, интенсивность и восстановление.",
-      "Проверь нагрузку относительно recentWorkouts, load7Days, load28Days, acuteChronicRatio и локальных предупреждений.",
+      "Проверь нагрузку относительно recentWorkoutsDetailed, weeklyHistory, load7Days, load28Days, acuteChronicRatio и локальных предупреждений.",
       "Не предлагай медицинских диагнозов. Если данных мало, прямо укажи, какие данные ограничивают уверенность.",
     ],
   };
@@ -5284,9 +5411,9 @@ function buildAiPrompt(plan) {
   ].join("\n\n");
 }
 
-function buildAiRequest() {
-  const recent = state.workouts.slice(0, 20).map((workout) => ({
-    date: workout.date.slice(0, 10),
+function workoutForAiContext(workout) {
+  return {
+    date: String(workout.date || "").slice(0, 10),
     sport: workout.sport,
     workoutType: getWorkoutType(workout),
     durationMin: workout.durationMin,
@@ -5309,18 +5436,198 @@ function buildAiRequest() {
       }
       : null,
     workoutTypeSource: workout.workoutTypeOverride ? "manual" : "auto",
+  };
+}
+
+function workoutsInDateRange(start, end) {
+  return state.workouts.filter((workout) => {
+    const date = dateFromAny(workout.date);
+    return date && !Number.isNaN(date.getTime()) && date >= start && date < end;
+  });
+}
+
+function buildRecentWorkoutsDetailed(days = 14) {
+  const end = startOfDay(addDays(new Date(), 1));
+  const start = startOfDay(addDays(end, -days));
+  return workoutsInDateRange(start, end)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .map(workoutForAiContext);
+}
+
+function compactKeySession(workout) {
+  const type = getWorkoutType(workout);
+  const parts = [
+    String(workout.date || "").slice(0, 10),
+    type,
+    workout.durationMin ? Math.round(workout.durationMin) + " мин" : "",
+    workout.distanceKm ? round(workout.distanceKm, 1) + " км" : "",
+    workout.load ? Math.round(workout.load) + " TRIMP" : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function buildWeeklyTrainingHistory(weeks = 8) {
+  const currentWeekStart = startOfTrainingWeek(new Date());
+  return Array.from({ length: weeks }, (_, index) => {
+    const start = addDays(currentWeekStart, (index - weeks + 1) * 7);
+    const end = addDays(start, 7);
+    const workouts = workoutsInDateRange(startOfDay(start), startOfDay(end));
+    const running = workouts.filter(isRunningWorkout);
+    const keySessions = running.filter((workout) =>
+      ["interval", "tempo", "long", "race"].includes(getWorkoutType(workout))
+    );
+    const qualitySessions = running.filter((workout) =>
+      ["interval", "tempo", "race"].includes(getWorkoutType(workout))
+    );
+    const longRuns = running.filter((workout) => getWorkoutType(workout) === "long");
+
+    return {
+      weekStart: toDateInputValue(start),
+      weekEnd: toDateInputValue(addDays(start, 6)),
+      runKm: round(running.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0), 1),
+      runMinutes: Math.round(running.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0)),
+      load: Math.round(workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0)),
+      sessions: workouts.length,
+      runningSessions: running.length,
+      qualitySessions: qualitySessions.length,
+      keySessions: keySessions.map(compactKeySession),
+      longRunMin: Math.round(Math.max(0, ...longRuns.map((workout) => Number(workout.durationMin) || 0))),
+    };
+  });
+}
+
+function buildTrainingHistorySummary(days = 28) {
+  const end = startOfDay(addDays(new Date(), 1));
+  const start = startOfDay(addDays(end, -days));
+  const workouts = workoutsInDateRange(start, end);
+  const running = workouts.filter(isRunningWorkout);
+  return {
+    periodDays: days,
+    runningKm: round(running.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0), 1),
+    runningMinutes: Math.round(running.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0)),
+    runningSessions: running.length,
+    totalSessions: workouts.length,
+    qualitySessions: running.filter((workout) => ["interval", "tempo", "race"].includes(getWorkoutType(workout))).length,
+    longRuns: running.filter((workout) => getWorkoutType(workout) === "long").length,
+    load: Math.round(workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0)),
+  };
+}
+
+function inferredAutomaticPhaseStart(phaseId, race) {
+  if (!race?.date) return "";
+  const raceDate = dateFromAny(race.date);
+  if (!raceDate || Number.isNaN(raceDate.getTime())) return "";
+  const offsets = { specific: -56, taper: -10, recovery: 1 };
+  if (!(phaseId in offsets)) return "";
+  return toDateInputValue(addDays(raceDate, offsets[phaseId]));
+}
+
+function getPreparationPhaseContext(weekStart = selectedWeekStartDate()) {
+  const phase = getPreparationPhase(weekStart);
+  const race = getRaceSummary();
+  const manualPhase = state.profile.prepPhase !== "auto";
+  const startedAt = manualPhase
+    ? normalizeDateInput(state.profile.prepPhaseStartedAt)
+    : inferredAutomaticPhaseStart(phase.id, race);
+  const referenceDate = startOfDay(weekStart || new Date());
+  const startDate = dateFromAny(startedAt);
+  const weeksCompleted = startDate && !Number.isNaN(startDate.getTime())
+    ? Math.max(0, Math.floor((referenceDate - startOfDay(startDate)) / (7 * 86400000)))
+    : null;
+  const plannedDurationWeeks = Number(state.profile.prepPhasePlannedWeeks) || null;
+  const automaticNext = {
+    base: "specific",
+    speed: "specific",
+    specific: "taper",
+    taper: "recovery",
+    recovery: "base",
+  }[phase.id] || "";
+  const nextPhaseId = validPreparationPhaseId(state.profile.nextPrepPhase)
+    ? state.profile.nextPrepPhase
+    : automaticNext;
+
+  return {
+    ...phase,
+    source: manualPhase ? "profile" : "automatic",
+    startedAt: startedAt || null,
+    weeksCompleted,
+    plannedDurationWeeks,
+    nextPhase: nextPhaseId ? preparationPhaseById(nextPhaseId) : null,
+  };
+}
+
+function phaseHistoryForPlanning() {
+  const history = normalizePhaseHistory(state.profile.phaseHistory).map((item) => ({
+    ...item,
+    phaseLabel: preparationPhaseById(item.phase).label,
   }));
+  const current = getPreparationPhaseContext();
+  if (current.startedAt && !history.some((item) => item.phase === current.id && item.start === current.startedAt)) {
+    history.push({
+      phase: current.id,
+      phaseLabel: current.label,
+      start: current.startedAt,
+      end: null,
+    });
+  }
+  return history.sort((a, b) => a.start.localeCompare(b.start));
+}
+
+function raceHistoryForPlanning() {
+  const history = normalizeRaceHistory(state.profile.raceHistory);
+  const currentRace = getRaceSummary();
+  const today = startOfDay(new Date());
+
+  if (currentRace && currentRace.daysUntil < 0) {
+    history.push({
+      date: currentRace.date,
+      name: currentRace.name,
+      distance: currentRace.distance,
+      status: "past_target",
+    });
+  }
+
+  Object.values(state.plansByWeek || {}).forEach((bucket) => {
+    const sources = bucket?.sources || {};
+    const plan = sources[bucket?.activePlanSource] || Object.values(sources)[0];
+    (plan?.days || []).forEach((day) => {
+      const date = dateFromAny(day?.date);
+      const type = planTypeFromFocus(day?.focus || day?.title);
+      if (type !== "race" || !date || Number.isNaN(date.getTime()) || startOfDay(date) >= today) return;
+      history.push({
+        date: toDateInputValue(date),
+        name: String(day.title || day.focus || "Старт"),
+        distance: String(day.targetDistance || ""),
+        status: "planned_past",
+      });
+    });
+  });
+
+  const byDate = new Map();
+  normalizeRaceHistory(history).forEach((race) => {
+    if (!byDate.has(race.date) || race.status === "past_target") byDate.set(race.date, race);
+  });
+  return [...byDate.values()].map((race) => ({
+    ...race,
+    distanceLabel: raceDistanceLabel(race.distance),
+  }));
+}
+
+function buildAiRequest() {
+  const recent = buildRecentWorkoutsDetailed(14);
   const planningMode = getPlanningModeProfile();
   const athleteLevel = getAthleteLevelProfile();
   const ageGroup = getAgeGroupProfile();
 
   return {
     system:
-      "Ты опытный тренер по видам спорта на выносливость. Составляй календарный недельный микроцикл с понедельника по воскресенье от текущего тренировочного состояния спортсмена, цели и этапа подготовки preparationPhase. Не используй жесткое расписание по дням: сначала выбери нужные тренировочные стимулы недели, затем разложи их по календарю с учетом восстановления, гонки, предыдущих тренировок и нагрузки. Базовая развивающая неделя обычно содержит 1 скоростной/интервальный стимул, 1 темповый/пороговый/специфический стимул, 1 длительную, легкие кроссы и восстановление, но это ориентир, а не обязанность. Можешь заменять классические интервалы или темпо на бег в гору, фартлек, прогрессивный бег, марафонский темп, strides, силовую, прыжковые упражнения, ОФП/мобилити или кросс-тренинг, если это лучше соответствует состоянию и цели. Если отклоняешься от базовой структуры, объясни причину в rationale. Не перестраховывайся легкими днями по умолчанию, но при признаках перегруза снижай объем/интенсивность и убирай лишние тяжелые стимулы. Субъективная усталость спортсмена важна: если она низкая у подготовленного спортсмена, высокий TRIMP сам по себе не означает обязательную разгрузочную неделю; если усталость высокая, снижай нагрузку даже при умеренном TRIMP. Не давай медицинских диагнозов и не назначай лечение.",
+      "Ты опытный тренер по видам спорта на выносливость. Составляй календарный недельный микроцикл с понедельника по воскресенье от текущего тренировочного состояния спортсмена, цели и этапа подготовки preparationPhase. Не используй жесткое расписание по дням: сначала выбери нужные тренировочные стимулы недели, затем разложи их по календарю с учетом восстановления, гонки, предыдущих тренировок и нагрузки. Базовая развивающая неделя обычно содержит 1 скоростной/интервальный стимул, 1 темповый/пороговый/специфический стимул, 1 длительную, легкие кроссы и восстановление, но это ориентир, а не обязанность. Можешь заменять классические интервалы или темпо на бег в гору, фартлек, прогрессивный бег, марафонский темп, strides, силовую, прыжковые упражнения, ОФП/мобилити или кросс-тренинг, если это лучше соответствует состоянию и цели. Если отклоняешься от базовой структуры, объясни причину в rationale. Не перестраховывайся легкими днями по умолчанию, но при признаках перегруза снижай объем/интенсивность и убирай лишние тяжелые стимулы. Субъективная усталость спортсмена важна: если она низкая у подготовленного спортсмена, высокий TRIMP сам по себе не означает обязательную разгрузочную неделю; если усталость высокая, снижай нагрузку даже при умеренном TRIMP. preparationPhase и phaseHistory являются авторитетной хронологией этапов: не определяй этап только по количеству дней до гонки. Учитывай, сколько недель текущего этапа уже завершено и какова его плановая длительность; решай, продолжить этап или готовить переход к nextPhase. Не давай медицинских диагнозов и не назначай лечение.",
     context: {
       profile: profileForPlanning(),
       race: getRaceSummary(),
-      preparationPhase: getPreparationPhase(),
+      raceHistory: raceHistoryForPlanning(),
+      preparationPhase: getPreparationPhaseContext(),
+      phaseHistory: phaseHistoryForPlanning(),
       planningMode,
       readiness: getReadiness(),
       subjectiveState: subjectiveStateForPlanning(),
@@ -5328,9 +5635,18 @@ function buildAiRequest() {
       load7Days: sumLoad(7),
       load28Days: sumLoad(28),
       previous7DaysLoad: sumLoadRange(8, 14),
-      recentWorkouts: recent,
+      recentWorkoutsDetailed: recent,
+      trainingHistory28d: buildTrainingHistorySummary(28),
+      weeklyHistory: buildWeeklyTrainingHistory(8),
       workoutReference: workoutReferenceForPlanning(),
       workoutTemplates: workoutTemplateLibrary().map(({ toneClass, ...template }) => template),
+      contextScaleRules: [
+        "recentWorkoutsDetailed содержит подробные тренировки последних 14 календарных дней и нужен для восстановления и расстановки ближайших работ.",
+        "trainingHistory28d показывает общий объем, частоту ключевых работ и нагрузку за 28 дней.",
+        "weeklyHistory содержит восемь календарных недель в агрегированном виде и нужен для оценки динамики формы и последовательности стимулов.",
+        "phaseHistory и preparationPhase задают хронологию периодизации; не восстанавливай ее только по дням до гонки.",
+        "raceHistory показывает предыдущие целевые старты; текущая race описана отдельно.",
+      ],
       workoutAccountingRules: [
         "Все импортированные активности учитывай как нагрузку и фактор восстановления.",
         "Беговые задания плана закрываются только беговыми тренировками.",
@@ -5593,7 +5909,7 @@ function buildPlanningWeek() {
     weekEnd: days[6]?.date || "",
     days,
     targetDistance: getTargetDistanceProfile().label,
-    preparationPhase: getPreparationPhase(weekStart),
+    preparationPhase: getPreparationPhaseContext(weekStart),
     race: getRaceSummary(),
     instruction:
       "Сформируй план именно на эти 7 дат с понедельника по воскресенье. Используй фактические тренировки и состояние спортсмена, а не текущий отображаемый план. Не фиксируй заранее дни ключевых работ: выбирай стимулы недели и расставляй их по календарю по восстановлению, цели и гонке.",
@@ -5613,7 +5929,7 @@ function subjectiveStateForPlanning() {
 }
 
 function profileForPlanning() {
-  const { photoDataUrl, ...profile } = state.profile || {};
+  const { photoDataUrl, phaseHistory, raceHistory, ...profile } = state.profile || {};
   const athleteLevel = getAthleteLevelProfile();
   const ageGroup = getAgeGroupProfile();
   return {
@@ -5680,7 +5996,7 @@ function buildTrainingState() {
     targetDistance: getTargetDistanceProfile().label,
     athleteLevel: getAthleteLevelProfile(),
     ageGroup: getAgeGroupProfile(),
-    preparationPhase: getPreparationPhase(weekStart),
+    preparationPhase: getPreparationPhaseContext(weekStart),
     planningMode: getPlanningModeProfile(),
     race: getRaceSummary(),
   };
@@ -6117,6 +6433,9 @@ function hydrateProfile() {
   settingsForm.elements.athleteLevel.value = state.profile.athleteLevel || "intermediate";
   settingsForm.elements.ageGroup.value = state.profile.ageGroup || "adult";
   settingsForm.elements.prepPhase.value = state.profile.prepPhase || "auto";
+  settingsForm.elements.prepPhaseStartedAt.value = state.profile.prepPhaseStartedAt || "";
+  settingsForm.elements.prepPhasePlannedWeeks.value = state.profile.prepPhasePlannedWeeks || "";
+  settingsForm.elements.nextPrepPhase.value = state.profile.nextPrepPhase || "";
   settingsForm.elements.planningMode.value = state.profile.planningMode || "normal";
   if (settingsForm.elements.subjectiveFatigue) {
     settingsForm.elements.subjectiveFatigue.value = normalizeSubjectiveFatigueValue(state.profile.subjectiveFatigue);
