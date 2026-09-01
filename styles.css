@@ -2167,6 +2167,40 @@ textarea {
   margin-top: 0;
 }
 
+.actual-workout-entry + .actual-workout-entry {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(36, 132, 90, 0.2);
+}
+
+.actual-structure {
+  margin-top: 7px;
+  padding: 8px 10px;
+  border-left: 3px solid rgba(17, 106, 123, 0.48);
+  border-radius: 0 6px 6px 0;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.actual-structure span {
+  display: block;
+  color: var(--accent-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.actual-structure p {
+  margin: 3px 0 2px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.actual-structure small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .plan-execution.matched {
   border-color: rgba(36, 132, 90, 0.28);
   background: #f3faf6;

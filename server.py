@@ -3128,7 +3128,7 @@ def merge_duplicate_backend_workouts(a, b):
         base["loadSource"] = other.get("loadSource")
     if is_generic_sport(base.get("sport")) and other.get("sport"):
         base["sport"] = other.get("sport")
-    for key in ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "maxHr", "hrMax", "hrRest", "rpe", "subjectiveFeeling", "feedback", "workoutTypeOverride"]:
+    for key in ["intervalSignals", "lapSignals", "workoutStructure", "structureAnalyzed", "tcxEnrichmentVersion", "avgSpeed", "maxSpeed", "maxHr", "hrMax", "hrRest", "rpe", "subjectiveFeeling", "feedback", "workoutTypeOverride"]:
         if not base.get(key) and other.get(key):
             base[key] = other.get(key)
     if not base.get("paceSource") and other.get("paceSource"):
@@ -3157,6 +3157,7 @@ def workout_richness_score(workout):
         4 if source.endswith(".csv") else 0,
         3 if workout.get("intervalSignals") else 0,
         2 if workout.get("lapSignals") else 0,
+        4 if workout.get("workoutStructure") else 0,
         1 if workout.get("paceSource") else 0,
         2 if load_source == "imported" else 0,
         2 if load_source.startswith("trimp-") else 0,
@@ -3217,8 +3218,7 @@ def enrich_stored_polar_workouts_from_tcx():
 def workout_has_tcx_enrichment(workout):
     if not isinstance(workout, dict):
         return False
-    pace_source = str(workout.get("paceSource") or "")
-    return bool(workout.get("lapSignals") and pace_source and pace_source != "distance-duration" and workout.get("maxSpeed") and workout.get("workoutType"))
+    return number_or_none(workout.get("tcxEnrichmentVersion")) == 2
 
 
 def find_polar_tcx_file(polar_id):
@@ -3272,10 +3272,13 @@ def parse_tcx_workout_enrichment(path):
         if max_speed:
             max_speed_values.append(speed_to_kph(max_speed))
 
-    enrichment = {"tcxFile": path.name}
+    enrichment = {"tcxFile": path.name, "structureAnalyzed": True, "tcxEnrichmentVersion": 2}
     lap_signals = analyze_tcx_laps_backend(laps)
     if lap_signals:
         enrichment["lapSignals"] = lap_signals
+    workout_structure = extract_tcx_workout_structure_backend(laps, lap_signals)
+    if workout_structure:
+        enrichment["workoutStructure"] = workout_structure
     if avg_speed_values:
         enrichment["avgSpeed"] = round(sum(avg_speed_values) / len(avg_speed_values), 2)
     if max_speed_values:
@@ -3295,7 +3298,7 @@ def merge_polar_workout_enrichment(workout, enrichment):
     if not isinstance(workout, dict) or not isinstance(enrichment, dict) or not enrichment:
         return workout
     updated = dict(workout)
-    for key in ["lapSignals", "avgSpeed", "maxSpeed", "hrMax", "paceMinPerKm", "paceSource", "tcxFile"]:
+    for key in ["lapSignals", "workoutStructure", "structureAnalyzed", "tcxEnrichmentVersion", "avgSpeed", "maxSpeed", "hrMax", "paceMinPerKm", "paceSource", "tcxFile"]:
         if enrichment.get(key):
             updated[key] = enrichment[key]
     lap_signals = enrichment.get("lapSignals") if isinstance(enrichment.get("lapSignals"), dict) else {}
@@ -3308,15 +3311,28 @@ def merge_polar_workout_enrichment(workout, enrichment):
     return updated
 
 
-def analyze_tcx_laps_backend(laps):
-    lap_rows = []
-    for lap in laps:
+def tcx_lap_rows_backend(laps):
+    rows = []
+    for index, lap in enumerate(laps):
         duration = number_or_none(xml_text(lap, "TotalTimeSeconds")) or 0
         distance = number_or_none(xml_text(lap, "DistanceMeters")) or 0
         trigger = xml_text(lap, "TriggerMethod") or ""
+        avg_hr = number_or_none(xml_text(xml_first(lap, "AverageHeartRateBpm"), "Value"))
         speed = (distance / duration) * 3.6 if duration and distance else None
         if duration > 0 or distance > 0:
-            lap_rows.append({"duration": duration, "distance": distance, "trigger": trigger, "speed": speed})
+            rows.append({
+                "index": index,
+                "duration": duration,
+                "distance": distance,
+                "trigger": trigger,
+                "speed": speed,
+                "avgHr": int(round(avg_hr)) if avg_hr else None,
+            })
+    return rows
+
+
+def analyze_tcx_laps_backend(laps):
+    lap_rows = tcx_lap_rows_backend(laps)
     if not lap_rows:
         return None
 
@@ -3346,6 +3362,256 @@ def analyze_tcx_laps_backend(laps):
         "hasTempoLaps": has_tempo_laps,
     }
 
+
+def extract_tcx_workout_structure_backend(laps, lap_signals=None):
+    rows = tcx_lap_rows_backend(laps)
+    manual_rows = [row for row in rows if row["trigger"].lower() == "manual"]
+    if len(manual_rows) < 3:
+        return None
+
+    signals = lap_signals if isinstance(lap_signals, dict) else analyze_tcx_laps_backend(laps)
+    if not signals or not (signals.get("hasIntervalLaps") or signals.get("hasTempoLaps")):
+        return None
+
+    core = list(manual_rows)
+    warmup = None
+    cooldown = None
+    if len(core) >= 3 and is_tcx_boundary_lap_backend(core[0], core[1:]):
+        warmup = core.pop(0)
+    if len(core) >= 2 and is_tcx_boundary_lap_backend(core[-1], core[:-1]):
+        cooldown = core.pop()
+
+    if not core:
+        return None
+
+    if signals.get("hasIntervalLaps"):
+        work_rows, recovery_rows = split_tcx_lap_intensity_backend(core)
+        if len(work_rows) < 2 or not recovery_rows:
+            return None
+        kind = "intervals"
+        confidence = 0.96 if len(work_rows) >= 4 else 0.9
+    else:
+        kind = "tempo-blocks"
+        if len(core) == 1:
+            work_rows, recovery_rows = core, []
+            kind = "tempo-continuous"
+        else:
+            work_rows, recovery_rows = split_tcx_lap_intensity_backend(core)
+            if not work_rows:
+                return None
+            if len(work_rows) == 1:
+                kind = "tempo-continuous"
+        confidence = 0.92 if len(work_rows) >= 2 else 0.86
+
+    work_groups = summarize_tcx_lap_groups_backend(work_rows)
+    if not work_groups:
+        return None
+    recovery_groups = summarize_tcx_lap_groups_backend(recovery_rows, recovery=True)
+    display = format_tcx_structure_display_backend(kind, work_groups, recovery_groups)
+    if not display:
+        return None
+
+    return {
+        "kind": kind,
+        "source": "tcx-manual-laps",
+        "confidence": confidence,
+        "confidenceLabel": "высокая" if confidence >= 0.9 else "средняя",
+        "display": display,
+        "warmupMin": round(warmup["duration"] / 60) if warmup else None,
+        "cooldownMin": round(cooldown["duration"] / 60) if cooldown else None,
+        "totalWorkMin": round(sum(row["duration"] for row in work_rows) / 60, 1),
+        "totalWorkDistanceKm": round(sum(row["distance"] for row in work_rows) / 1000, 2),
+        "workGroups": work_groups,
+        "recoveryGroups": recovery_groups,
+        "segments": [
+            dict(compact_tcx_lap_segment_backend(row), role="work" if row in work_rows else "recovery")
+            for row in core
+        ][:50],
+    }
+
+
+def is_tcx_boundary_lap_backend(row, others):
+    if not row or not others or not row.get("speed"):
+        return False
+    other_speeds = [item.get("speed") for item in others if item.get("speed")]
+    if not other_speeds:
+        return False
+    is_long = row.get("duration", 0) >= 600 or row.get("distance", 0) >= 2500
+    return bool(is_long and row["speed"] <= max(other_speeds) * 0.95)
+
+
+def split_tcx_lap_intensity_backend(rows):
+    usable = [row for row in rows if row.get("speed")]
+    if len(usable) < 2:
+        return usable, []
+    low_center = min(row["speed"] for row in usable)
+    high_center = max(row["speed"] for row in usable)
+    if high_center - low_center < 1.2:
+        return usable, []
+
+    for _ in range(8):
+        threshold = (low_center + high_center) / 2
+        low_rows = [row for row in usable if row["speed"] < threshold]
+        high_rows = [row for row in usable if row["speed"] >= threshold]
+        if not low_rows or not high_rows:
+            break
+        low_center = sum(row["speed"] for row in low_rows) / len(low_rows)
+        high_center = sum(row["speed"] for row in high_rows) / len(high_rows)
+
+    threshold = (low_center + high_center) / 2
+    work_rows = [row for row in rows if row.get("speed") and row["speed"] >= threshold]
+    recovery_rows = [row for row in rows if row not in work_rows]
+    return work_rows, recovery_rows
+
+
+def summarize_tcx_lap_groups_backend(rows, recovery=False):
+    rows = [row for row in rows if row.get("duration") or row.get("distance")]
+    if not rows:
+        return []
+
+    distance_clusters = cluster_tcx_laps_backend(rows, "distance", 0.18)
+    meaningful = [cluster for cluster in distance_clusters if len(cluster) >= 2]
+    covered = sum(len(cluster) for cluster in meaningful)
+    use_distance_clusters = len(meaningful) > 1 and covered >= len(rows) * 0.75
+    clusters = meaningful if use_distance_clusters else [rows]
+
+    groups = []
+    for cluster in clusters:
+        basis = "distance" if use_distance_clusters else choose_tcx_group_basis_backend(cluster, recovery)
+        values = [row[basis] for row in cluster if row.get(basis)]
+        if not values:
+            continue
+        median_value = median_tcx_backend(values)
+        target = snap_tcx_group_target_backend(median_value, basis)
+        groups.append({
+            "count": len(cluster),
+            "basis": basis,
+            "value": target,
+            "median": round(median_value, 1),
+            "firstIndex": min(row["index"] for row in cluster),
+        })
+    groups.sort(key=lambda item: item["firstIndex"])
+    return groups
+
+
+def cluster_tcx_laps_backend(rows, key, tolerance):
+    ordered = sorted((row for row in rows if row.get(key)), key=lambda row: row[key])
+    clusters = []
+    for row in ordered:
+        if not clusters:
+            clusters.append([row])
+            continue
+        center = median_tcx_backend([item[key] for item in clusters[-1]])
+        if center and abs(row[key] - center) / center <= tolerance:
+            clusters[-1].append(row)
+        else:
+            clusters.append([row])
+    return clusters
+
+
+def choose_tcx_group_basis_backend(rows, recovery=False):
+    distances = [row["distance"] for row in rows if row.get("distance")]
+    durations = [row["duration"] for row in rows if row.get("duration")]
+    if not distances:
+        return "duration"
+    if not durations:
+        return "distance"
+
+    distance_median = median_tcx_backend(distances)
+    duration_median = median_tcx_backend(durations)
+    distance_score = tcx_metric_score_backend(distances, distance_median, "distance")
+    duration_score = tcx_metric_score_backend(durations, duration_median, "duration")
+    if recovery:
+        return "distance" if distance_score + 0.02 < duration_score else "duration"
+    return "distance" if distance_score <= duration_score else "duration"
+
+
+def tcx_metric_score_backend(values, median_value, basis):
+    if not values or not median_value:
+        return 10
+    mean_value = sum(values) / len(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / len(values)
+    coefficient = (variance ** 0.5) / mean_value if mean_value else 1
+    standards = tcx_distance_standards_backend() if basis == "distance" else tcx_duration_standards_backend()
+    nearest = min(standards, key=lambda value: abs(value - median_value))
+    roundness = abs(nearest - median_value) / median_value
+    return coefficient + roundness
+
+
+def snap_tcx_group_target_backend(value, basis):
+    standards = tcx_distance_standards_backend() if basis == "distance" else tcx_duration_standards_backend()
+    nearest = min(standards, key=lambda item: abs(item - value))
+    if value and abs(nearest - value) / value <= 0.1:
+        return int(nearest)
+    step = 10 if basis == "distance" else 5
+    return int(round(value / step) * step)
+
+
+def tcx_distance_standards_backend():
+    return [100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1600, 2000, 3000, 5000]
+
+
+def tcx_duration_standards_backend():
+    return [15, 20, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360, 480, 600, 720, 900, 1200, 1800]
+
+
+def compact_tcx_lap_segment_backend(row):
+    return {
+        "durationSec": int(round(row.get("duration") or 0)),
+        "distanceM": int(round(row.get("distance") or 0)),
+        "avgHr": row.get("avgHr"),
+    }
+
+
+def format_tcx_structure_display_backend(kind, work_groups, recovery_groups):
+    work_labels = [format_tcx_work_group_backend(group) for group in work_groups]
+    work_labels = [label for label in work_labels if label]
+    if not work_labels:
+        return ""
+    if kind.startswith("tempo"):
+        if kind == "tempo-continuous" and len(work_groups) == 1 and work_groups[0].get("count") == 1:
+            main = f"{format_tcx_group_value_backend(work_groups[0])} темпо"
+        else:
+            main = f"{' + '.join(work_labels)} темпо"
+    else:
+        main = " + ".join(work_labels)
+
+    recovery_values = []
+    for group in recovery_groups:
+        value = format_tcx_group_value_backend(group)
+        if value and value not in recovery_values:
+            recovery_values.append(value)
+    if recovery_values:
+        main += f", восстановление около {' / '.join(recovery_values)}"
+    return main
+
+
+def format_tcx_work_group_backend(group):
+    value = format_tcx_group_value_backend(group)
+    return f"{group.get('count', 0)} × {value}" if value else ""
+
+
+def format_tcx_group_value_backend(group):
+    value = int(round(group.get("value") or 0))
+    if not value:
+        return ""
+    if group.get("basis") == "distance":
+        return f"{value} м"
+    if value < 60:
+        return f"{value} с"
+    if value % 60 == 0:
+        return f"{value // 60} мин"
+    return f"{value // 60}:{value % 60:02d} мин"
+
+
+def median_tcx_backend(values):
+    ordered = sorted(value for value in values if value is not None)
+    if not ordered:
+        return 0
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
 
 def percentile_backend(values, percentile_value):
     values = sorted(value for value in values if value is not None)
@@ -3861,7 +4127,8 @@ def build_user_prompt(payload):
         "21 км - длинные интервалы, темпо/полумарафонское усилие, длительная аэробная работа и устойчивость к утомлению; "
         "42 км - контролируемые интервалы без чрезмерной остроты, марафонское усилие, аэробная база, длинные тренировки, питание и восстановление. "
         "Опирайся на load7Days, load28Days, previous7DaysLoad, acuteChronicRatio, rampRate, hoursSinceLast, trainingHistory28d, weeklyHistory, "
-        "частоту тренировок и последние тренировки. "
+        "частоту тренировок и последние тренировки. Если у тренировки есть workoutStructure, считай его фактической структурой выполненной основной части: "
+        "используй display, totalWorkMin и totalWorkDistanceKm для оценки реального качественного объема, а не только общий тип, длительность и TRIMP. "
         "Для каждого дня укажи конкретную длительность, интенсивность, зоны/RPE при необходимости и смысл тренировки. "
         "В ответе указывай только план: details/plannedWorkout - только задание на тренировку. "
         "Не возвращай поле actualWorkout и не описывай факт выполнения в details, plannedWorkout или rationale; приложение само покажет факт из импортированных тренировок. "

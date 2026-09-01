@@ -1080,6 +1080,7 @@ function parseTcx(text, fileName) {
   return activities.map((activity, index) => {
     const laps = descendants(activity, "Lap");
     const lapSignals = analyzeTcxLaps(laps);
+    const workoutStructure = extractTcxWorkoutStructure(laps, lapSignals);
     const maxHr = maxTcxLapHeartRate(laps);
     const lapLoad = estimateTcxLapLoad(laps);
     const durationSec = sumNodes(laps, "TotalTimeSeconds");
@@ -1116,6 +1117,8 @@ function parseTcx(text, fileName) {
       speed: avgSpeed || null,
       maxSpeed: maxSpeed || null,
       lapSignals,
+      workoutStructure,
+      structureAnalyzed: true,
       avgHr: avgHr ? Math.round(avgHr) : null,
       hrMax: maxHr || null,
       load: lapLoad || null,
@@ -1447,7 +1450,7 @@ function mergeDuplicateWorkouts(a, b) {
   if (isGenericSport(base.sport) && other.sport) {
     base.sport = other.sport;
   }
-  for (const key of ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "hrMax", "hrRest"]) {
+  for (const key of ["intervalSignals", "lapSignals", "workoutStructure", "structureAnalyzed", "avgSpeed", "maxSpeed", "hrMax", "hrRest"]) {
     if (!base[key] && other[key]) base[key] = other[key];
   }
   if (!base.paceSource && other.paceSource) {
@@ -1476,6 +1479,7 @@ function workoutRichnessScore(workout) {
     String(workout?.source || "").toLowerCase().endsWith(".csv") ? 4 : 0,
     workout?.intervalSignals ? 3 : 0,
     workout?.lapSignals ? 2 : 0,
+    workout?.workoutStructure ? 4 : 0,
     workout?.paceSource ? 1 : 0,
     workout?.loadSource === "imported" ? 2 : 0,
     String(workout?.loadSource || "").startsWith("trimp-") ? 2 : 0,
@@ -1497,6 +1501,7 @@ function normalizeWorkout(input) {
   const providedLoadSource = String(input.loadSource || "").trim();
   const intervalSignals = input.intervalSignals || null;
   const lapSignals = input.lapSignals || null;
+  const workoutStructure = input.workoutStructure || null;
   const trimp = estimateTrimp(durationMin, avgHr, trimpHrMax, hrRest);
   const load = Math.round(providedLoad || trimp || durationMin);
   const loadSource = providedLoad ? (providedLoadSource || "imported") : trimp ? "trimp" : "duration";
@@ -1531,6 +1536,8 @@ function normalizeWorkout(input) {
     maxSpeed,
     intervalSignals,
     lapSignals,
+    workoutStructure,
+    structureAnalyzed: Boolean(input.structureAnalyzed),
     avgHr,
     hrMax,
     hrRest,
@@ -2157,7 +2164,7 @@ function renderTodayPlan() {
   const status = getPlanDayStatus(day);
   const execution = evaluatePlanDayExecution(day);
   const planned = day.plannedWorkout || day.details || "Задание не описано.";
-  const actual = actualWorkoutsForPlanDay(day).map(formatActualWorkout);
+  const actual = actualWorkoutsForPlanDay(day).map(formatActualWorkoutWithStructure);
   const sourceLabel = savedPlan ? planSourceLabel(savedPlan.source) : "локальный черновик";
   const meta = [
     day.targetDistance ? `Ориентир: ${day.targetDistance}` : "",
@@ -3843,7 +3850,12 @@ function renderPlanDayDetails(day) {
         ${actualGroups.map((group) => `
           <div class="actual-group ${group.kind}">
             ${group.label ? `<strong>${escapeHtml(group.label)}</strong>` : ""}
-            <p>${group.workouts.map((workout) => escapeHtml(formatActualWorkout(workout))).join("<br>")}</p>
+            ${group.workouts.map((workout) => `
+              <div class="actual-workout-entry">
+                <p>${escapeHtml(formatActualWorkout(workout))}</p>
+                ${renderActualWorkoutStructure(workout)}
+              </div>
+            `).join("")}
           </div>
         `).join("")}
       </div>
@@ -5478,6 +5490,7 @@ function workoutForAiContext(workout) {
     maxSpeed: workout.maxSpeed || null,
     intervalSignals: workout.intervalSignals || null,
     lapSignals: workout.lapSignals || null,
+    workoutStructure: compactWorkoutStructureForAi(workout.workoutStructure),
     avgHr: workout.avgHr,
     rpe: workout.rpe,
     load: workout.load,
@@ -5489,6 +5502,19 @@ function workoutForAiContext(workout) {
       }
       : null,
     workoutTypeSource: workout.workoutTypeOverride ? "manual" : "auto",
+  };
+}
+
+function compactWorkoutStructureForAi(structure) {
+  if (!structure?.display) return null;
+  return {
+    kind: structure.kind || "",
+    display: structure.display,
+    confidence: structure.confidence || null,
+    totalWorkMin: structure.totalWorkMin || null,
+    totalWorkDistanceKm: structure.totalWorkDistanceKm || null,
+    warmupMin: structure.warmupMin || null,
+    cooldownMin: structure.cooldownMin || null,
   };
 }
 
@@ -5702,6 +5728,7 @@ function buildAiRequest() {
       ],
       workoutAccountingRules: [
         "Все импортированные активности учитывай как нагрузку и фактор восстановления.",
+        "Если у тренировки есть workoutStructure, это распознанная фактическая структура основной части. Используй display, totalWorkMin и totalWorkDistanceKm для оценки качественного объема, а не только общий тип, длительность и TRIMP.",
         "Беговые задания плана закрываются только беговыми тренировками.",
         "Небеговые активности не заменяют интервалы, темпо, длительную или легкий бег, но могут требовать снижения оставшихся беговых нагрузок.",
       ],
@@ -7067,6 +7094,8 @@ async function enrichKnownCsvWorkouts() {
         parsed = {
           ...(parsed || {}),
           lapSignals: tcxParsed.lapSignals,
+          workoutStructure: tcxParsed.workoutStructure,
+          structureAnalyzed: tcxParsed.structureAnalyzed,
           maxSpeed: parsed?.maxSpeed || tcxParsed.maxSpeed,
           load: parsed?.load || tcxParsed.load,
           loadSource: parsed?.loadSource || tcxParsed.loadSource,
@@ -7092,7 +7121,7 @@ function needsWorkoutEnrichment(workout) {
   return Boolean(
       workout &&
       workout.source &&
-      (!workout.intervalSignals || !workout.lapSignals || workout.lapSignals?.hasTempoLaps || !workout.avgSpeed || !workout.maxSpeed || !workout.loadSource || workout.loadSource === "trimp" || !workout.workoutType)
+      (!workout.intervalSignals || !workout.lapSignals || !workout.structureAnalyzed || workout.lapSignals?.hasTempoLaps || !workout.avgSpeed || !workout.maxSpeed || !workout.loadSource || workout.loadSource === "trimp" || !workout.workoutType)
   );
 }
 
@@ -7144,7 +7173,7 @@ function mergeWorkoutEnrichment(workout, parsed) {
     }
   }
 
-  for (const key of ["intervalSignals", "lapSignals"]) {
+  for (const key of ["intervalSignals", "lapSignals", "workoutStructure", "structureAnalyzed"]) {
     if (parsed[key] && JSON.stringify(enriched[key] || null) !== JSON.stringify(parsed[key])) {
       enriched[key] = parsed[key];
       changed = true;
@@ -7387,17 +7416,22 @@ function dateFromCsvRow(row) {
   return date || time;
 }
 
-function analyzeTcxLaps(laps) {
-  const lapRows = laps
-    .map((lap) => {
+function tcxLapRows(laps) {
+  return laps
+    .map((lap, index) => {
       const duration = numberOrNull(textOf(lap, "TotalTimeSeconds")) || 0;
       const distance = numberOrNull(textOf(lap, "DistanceMeters")) || 0;
       const trigger = textOf(lap, "TriggerMethod") || "";
+      const hrBlock = firstDescendant(lap, "AverageHeartRateBpm");
+      const avgHr = hrBlock ? numberOrNull(textOf(hrBlock, "Value")) : null;
       const speed = duration && distance ? (distance / duration) * 3.6 : null;
-      return { duration, distance, trigger, speed };
+      return { index, duration, distance, trigger, speed, avgHr: avgHr ? Math.round(avgHr) : null };
     })
     .filter((lap) => lap.duration > 0 || lap.distance > 0);
+}
 
+function analyzeTcxLaps(laps) {
+  const lapRows = tcxLapRows(laps);
   if (!lapRows.length) return null;
 
   const manualLaps = lapRows.filter((lap) => lap.trigger.toLowerCase() === "manual");
@@ -7433,6 +7467,231 @@ function analyzeTcxLaps(laps) {
   };
 }
 
+function extractTcxWorkoutStructure(laps, lapSignals = null) {
+  const rows = tcxLapRows(laps);
+  const manualRows = rows.filter((row) => row.trigger.toLowerCase() === "manual");
+  if (manualRows.length < 3) return null;
+
+  const signals = lapSignals || analyzeTcxLaps(laps);
+  if (!signals || (!signals.hasIntervalLaps && !signals.hasTempoLaps)) return null;
+
+  const core = [...manualRows];
+  let warmup = null;
+  let cooldown = null;
+  if (core.length >= 3 && isTcxBoundaryLap(core[0], core.slice(1))) {
+    warmup = core.shift();
+  }
+  if (core.length >= 2 && isTcxBoundaryLap(core[core.length - 1], core.slice(0, -1))) {
+    cooldown = core.pop();
+  }
+  if (!core.length) return null;
+
+  let kind;
+  let confidence;
+  let workRows;
+  let recoveryRows;
+
+  if (signals.hasIntervalLaps) {
+    [workRows, recoveryRows] = splitTcxLapIntensity(core);
+    if (workRows.length < 2 || !recoveryRows.length) return null;
+    kind = "intervals";
+    confidence = workRows.length >= 4 ? 0.96 : 0.9;
+  } else {
+    kind = "tempo-blocks";
+    if (core.length === 1) {
+      workRows = core;
+      recoveryRows = [];
+      kind = "tempo-continuous";
+    } else {
+      [workRows, recoveryRows] = splitTcxLapIntensity(core);
+      if (!workRows.length) return null;
+      if (workRows.length === 1) kind = "tempo-continuous";
+    }
+    confidence = workRows.length >= 2 ? 0.92 : 0.86;
+  }
+
+  const workGroups = summarizeTcxLapGroups(workRows);
+  if (!workGroups.length) return null;
+  const recoveryGroups = summarizeTcxLapGroups(recoveryRows, true);
+  const display = formatTcxStructureDisplay(kind, workGroups, recoveryGroups);
+  if (!display) return null;
+
+  const workSet = new Set(workRows);
+  return {
+    kind,
+    source: "tcx-manual-laps",
+    confidence,
+    confidenceLabel: confidence >= 0.9 ? "высокая" : "средняя",
+    display,
+    warmupMin: warmup ? Math.round(warmup.duration / 60) : null,
+    cooldownMin: cooldown ? Math.round(cooldown.duration / 60) : null,
+    totalWorkMin: round(workRows.reduce((sum, row) => sum + row.duration, 0) / 60, 1),
+    totalWorkDistanceKm: round(workRows.reduce((sum, row) => sum + row.distance, 0) / 1000, 2),
+    workGroups,
+    recoveryGroups,
+    segments: core.slice(0, 50).map((row) => ({
+      role: workSet.has(row) ? "work" : "recovery",
+      durationSec: Math.round(row.duration || 0),
+      distanceM: Math.round(row.distance || 0),
+      avgHr: row.avgHr || null,
+    })),
+  };
+}
+
+function isTcxBoundaryLap(row, others) {
+  if (!row?.speed || !others?.length) return false;
+  const otherSpeeds = others.map((item) => item.speed).filter(Boolean);
+  if (!otherSpeeds.length) return false;
+  const isLong = row.duration >= 600 || row.distance >= 2500;
+  return isLong && row.speed <= Math.max(...otherSpeeds) * 0.95;
+}
+
+function splitTcxLapIntensity(rows) {
+  const usable = rows.filter((row) => row.speed);
+  if (usable.length < 2) return [usable, []];
+
+  let lowCenter = Math.min(...usable.map((row) => row.speed));
+  let highCenter = Math.max(...usable.map((row) => row.speed));
+  if (highCenter - lowCenter < 1.2) return [usable, []];
+
+  for (let index = 0; index < 8; index += 1) {
+    const threshold = (lowCenter + highCenter) / 2;
+    const lowRows = usable.filter((row) => row.speed < threshold);
+    const highRows = usable.filter((row) => row.speed >= threshold);
+    if (!lowRows.length || !highRows.length) break;
+    lowCenter = average(lowRows.map((row) => row.speed));
+    highCenter = average(highRows.map((row) => row.speed));
+  }
+
+  const threshold = (lowCenter + highCenter) / 2;
+  const workRows = rows.filter((row) => row.speed && row.speed >= threshold);
+  const workSet = new Set(workRows);
+  return [workRows, rows.filter((row) => !workSet.has(row))];
+}
+
+function summarizeTcxLapGroups(rows, recovery = false) {
+  const usable = rows.filter((row) => row.duration || row.distance);
+  if (!usable.length) return [];
+
+  const distanceClusters = clusterTcxLaps(usable, "distance", 0.18);
+  const meaningful = distanceClusters.filter((cluster) => cluster.length >= 2);
+  const covered = meaningful.reduce((sum, cluster) => sum + cluster.length, 0);
+  const useDistanceClusters = meaningful.length > 1 && covered >= usable.length * 0.75;
+  const clusters = useDistanceClusters ? meaningful : [usable];
+
+  return clusters
+    .map((cluster) => {
+      const basis = useDistanceClusters ? "distance" : chooseTcxGroupBasis(cluster, recovery);
+      const values = cluster.map((row) => row[basis]).filter(Boolean);
+      if (!values.length) return null;
+      const median = medianTcx(values);
+      return {
+        count: cluster.length,
+        basis,
+        value: snapTcxGroupTarget(median, basis),
+        median: round(median, 1),
+        firstIndex: Math.min(...cluster.map((row) => row.index)),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.firstIndex - b.firstIndex);
+}
+
+function clusterTcxLaps(rows, key, tolerance) {
+  const ordered = rows.filter((row) => row[key]).sort((a, b) => a[key] - b[key]);
+  const clusters = [];
+  for (const row of ordered) {
+    if (!clusters.length) {
+      clusters.push([row]);
+      continue;
+    }
+    const current = clusters[clusters.length - 1];
+    const center = medianTcx(current.map((item) => item[key]));
+    if (center && Math.abs(row[key] - center) / center <= tolerance) {
+      current.push(row);
+    } else {
+      clusters.push([row]);
+    }
+  }
+  return clusters;
+}
+
+function chooseTcxGroupBasis(rows, recovery = false) {
+  const distances = rows.map((row) => row.distance).filter(Boolean);
+  const durations = rows.map((row) => row.duration).filter(Boolean);
+  if (!distances.length) return "duration";
+  if (!durations.length) return "distance";
+
+  const distanceScore = tcxMetricScore(distances, medianTcx(distances), "distance");
+  const durationScore = tcxMetricScore(durations, medianTcx(durations), "duration");
+  if (recovery) return distanceScore + 0.02 < durationScore ? "distance" : "duration";
+  return distanceScore <= durationScore ? "distance" : "duration";
+}
+
+function tcxMetricScore(values, median, basis) {
+  if (!values.length || !median) return 10;
+  const mean = average(values);
+  const variance = average(values.map((value) => (value - mean) ** 2));
+  const coefficient = mean ? Math.sqrt(variance) / mean : 1;
+  const standards = basis === "distance" ? tcxDistanceStandards() : tcxDurationStandards();
+  const nearest = standards.reduce((best, value) => Math.abs(value - median) < Math.abs(best - median) ? value : best);
+  return coefficient + Math.abs(nearest - median) / median;
+}
+
+function snapTcxGroupTarget(value, basis) {
+  const standards = basis === "distance" ? tcxDistanceStandards() : tcxDurationStandards();
+  const nearest = standards.reduce((best, item) => Math.abs(item - value) < Math.abs(best - value) ? item : best);
+  if (value && Math.abs(nearest - value) / value <= 0.1) return nearest;
+  const step = basis === "distance" ? 10 : 5;
+  return Math.round(value / step) * step;
+}
+
+function tcxDistanceStandards() {
+  return [100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1600, 2000, 3000, 5000];
+}
+
+function tcxDurationStandards() {
+  return [15, 20, 30, 45, 60, 75, 90, 120, 150, 180, 240, 300, 360, 480, 600, 720, 900, 1200, 1800];
+}
+
+function formatTcxStructureDisplay(kind, workGroups, recoveryGroups) {
+  const workLabels = workGroups.map(formatTcxWorkGroup).filter(Boolean);
+  if (!workLabels.length) return "";
+
+  let main;
+  if (kind.startsWith("tempo")) {
+    main = kind === "tempo-continuous" && workGroups.length === 1 && workGroups[0].count === 1
+      ? `${formatTcxGroupValue(workGroups[0])} темпо`
+      : `${workLabels.join(" + ")} темпо`;
+  } else {
+    main = workLabels.join(" + ");
+  }
+
+  const recoveryValues = [...new Set(recoveryGroups.map(formatTcxGroupValue).filter(Boolean))];
+  if (recoveryValues.length) main += `, восстановление около ${recoveryValues.join(" / ")}`;
+  return main;
+}
+
+function formatTcxWorkGroup(group) {
+  const value = formatTcxGroupValue(group);
+  return value ? `${group.count} × ${value}` : "";
+}
+
+function formatTcxGroupValue(group) {
+  const value = Math.round(Number(group?.value) || 0);
+  if (!value) return "";
+  if (group.basis === "distance") return `${value} м`;
+  if (value < 60) return `${value} с`;
+  if (value % 60 === 0) return `${value / 60} мин`;
+  return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")} мин`;
+}
+
+function medianTcx(values) {
+  const ordered = values.filter((value) => value !== null && value !== undefined).sort((a, b) => a - b);
+  if (!ordered.length) return 0;
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
+}
 function analyzeCsvSamples(lines, delimiter) {
   if (lines.length < 10) return null;
 
@@ -7822,6 +8081,31 @@ function formatActualWorkout(workout) {
     formatWorkoutFeedback(workout.feedback),
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+function formatActualWorkoutWithStructure(workout) {
+  const summary = formatActualWorkout(workout);
+  const structure = workout?.workoutStructure?.display;
+  return structure ? `${summary} · структура: ${structure}` : summary;
+}
+
+function renderActualWorkoutStructure(workout) {
+  const structure = workout?.workoutStructure;
+  if (!structure?.display) return "";
+  const boundaries = [
+    structure.warmupMin ? `разминка около ${structure.warmupMin} мин` : "",
+    structure.cooldownMin ? `заминка около ${structure.cooldownMin} мин` : "",
+  ].filter(Boolean);
+  const source = structure.source === "tcx-manual-laps" ? "по ручным кругам TCX" : "по данным тренировки";
+  const confidence = structure.confidenceLabel ? `${structure.confidenceLabel} уверенность` : "";
+
+  return `
+    <div class="actual-structure">
+      <span>Структура</span>
+      <p>${escapeHtml(structure.display)}</p>
+      <small>${escapeHtml([boundaries.join(" · "), source, confidence].filter(Boolean).join(" · "))}</small>
+    </div>
+  `;
 }
 
 function formatWorkoutFeedback(feedback) {
