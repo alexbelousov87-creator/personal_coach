@@ -66,6 +66,9 @@ DEFAULT_CONFIG = {
         "scope": "accesslink.read_all",
         "downloadTcx": True,
         "timeoutSeconds": 45,
+        "requestAttemptTimeoutSeconds": 15,
+        "retryCount": 2,
+        "retryDelaySeconds": 2,
         "backgroundSync": True,
         "backgroundSyncIntervalSeconds": 600,
         "backgroundSyncInitialDelaySeconds": 20,
@@ -3133,29 +3136,58 @@ def http_json(url, method="GET", data=None, headers=None):
 
 def http_bytes(url, method="GET", data=None, headers=None):
     is_telegram = "api.telegram.org" in url
+    is_polar = "polaraccesslink.com" in url
     telegram = telegram_notification_config() if is_telegram else {}
     service_name = "Telegram API" if is_telegram else "Polar API"
     timeout = telegram.get("timeout_seconds", 45) if is_telegram else int(POLAR_CONFIG.get("timeoutSeconds", 45))
     req = request.Request(url, data=data, method=method, headers=headers or {})
     force_ipv4 = is_telegram and telegram.get("force_ipv4", True)
-    try:
-        if force_ipv4:
-            return urlopen_ipv4(req, timeout)
-        with request.urlopen(req, timeout=timeout) as response:
-            return response.read()
-    except error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace")
-        raise AppError(f"{service_name} error {exc.code}: {details}", exc.code)
-    except TimeoutError:
-        raise AppError(f"{service_name} timeout after {timeout} seconds", 504)
-    except error.URLError as exc:
-        raise AppError(f"failed to connect to {service_name}: {exc.reason}", 502)
+    retryable_polar_get = is_polar and method.upper() == "GET" and data is None
+    retry_count = positive_int(POLAR_CONFIG.get("retryCount"), 2, minimum=0) if retryable_polar_get else 0
+    attempt_timeout = timeout
+    if retryable_polar_get:
+        attempt_timeout = min(
+            timeout,
+            positive_int(POLAR_CONFIG.get("requestAttemptTimeoutSeconds"), 15, minimum=5),
+        )
+    retry_delay = float(POLAR_CONFIG.get("retryDelaySeconds", 2) or 0)
+    last_error = None
+
+    for attempt in range(retry_count + 1):
+        try:
+            if force_ipv4 or retryable_polar_get:
+                return urlopen_ipv4(req, attempt_timeout, rotation=attempt if retryable_polar_get else 0)
+            with request.urlopen(req, timeout=attempt_timeout) as response:
+                return response.read()
+        except error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            raise AppError(f"{service_name} error {exc.code}: {details}", exc.code)
+        except (TimeoutError, socket.timeout):
+            last_error = AppError(f"{service_name} timeout after {attempt_timeout} seconds", 504)
+        except error.URLError as exc:
+            last_error = AppError(f"failed to connect to {service_name}: {exc.reason}", 502)
+
+        if attempt < retry_count:
+            logging.warning(
+                "%s request failed, retry %s/%s with another IPv4 address: %s",
+                service_name,
+                attempt + 1,
+                retry_count,
+                last_error,
+            )
+            if retry_delay > 0:
+                time.sleep(retry_delay)
+
+    raise last_error or AppError(f"failed to connect to {service_name}", 502)
 
 
-def urlopen_ipv4(req, timeout):
+def urlopen_ipv4(req, timeout, rotation=0):
     def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
         results = ORIGINAL_GETADDRINFO(host, port, family, type, proto, flags)
         ipv4_results = [item for item in results if item[0] == socket.AF_INET]
+        if ipv4_results and rotation:
+            offset = rotation % len(ipv4_results)
+            ipv4_results = ipv4_results[offset:] + ipv4_results[:offset]
         return ipv4_results or results
 
     with GETADDRINFO_LOCK:
