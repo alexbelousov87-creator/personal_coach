@@ -480,6 +480,7 @@ const stravaStatus = document.querySelector("#stravaStatus");
 const stravaHint = document.querySelector("#stravaHint");
 const connectStravaButton = document.querySelector("#connectStrava");
 const syncStravaButton = document.querySelector("#syncStrava");
+const syncRunalyzeButton = document.querySelector("#syncRunalyze");
 const runalyzeStatus = document.querySelector("#runalyzeStatus");
 const runalyzeHint = document.querySelector("#runalyzeHint");
 const runalyzeTokenForm = document.querySelector("#runalyzeTokenForm");
@@ -799,6 +800,7 @@ function wireIntegrations() {
   disconnectPolarButton?.addEventListener("click", () => disconnectIntegration("polar"));
   connectStravaButton?.addEventListener("click", () => connectIntegration("strava"));
   syncStravaButton?.addEventListener("click", () => syncExternalWorkouts("strava", { automatic: false }));
+  syncRunalyzeButton?.addEventListener("click", () => syncExternalWorkouts("runalyze", { automatic: false }));
   runalyzeTokenForm?.addEventListener("submit", saveRunalyzeToken);
   changeRunalyzeTokenButton?.addEventListener("click", beginRunalyzeTokenEdit);
   disconnectRunalyzeButton?.addEventListener("click", () => disconnectIntegration("runalyze"));
@@ -1285,7 +1287,9 @@ function mergeWorkoutLists(existingWorkouts, incomingWorkouts) {
 
 function findMergeableWorkoutIndex(workout, candidates) {
   const key = workoutDedupKey(workout);
-  const exactIndex = candidates.findIndex((candidate) => workoutDedupKey(candidate) === key);
+  const exactIndex = candidates.findIndex((candidate) => (
+    workoutsShareProviderId(workout, candidate) || workoutDedupKey(candidate) === key
+  ));
   if (exactIndex >= 0) return exactIndex;
   return candidates.findIndex((candidate) => areSimilarImportedWorkouts(workout, candidate));
 }
@@ -1297,8 +1301,9 @@ function areSimilarImportedWorkouts(a, b) {
   const bDate = dateFromAny(b.date);
   if (!aDate || !bDate || Number.isNaN(aDate.getTime()) || Number.isNaN(bDate.getTime())) return false;
   const sameDay = aDate.toISOString().slice(0, 10) === bDate.toISOString().slice(0, 10);
-  const closeStart = Math.abs(aDate.getTime() - bDate.getTime()) <= 12 * 60 * 60 * 1000;
-  if (!sameDay && !closeStart) return false;
+  const preciseStart = workoutHasStartTime(a.date) && workoutHasStartTime(b.date);
+  const closeStart = Math.abs(aDate.getTime() - bDate.getTime()) <= 30 * 60 * 1000;
+  if ((preciseStart && !closeStart) || (!preciseStart && !sameDay)) return false;
 
   const aSport = normalizedSportKey(a.sport);
   const bSport = normalizedSportKey(b.sport);
@@ -1320,10 +1325,22 @@ function areSimilarImportedWorkouts(a, b) {
   return distanceA === 0 || distanceB === 0;
 }
 
+function workoutHasStartTime(value) {
+  return /[T ][0-9]{1,2}:[0-9]{2}/.test(String(value || ""));
+}
 function isImportedWorkoutPair(a, b) {
   const aSource = String(a?.source || "");
   const bSource = String(b?.source || "");
-  return isPolarLikeWorkout(a) || isPolarLikeWorkout(b) || (sourceLooksLikeWorkoutFile(aSource) && sourceLooksLikeWorkoutFile(bSource));
+  return isExternalWorkout(a) || isExternalWorkout(b) || (sourceLooksLikeWorkoutFile(aSource) && sourceLooksLikeWorkoutFile(bSource));
+}
+
+function isExternalWorkout(workout) {
+  const source = String(workout?.source || "").trim().toLowerCase();
+  return Object.keys(workoutProviderIds(workout)).length > 0
+    || source.startsWith("polar:")
+    || source.startsWith("strava:")
+    || source.startsWith("runalyze:")
+    || isPolarLikeWorkout(workout);
 }
 
 function isPolarLikeWorkout(workout) {
@@ -1339,8 +1356,9 @@ function sourceLooksLikeWorkoutFile(source) {
   return /\.(csv|tcx|gpx|json)$/i.test(fileNameFromSource(source));
 }
 function workoutDedupKey(workout) {
-  const polarId = polarExerciseIdFromSource(workout?.source);
-  if (polarId) return `polar-${polarId}`;
+  const providerIds = workoutProviderIds(workout);
+  const provider = Object.keys(providerIds).sort()[0];
+  if (provider) return provider + "-" + providerIds[provider];
   const date = dateFromAny(workout?.date);
   const dateKey = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 16) : "";
   const sportKey = normalizedSportKey(workout?.sport);
@@ -1349,6 +1367,37 @@ function workoutDedupKey(workout) {
   return `${dateKey}-${sportKey}-${durationKey}-${distanceKey}`;
 }
 
+function workoutProviderIds(workout) {
+  const result = {};
+  const values = workout?.providerIds;
+  if (values && typeof values === "object" && !Array.isArray(values)) {
+    for (const [provider, value] of Object.entries(values)) {
+      const cleanProvider = String(provider || "").trim().toLowerCase();
+      const cleanValue = String(value || "").trim().toLowerCase();
+      if (cleanProvider && cleanValue) result[cleanProvider] = cleanValue;
+    }
+  }
+  const polarId = polarExerciseIdFromSource(workout?.source);
+  const stravaId = providerActivityIdFromSource(workout?.source, "strava");
+  const runalyzeId = providerActivityIdFromSource(workout?.source, "runalyze");
+  if (polarId) result.polar = polarId;
+  if (stravaId) result.strava = stravaId;
+  if (runalyzeId) result.runalyze = runalyzeId;
+  return result;
+}
+
+function workoutsShareProviderId(a, b) {
+  const aIds = workoutProviderIds(a);
+  const bIds = workoutProviderIds(b);
+  return Object.entries(aIds).some(([provider, value]) => value && bIds[provider] === value);
+}
+
+function providerActivityIdFromSource(source, provider) {
+  const value = String(source || "").trim();
+  const prefix = provider + ":";
+  if (!value.toLowerCase().startsWith(prefix.toLowerCase())) return "";
+  return value.slice(prefix.length).trim().toLowerCase();
+}
 function polarExerciseIdFromSource(source) {
   const value = String(source || "").trim();
   const directMatch = value.match(/^Polar:([^/\\]+)$/i);
@@ -1391,7 +1440,7 @@ function mergeDuplicateWorkouts(a, b) {
     base.source = other.source;
     if (other.notes && (!base.notes || /^TCX/i.test(base.notes))) base.notes = other.notes;
   }
-  if (other.loadSource === "imported" && other.load) {
+  if (other.loadSource === "imported" && other.load && (!base.loadSource || base.loadSource === "duration")) {
     base.load = other.load;
     base.loadSource = other.loadSource;
   }
@@ -1416,6 +1465,8 @@ function mergeDuplicateWorkouts(a, b) {
   if (!base.feedback && other.feedback) {
     base.feedback = other.feedback;
   }
+  const providerIds = { ...workoutProviderIds(base), ...workoutProviderIds(other) };
+  if (Object.keys(providerIds).length) base.providerIds = providerIds;
   base.workoutType = classifyWorkout(base);
   return base;
 }
@@ -1467,6 +1518,7 @@ function normalizeWorkout(input) {
   return {
     id: `${isoDate.slice(0, 16)}-${normalizedSportKey(sport)}-${durationMin}-${distanceKm}`,
     source: input.source || "manual",
+    providerIds: workoutProviderIds(input),
     tcxFile: input.tcxFile || (/\.tcx$/i.test(fileNameFromSource(input.source)) ? fileNameFromSource(input.source) : ""),
     date: isoDate,
     sport,
@@ -1483,6 +1535,7 @@ function normalizeWorkout(input) {
     hrMax,
     hrRest,
     rpe,
+    subjectiveFeeling: numberOrNull(input.subjectiveFeeling),
     load,
     loadSource,
     notes: String(input.notes || "").trim(),
@@ -6650,14 +6703,16 @@ function updateIntegrationsUi(status = {}) {
     statusEl: runalyzeStatus,
     hintEl: runalyzeHint,
     connectButton: null,
-    syncButton: null,
+    syncButton: syncRunalyzeButton,
     connectText: "",
     connectedText: "Runalyze token сохранен",
     disabledText: "Runalyze выключен",
     disabledHint: "Включите integrations.runalyze.enabled в conf.json, если хотите сохранить token ученика.",
     notConnectedText: "Runalyze token не указан",
-    notConnectedHint: "Сохраните Personal API token. Чтение активностей включим после подтверждения доступного read API.",
-    connectedHint: "Token сохранен для этого ученика. Полный импорт активностей Runalyze будет включен отдельно.",
+    notConnectedHint: "Сохраните новый Personal API token с правом чтения activities.",
+    connectedHint: providers.runalyze?.readAccess === "denied"
+      ? "Токен не дает read-доступ к activities. Нужен новый токен Supporter/Premium с правом чтения тренировок."
+      : "Сервер автоматически проверяет новые тренировки Runalyze и объединяет их с записями других источников.",
   }, status.unavailable);
 
   const polarConnected = Boolean(providers.polar?.connected);
@@ -6759,8 +6814,9 @@ async function syncConnectedIntegrations(options = {}) {
     const status = await refreshIntegrationsStatus();
     const providers = status?.providers || {};
     let accepted = 0;
-    for (const provider of ["polar", "strava"]) {
+    for (const provider of ["polar", "strava", "runalyze"]) {
       if (providers[provider]?.connected) {
+        if (options.automatic && provider === "runalyze" && providers[provider]?.readAccess === "denied") continue;
         accepted += await syncExternalWorkouts(provider, { ...options, skipStatus: true });
       }
     }
@@ -6778,8 +6834,8 @@ async function syncExternalWorkouts(provider, options = {}) {
   const status = options.skipStatus ? null : await refreshIntegrationsStatus();
   if (!options.skipStatus && !status?.providers?.[provider]?.connected) return 0;
 
-  const statusEl = provider === "strava" ? stravaStatus : polarStatus;
-  const syncButton = provider === "strava" ? syncStravaButton : syncPolarButton;
+  const statusEl = { polar: polarStatus, strava: stravaStatus, runalyze: runalyzeStatus }[provider] || polarStatus;
+  const syncButton = { polar: syncPolarButton, strava: syncStravaButton, runalyze: syncRunalyzeButton }[provider] || null;
   if (!options.automatic && statusEl) statusEl.textContent = `Синхронизация ${providerLabel(provider)}...`;
   if (syncButton) syncButton.disabled = true;
 

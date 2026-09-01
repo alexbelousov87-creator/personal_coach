@@ -4,7 +4,7 @@ from urllib import request, error
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 import base64
 import hmac
-from datetime import date, datetime, time as datetime_time, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 import gzip
 import hashlib
 import json
@@ -90,7 +90,14 @@ DEFAULT_CONFIG = {
         },
         "runalyze": {
             "enabled": True,
+            "activitiesUrl": "https://runalyze.com/api/v1/activity",
             "timeoutSeconds": 45,
+            "requestAttemptTimeoutSeconds": 20,
+            "itemsPerPage": 200,
+            "initialPageCount": 5,
+            "retryCount": 2,
+            "retryDelaySeconds": 2,
+            "backgroundSync": True,
         },
     },    "notifications": {
         "telegram": {
@@ -154,6 +161,7 @@ DB_PATH = (ROOT / STORAGE_CONFIG.get("databasePath", "data/training_coach.sqlite
 LOG_PATH = (ROOT / LOGGING_CONFIG.get("file", "data/logs/training_coach.log")).resolve()
 SESSIONS = {}
 POLAR_SYNC_LOCK = threading.Lock()
+RUNALYZE_SYNC_LOCK = threading.Lock()
 DB_LOCK = threading.RLock()
 DB_INITIALIZED = False
 ORIGINAL_GETADDRINFO = socket.getaddrinfo
@@ -2241,7 +2249,10 @@ def exchange_strava_code(code):
 def runalyze_status(coach_id=DEFAULT_COACH_ID, athlete_id=DEFAULT_ATHLETE_ID):
     config = integration_config("runalyze")
     integration = athlete_integration(coach_id, athlete_id, "runalyze")
-    return public_integration_status("runalyze", integration, configured=True, enabled=bool(config.get("enabled", True)))
+    status = public_integration_status("runalyze", integration, configured=True, enabled=bool(config.get("enabled", True)))
+    status["readAccess"] = integration.get("readAccess", "")
+    status["lastError"] = integration.get("lastError", "")
+    return status
 
 
 def save_runalyze_token_for_session(session, token):
@@ -2249,7 +2260,7 @@ def save_runalyze_token_for_session(session, token):
     if not token:
         raise AppError("Runalyze token is empty.", 400)
     coach_id, athlete_id = current_athlete_target(session)
-    integration = {"token": token, "connectedAt": int(time.time()), "lastSync": ""}
+    integration = {"token": token, "connectedAt": int(time.time()), "lastSync": "", "readAccess": "unknown", "lastError": ""}
     save_athlete_integration(coach_id, athlete_id, "runalyze", integration)
     return {"ok": True, "status": runalyze_status(coach_id=coach_id, athlete_id=athlete_id)}
 
@@ -2273,13 +2284,15 @@ def sync_integration_for_session(session, provider):
     if provider == "strava":
         return sync_strava_workouts(coach_id=coach_id, athlete_id=athlete_id)
     if provider == "runalyze":
-        raise AppError("Runalyze read sync is not enabled yet. Store the token now; activity import needs a readable Runalyze API endpoint.", 400)
+        return sync_runalyze_workouts(coach_id=coach_id, athlete_id=athlete_id)
     raise AppError("Unknown integration provider.", 400)
 
 def start_polar_sync_worker():
     polar_enabled = POLAR_CONFIG.get("enabled", True) and POLAR_CONFIG.get("backgroundSync", True)
     strava_enabled = bool(load_strava_credentials().get("enabled")) and bool(integration_config("strava").get("backgroundSync", True))
-    if not polar_enabled and not strava_enabled:
+    runalyze_config = integration_config("runalyze")
+    runalyze_enabled = bool(runalyze_config.get("enabled", True)) and bool(runalyze_config.get("backgroundSync", True))
+    if not polar_enabled and not strava_enabled and not runalyze_enabled:
         logging.info("Background integration sync is disabled")
         return
     interval = positive_int(POLAR_CONFIG.get("backgroundSyncIntervalSeconds"), 600, minimum=300)
@@ -2366,6 +2379,21 @@ def sync_connected_integrations(automatic=False):
             except AppError as exc:
                 if exc.status != 401:
                     logging.warning("Strava background sync failed for athlete=%s: %s", athlete_id, exc)
+    runalyze_config = integration_config("runalyze")
+    if runalyze_config.get("enabled", True) and runalyze_config.get("backgroundSync", True):
+        for coach_id, athlete_id in connected_integration_targets("runalyze"):
+            if automatic and athlete_integration(coach_id, athlete_id, "runalyze").get("readAccess") == "denied":
+                continue
+            try:
+                result = sync_runalyze_workouts(store=True, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
+                aggregate["providers"].append("runalyze")
+                aggregate["count"] += int(result.get("count") or 0)
+                aggregate["added"] += int(result.get("added") or 0)
+                aggregate["duplicates"] += int(result.get("duplicates") or 0)
+                aggregate["results"].append(result)
+            except AppError as exc:
+                if exc.status != 401:
+                    logging.warning("Runalyze background sync failed for athlete=%s: %s", athlete_id, exc)
     aggregate["providers"] = sorted(set(aggregate["providers"]))
     return aggregate
 
@@ -2440,7 +2468,7 @@ def sync_polar_workouts_locked(store=True, automatic=False, coach_id=None, athle
 
     store_result = {"added": 0, "duplicates": 0, "stored": 0}
     if store:
-        store_result = merge_polar_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
+        store_result = merge_synced_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
 
     current_integration = athlete_integration(target_coach_id, target_athlete_id, "polar")
     current_token = current_integration.get("token") if isinstance(current_integration.get("token"), dict) else {}
@@ -2509,7 +2537,7 @@ def sync_strava_workouts(store=True, automatic=False, coach_id=None, athlete_id=
     workouts = [strava_activity_to_workout(item) for item in activities]
     store_result = {"added": 0, "duplicates": 0, "stored": 0}
     if store:
-        store_result = merge_polar_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
+        store_result = merge_synced_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
     integration["lastSync"] = int(time.time())
     save_athlete_integration(target_coach_id, target_athlete_id, "strava", integration)
     return {
@@ -2536,6 +2564,7 @@ def strava_activity_to_workout(activity):
     return {
         "id": f"strava-{activity.get('id') or activity.get('start_date_local') or int(time.time())}",
         "source": f"Strava:{activity.get('id')}" if activity.get("id") else "Strava",
+        "providerIds": {"strava": str(activity.get("id"))} if activity.get("id") else {},
         "date": activity.get("start_date_local") or activity.get("start_date") or datetime.now().isoformat(timespec="seconds"),
         "sport": activity.get("sport_type") or activity.get("type") or "Strava",
         "durationMin": duration_min,
@@ -2550,7 +2579,199 @@ def strava_activity_to_workout(activity):
         "notes": "Strava sync",
     }
 
-def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
+def sync_runalyze_workouts(store=True, automatic=False, coach_id=None, athlete_id=None):
+    acquired = RUNALYZE_SYNC_LOCK.acquire(blocking=False)
+    if not acquired:
+        return {
+            "ok": True,
+            "provider": "runalyze",
+            "count": 0,
+            "workouts": [],
+            "savedTcx": [],
+            "added": 0,
+            "duplicates": 0,
+            "skipped": True,
+            "message": "Синхронизация Runalyze уже выполняется.",
+        }
+    try:
+        return sync_runalyze_workouts_locked(
+            store=store,
+            automatic=automatic,
+            coach_id=coach_id,
+            athlete_id=athlete_id,
+        )
+    finally:
+        RUNALYZE_SYNC_LOCK.release()
+
+
+def sync_runalyze_workouts_locked(store=True, automatic=False, coach_id=None, athlete_id=None):
+    config = integration_config("runalyze")
+    if not config.get("enabled", True):
+        raise AppError("Runalyze integration is disabled.", 400)
+
+    target_coach_id = coach_id or DEFAULT_COACH_ID
+    target_athlete_id = athlete_id or DEFAULT_ATHLETE_ID
+    integration = athlete_integration(target_coach_id, target_athlete_id, "runalyze")
+    token = str(integration.get("token") or "").strip()
+    if not token:
+        raise AppError("Runalyze is not connected.", 401)
+
+    endpoint = str(config.get("activitiesUrl") or "https://runalyze.com/api/v1/activity").strip()
+    items_per_page = min(1000, positive_int(config.get("itemsPerPage"), 200, minimum=1))
+    page_limit = 1 if integration.get("lastSync") else min(10, positive_int(config.get("initialPageCount"), 5, minimum=1))
+    headers = {
+        "token": token,
+        "Accept": "application/json",
+        "User-Agent": "RunFlow/1.0",
+    }
+    activities = []
+    logging.info("Runalyze sync started%s athlete=%s", " automatically" if automatic else "", target_athlete_id)
+
+    try:
+        for page in range(1, page_limit + 1):
+            params = {
+                "itemsPerPage": items_per_page,
+                "page": page,
+                "order[id]": "desc",
+            }
+            payload = http_json(endpoint + "?" + urlencode(params), headers=headers)
+            batch = runalyze_activity_list(payload)
+            if not batch:
+                break
+            activities.extend(batch)
+            if len(batch) < items_per_page:
+                break
+    except AppError as exc:
+        integration["readAccess"] = "denied" if exc.status in {401, 403} else integration.get("readAccess", "unknown")
+        integration["lastError"] = str(exc)[:500]
+        save_athlete_integration(target_coach_id, target_athlete_id, "runalyze", integration)
+        if exc.status == 401:
+            raise AppError("Runalyze token недействителен или истек. Создайте и сохраните новый Personal API token.", 401)
+        if exc.status == 403:
+            raise AppError(
+                "Runalyze отклонил чтение тренировок. Создайте новый Personal API token "
+                "с правом чтения activities; read API доступен для Supporter/Premium.",
+                403,
+            )
+        raise
+
+    workouts = [runalyze_activity_to_workout(item) for item in activities if isinstance(item, dict)]
+    workouts = [item for item in workouts if item.get("date") and item.get("durationMin")]
+    store_result = {"added": 0, "duplicates": 0, "stored": 0}
+    if store:
+        store_result = merge_synced_workouts_into_athlete(workouts, target_coach_id, target_athlete_id)
+
+    current = athlete_integration(target_coach_id, target_athlete_id, "runalyze")
+    if str(current.get("token") or "").strip() == token:
+        integration["lastSync"] = int(time.time())
+        integration["readAccess"] = "granted"
+        integration["lastError"] = ""
+        save_athlete_integration(target_coach_id, target_athlete_id, "runalyze", integration)
+
+    return {
+        "ok": True,
+        "provider": "runalyze",
+        "count": len(workouts),
+        "workouts": workouts,
+        "savedTcx": [],
+        "added": store_result.get("added", 0),
+        "duplicates": store_result.get("duplicates", 0),
+        "stored": store_result.get("stored", 0),
+        "coachId": target_coach_id,
+        "athleteId": target_athlete_id,
+    }
+
+
+def runalyze_activity_list(payload):
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("member", "hydra:member", "items"):
+        if isinstance(payload.get(key), list):
+            return payload[key]
+    return []
+
+
+def runalyze_activity_to_workout(activity):
+    activity_id = str(activity.get("id") or "")
+    sport = runalyze_named_value(activity.get("sport")) or "Runalyze"
+    activity_type = runalyze_named_value(activity.get("type"))
+    duration_seconds = number_or_none(activity.get("duration"))
+    if not duration_seconds:
+        duration_seconds = number_or_none(activity.get("elapsed_time"))
+    duration_min = int(round((duration_seconds or 0) / 60))
+    distance_km = round((number_or_none(activity.get("distance")) or 0) / 1000, 2)
+    avg_hr = number_or_none(activity.get("hr_avg"))
+    max_hr = number_or_none(activity.get("hr_max"))
+    load = number_or_none(activity.get("trimp"))
+    if load is None:
+        load = number_or_none(activity.get("fit_trimp"))
+    pace = runalyze_pace_min_per_km(activity.get("x_pace"))
+    date_value = runalyze_activity_datetime(activity)
+    title = str(activity.get("title") or "").strip()
+    note_parts = ["Runalyze sync"]
+    if activity_type:
+        note_parts.append(activity_type)
+    if title and title.lower() != activity_type.lower():
+        note_parts.append(title)
+
+    workout = {
+        "id": f"runalyze-{activity_id or date_value or int(time.time())}",
+        "source": f"Runalyze:{activity_id}" if activity_id else "Runalyze",
+        "providerIds": {"runalyze": activity_id} if activity_id else {},
+        "date": date_value,
+        "sport": sport,
+        "durationMin": duration_min,
+        "distanceKm": distance_km,
+        "avgHr": int(round(avg_hr)) if avg_hr else None,
+        "maxHr": int(round(max_hr)) if max_hr else None,
+        "hrMax": int(round(max_hr)) if max_hr else None,
+        "paceMinPerKm": pace,
+        "pace": pace,
+        "paceSource": "runalyze" if pace else "",
+        "load": int(round(load)) if load is not None else duration_min,
+        "loadSource": "imported" if load is not None else "duration",
+        "rpe": int(round(number_or_none(activity.get("rpe")) or 0)) or None,
+        "subjectiveFeeling": int(round(number_or_none(activity.get("subjective_feeling")) or 0)) or None,
+        "notes": " · ".join(note_parts),
+    }
+    return workout
+
+
+def runalyze_named_value(value):
+    if isinstance(value, dict):
+        return str(value.get("name") or value.get("abbreviation") or "").strip()
+    return str(value or "").strip()
+
+
+def runalyze_activity_datetime(activity):
+    value = str(activity.get("date_time") or activity.get("datetime") or "").strip()
+    if not value:
+        return ""
+    value = value.replace(" ", "T", 1)
+    if value.endswith("Z") or re.search(r"[+-][0-9]{2}:?[0-9]{2}$", value):
+        return value.replace("Z", "+00:00")
+
+    offset = number_or_none(activity.get("timezone_offset"))
+    if offset is None:
+        return value
+    offset_minutes = int(round(offset / 60)) if abs(offset) > 24 * 60 else int(round(offset))
+    sign = "+" if offset_minutes >= 0 else "-"
+    offset_minutes = abs(offset_minutes)
+    return f"{value}{sign}{offset_minutes // 60:02d}:{offset_minutes % 60:02d}"
+
+
+def runalyze_pace_min_per_km(value):
+    pace = number_or_none(value)
+    if not pace or pace <= 0:
+        return None
+    pace_min = pace / 60 if pace >= 30 else pace
+    if not 1.5 <= pace_min <= 30:
+        return None
+    return round(pace_min, 2)
+
+def merge_synced_workouts_into_athlete(workouts, coach_id, athlete_id):
     if not isinstance(workouts, list):
         return {"added": 0, "duplicates": 0, "stored": 0}
     valid = [dict(workout) for workout in workouts if isinstance(workout, dict) and workout.get("date") and number_or_none(workout.get("durationMin"))]
@@ -2560,7 +2781,7 @@ def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
     athletes = telegram_athletes(coach_id)
     target_index = next((index for index, athlete in enumerate(athletes) if str(athlete.get("id") or "") == str(athlete_id)), -1)
     if target_index < 0:
-        raise AppError(f"Polar target athlete not found: {athlete_id}", 500)
+        raise AppError(f"Sync target athlete not found: {athlete_id}", 500)
 
     target = dict(athletes[target_index])
     existing_workouts = target.get("workouts") if isinstance(target.get("workouts"), list) else []
@@ -2583,7 +2804,7 @@ def merge_polar_workouts_into_athlete(workouts, coach_id, athlete_id):
         save_state_value("workouts", merged_workouts, coach_id=coach_id)
 
     if added:
-        logging.info("Polar sync stored %s new workout(s) for athlete %s", added, athlete_id)
+        logging.info("Integration sync stored %s new workout(s) for athlete %s", added, athlete_id)
     return {"added": added, "duplicates": duplicate_rows + merge_result["duplicates"], "stored": len(merged_workouts)}
 
 
@@ -2620,7 +2841,7 @@ def merge_backend_workout_lists(existing_workouts, incoming_workouts):
 def find_mergeable_backend_workout_index(workout, candidates):
     key = workout_dedup_key(workout)
     for index, candidate in enumerate(candidates):
-        if workout_dedup_key(candidate) == key:
+        if workouts_share_provider_id(workout, candidate) or workout_dedup_key(candidate) == key:
             return index
     for index, candidate in enumerate(candidates):
         if are_similar_imported_backend_workouts(workout, candidate):
@@ -2638,8 +2859,9 @@ def are_similar_imported_backend_workouts(a, b):
     if not a_date or not b_date:
         return False
     same_day = a_date.date() == b_date.date()
-    close_start = abs((a_date - b_date).total_seconds()) <= 12 * 60 * 60
-    if not same_day and not close_start:
+    precise_start = backend_workout_has_start_time(a.get("date")) and backend_workout_has_start_time(b.get("date"))
+    close_start = abs((a_date - b_date).total_seconds()) <= 30 * 60
+    if (precise_start and not close_start) or (not precise_start and not same_day):
         return False
 
     a_sport = normalized_sport_key(a.get("sport"))
@@ -2665,17 +2887,32 @@ def backend_workout_datetime(value):
     text = str(value or "").replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(text)
-        return parsed.replace(tzinfo=None)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
     except ValueError:
         return None
+
+
+def backend_workout_has_start_time(value):
+    return bool(re.search(r"[T ][0-9]{1,2}:[0-9]{2}", str(value or "")))
 
 
 def is_imported_backend_workout_pair(a, b):
     a_source = str(a.get("source") or "")
     b_source = str(b.get("source") or "")
-    return is_polar_like_backend_workout(a) or is_polar_like_backend_workout(b) or (
+    return is_external_backend_workout(a) or is_external_backend_workout(b) or (
         source_looks_like_workout_file_backend(a_source) and source_looks_like_workout_file_backend(b_source)
     )
+
+
+def is_external_backend_workout(workout):
+    if not isinstance(workout, dict):
+        return False
+    if workout_provider_ids(workout):
+        return True
+    source = str(workout.get("source") or "").strip().lower()
+    return source.startswith(("polar:", "strava:", "runalyze:")) or is_polar_like_backend_workout(workout)
 
 
 def is_polar_like_backend_workout(workout):
@@ -2702,9 +2939,10 @@ def tcx_file_name_from_backend_workout(workout):
     return source_name if source_name.lower().endswith(".tcx") else ""
 
 def workout_dedup_key(workout):
-    polar_id = polar_exercise_id_from_source(workout.get("source") if isinstance(workout, dict) else "")
-    if polar_id:
-        return f"polar-{polar_id}"
+    provider_ids = workout_provider_ids(workout)
+    if provider_ids:
+        provider = sorted(provider_ids)[0]
+        return f"{provider}-{provider_ids[provider]}"
     date_key = workout_date_key(workout.get("date") if isinstance(workout, dict) else "")
     sport_key = normalized_sport_key(workout.get("sport") if isinstance(workout, dict) else "")
     duration_key = round(number_or_none(workout.get("durationMin") if isinstance(workout, dict) else 0) or 0)
@@ -2712,6 +2950,41 @@ def workout_dedup_key(workout):
     return f"{date_key}-{sport_key}-{duration_key}-{distance_key}"
 
 
+
+def workout_provider_ids(workout):
+    if not isinstance(workout, dict):
+        return {}
+    values = workout.get("providerIds")
+    result = {}
+    if isinstance(values, dict):
+        for provider, value in values.items():
+            clean_provider = str(provider or "").strip().lower()
+            clean_value = str(value or "").strip().lower()
+            if clean_provider and clean_value:
+                result[clean_provider] = clean_value
+
+    source = workout.get("source")
+    for provider, parser in (
+        ("polar", polar_exercise_id_from_source),
+        ("strava", strava_activity_id_from_source),
+        ("runalyze", runalyze_activity_id_from_source),
+    ):
+        value = parser(source)
+        if value:
+            result[provider] = value
+    return result
+
+
+def workouts_share_provider_id(a, b):
+    a_ids = workout_provider_ids(a)
+    b_ids = workout_provider_ids(b)
+    return any(value and b_ids.get(provider) == value for provider, value in a_ids.items())
+
+
+def runalyze_activity_id_from_source(source):
+    value = str(source or "").strip()
+    direct_match = re.match(r"^Runalyze:([^/\\]+)$", value, flags=re.IGNORECASE)
+    return direct_match.group(1).lower() if direct_match else ""
 
 def strava_activity_id_from_source(source):
     value = str(source or "").strip()
@@ -2765,12 +3038,16 @@ def merge_duplicate_backend_workouts(a, b):
         base["source"] = other.get("source")
         if other.get("notes") and (not base.get("notes") or str(base.get("notes")).upper().startswith("TCX")):
             base["notes"] = other.get("notes")
-    if other.get("loadSource") == "imported" and other.get("load"):
+    if (
+        other.get("loadSource") == "imported"
+        and other.get("load")
+        and (not base.get("loadSource") or base.get("loadSource") == "duration")
+    ):
         base["load"] = other.get("load")
         base["loadSource"] = other.get("loadSource")
     if is_generic_sport(base.get("sport")) and other.get("sport"):
         base["sport"] = other.get("sport")
-    for key in ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "hrMax", "hrRest", "feedback", "workoutTypeOverride"]:
+    for key in ["intervalSignals", "lapSignals", "avgSpeed", "maxSpeed", "maxHr", "hrMax", "hrRest", "rpe", "subjectiveFeeling", "feedback", "workoutTypeOverride"]:
         if not base.get(key) and other.get(key):
             base[key] = other.get(key)
     if not base.get("paceSource") and other.get("paceSource"):
@@ -2780,6 +3057,10 @@ def merge_duplicate_backend_workouts(a, b):
     if (not base.get("loadSource") or base.get("loadSource") == "duration") and other.get("loadSource") and other.get("loadSource") != "duration":
         base["load"] = other.get("load")
         base["loadSource"] = other.get("loadSource")
+    provider_ids = workout_provider_ids(base)
+    provider_ids.update(workout_provider_ids(other))
+    if provider_ids:
+        base["providerIds"] = provider_ids
     if base.get("paceSource") == "distance-duration" and tcx_file_name_from_backend_workout(base):
         base["paceSource"] = "tcx"
         base["pace"] = base.get("pace") or base.get("paceMinPerKm")
@@ -3042,6 +3323,7 @@ def polar_exercise_to_workout(exercise):
     return {
         "id": f"{date[:16]}-polar-{exercise_id or duration_min}-{distance_km}",
         "source": f"Polar:{exercise_id}" if exercise_id else "Polar",
+        "providerIds": {"polar": exercise_id} if exercise_id else {},
         "date": date,
         "sport": sport,
         "durationMin": duration_min,
@@ -3135,28 +3417,47 @@ def http_json(url, method="GET", data=None, headers=None):
 
 
 def http_bytes(url, method="GET", data=None, headers=None):
-    is_telegram = "api.telegram.org" in url
-    is_polar = "polaraccesslink.com" in url
+    host = str(urlparse(url).hostname or "").lower()
+    is_telegram = host == "api.telegram.org"
+    is_polar = host.endswith("polaraccesslink.com")
+    is_runalyze = host.endswith("runalyze.com")
+    is_strava = host.endswith("strava.com")
     telegram = telegram_notification_config() if is_telegram else {}
-    service_name = "Telegram API" if is_telegram else "Polar API"
-    timeout = telegram.get("timeout_seconds", 45) if is_telegram else int(POLAR_CONFIG.get("timeoutSeconds", 45))
+
+    if is_telegram:
+        service_name = "Telegram API"
+        service_config = telegram
+        timeout = int(telegram.get("timeout_seconds", 45))
+    elif is_runalyze:
+        service_name = "Runalyze API"
+        service_config = integration_config("runalyze")
+        timeout = int(service_config.get("timeoutSeconds", 45))
+    elif is_strava:
+        service_name = "Strava API"
+        service_config = integration_config("strava")
+        timeout = int(service_config.get("timeoutSeconds", 45))
+    else:
+        service_name = "Polar API" if is_polar else "External API"
+        service_config = POLAR_CONFIG
+        timeout = int(service_config.get("timeoutSeconds", 45))
+
     req = request.Request(url, data=data, method=method, headers=headers or {})
     force_ipv4 = is_telegram and telegram.get("force_ipv4", True)
-    retryable_polar_get = is_polar and method.upper() == "GET" and data is None
-    retry_count = positive_int(POLAR_CONFIG.get("retryCount"), 2, minimum=0) if retryable_polar_get else 0
+    retryable_get = (is_polar or is_runalyze) and method.upper() == "GET" and data is None
+    retry_count = positive_int(service_config.get("retryCount"), 2, minimum=0) if retryable_get else 0
     attempt_timeout = timeout
-    if retryable_polar_get:
+    if retryable_get:
         attempt_timeout = min(
             timeout,
-            positive_int(POLAR_CONFIG.get("requestAttemptTimeoutSeconds"), 15, minimum=5),
+            positive_int(service_config.get("requestAttemptTimeoutSeconds"), timeout, minimum=5),
         )
-    retry_delay = float(POLAR_CONFIG.get("retryDelaySeconds", 2) or 0)
+    retry_delay = float(service_config.get("retryDelaySeconds", 2) or 0)
     last_error = None
 
     for attempt in range(retry_count + 1):
         try:
-            if force_ipv4 or retryable_polar_get:
-                return urlopen_ipv4(req, attempt_timeout, rotation=attempt if retryable_polar_get else 0)
+            if force_ipv4 or retryable_get:
+                return urlopen_ipv4(req, attempt_timeout, rotation=attempt if retryable_get else 0)
             with request.urlopen(req, timeout=attempt_timeout) as response:
                 return response.read()
         except error.HTTPError as exc:
@@ -3166,6 +3467,8 @@ def http_bytes(url, method="GET", data=None, headers=None):
             last_error = AppError(f"{service_name} timeout after {attempt_timeout} seconds", 504)
         except error.URLError as exc:
             last_error = AppError(f"failed to connect to {service_name}: {exc.reason}", 502)
+        except (ConnectionError, OSError) as exc:
+            last_error = AppError(f"failed to connect to {service_name}: {exc}", 502)
 
         if attempt < retry_count:
             logging.warning(
@@ -3179,7 +3482,6 @@ def http_bytes(url, method="GET", data=None, headers=None):
                 time.sleep(retry_delay)
 
     raise last_error or AppError(f"failed to connect to {service_name}", 502)
-
 
 def urlopen_ipv4(req, timeout, rotation=0):
     def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):

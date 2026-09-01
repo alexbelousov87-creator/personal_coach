@@ -194,12 +194,13 @@
                   <h3>Runalyze</h3>
                   <span id="runalyzeStatus">Токен не указан</span>
                 </div>
-                <p id="runalyzeHint">Можно сохранить Personal API token. Автоматическое чтение активностей включим после подтверждения доступного read API.</p>
+                <p id="runalyzeHint">Personal API token используется для автоматического чтения тренировок и сохранения их в профиле ученика.</p>
                 <form class="inline-token-form" id="runalyzeTokenForm" hidden>
                   <input id="runalyzeToken" name="token" type="password" placeholder="Personal API token">
                   <button class="ghost-btn" id="saveRunalyzeToken" type="submit">Сохранить токен</button>
                 </form>
                 <div class="button-row integration-manage-row" id="runalyzeManageActions" hidden>
+                  <button class="primary-btn" id="syncRunalyze" type="button">Синхронизировать</button>
                   <button class="ghost-btn" id="changeRunalyzeToken" type="button">Изменить токен</button>
                   <button class="ghost-btn disconnect-btn" id="disconnectRunalyze" type="button">Отключить</button>
                 </div>
