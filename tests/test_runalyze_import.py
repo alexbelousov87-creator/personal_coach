@@ -179,5 +179,64 @@ class RunalyzeImportTests(unittest.TestCase):
         self.assertEqual(error.exception.status, 403)
         self.assertIn("Supporter/Premium", str(error.exception))
         self.assertEqual(save_mock.call_args.args[3]["readAccess"], "denied")
+
+    def test_read_token_validation_activates_runalyze(self):
+        with patch.object(server, "http_json", return_value=[]) as request_mock:
+            access, warning = server.validate_runalyze_read_token("read-token")
+
+        self.assertEqual(access, "granted")
+        self.assertEqual(warning, "")
+        self.assertIn("itemsPerPage=1", request_mock.call_args.args[0])
+
+    def test_write_only_token_validation_returns_warning(self):
+        with patch.object(
+            server,
+            "http_json",
+            side_effect=server.AppError("Access Denied", 403),
+        ):
+            access, warning = server.validate_runalyze_read_token("write-token")
+
+        self.assertEqual(access, "denied")
+        self.assertIn("только для записи", warning)
+        self.assertIn("Supporter/Premium", warning)
+
+    def test_saving_write_only_token_keeps_sync_inactive(self):
+        with (
+            patch.object(server, "current_athlete_target", return_value=("coach", "athlete")),
+            patch.object(
+                server,
+                "validate_runalyze_read_token",
+                return_value=("denied", "Токен не дает чтение."),
+            ),
+            patch.object(server, "save_athlete_integration") as save_mock,
+        ):
+            result = server.save_runalyze_token_for_session({}, "write-token")
+
+        self.assertFalse(result["active"])
+        self.assertEqual(result["status"]["readAccess"], "denied")
+        self.assertFalse(result["status"]["syncAvailable"])
+        self.assertEqual(save_mock.call_args.args[3]["token"], "write-token")
+
+    def test_sync_is_blocked_for_write_only_token(self):
+        integration = {
+            "token": "write-token",
+            "readAccess": "denied",
+            "lastSync": "",
+        }
+        with (
+            patch.object(server, "integration_config", return_value={"enabled": True}),
+            patch.object(server, "athlete_integration", return_value=integration),
+            patch.object(server, "http_json") as request_mock,
+        ):
+            with self.assertRaises(server.AppError) as error:
+                server.sync_runalyze_workouts_locked(
+                    store=False,
+                    coach_id="coach",
+                    athlete_id="athlete",
+                )
+
+        self.assertEqual(error.exception.status, 403)
+        request_mock.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

@@ -6705,14 +6705,17 @@ function updateIntegrationsUi(status = {}) {
     connectButton: null,
     syncButton: syncRunalyzeButton,
     connectText: "",
-    connectedText: "Runalyze token сохранен",
+    connectedText: "Runalyze активен",
     disabledText: "Runalyze выключен",
     disabledHint: "Включите integrations.runalyze.enabled в conf.json, если хотите сохранить token ученика.",
     notConnectedText: "Runalyze token не указан",
     notConnectedHint: "Сохраните новый Personal API token с правом чтения activities.",
-    connectedHint: providers.runalyze?.readAccess === "denied"
-      ? "Токен не дает read-доступ к activities. Нужен новый токен Supporter/Premium с правом чтения тренировок."
-      : "Сервер автоматически проверяет новые тренировки Runalyze и объединяет их с записями других источников.",
+    inactiveText: providers.runalyze?.readAccess === "denied"
+      ? "Токен сохранен, чтение недоступно"
+      : "Токен сохранен, чтение не подтверждено",
+    inactiveHint: providers.runalyze?.lastError
+      || "Для активации Runalyze нужен Personal API token с правом чтения activities.",
+    connectedHint: "Сервер автоматически проверяет новые тренировки Runalyze и объединяет их с записями других источников.",
   }, status.unavailable);
 
   const polarConnected = Boolean(providers.polar?.connected);
@@ -6720,7 +6723,7 @@ function updateIntegrationsUi(status = {}) {
   if (disconnectPolarButton) disconnectPolarButton.hidden = !polarConnected || !canUseIntegrations();
   updateRunalyzeIntegrationControls(providers.runalyze || {}, Boolean(status.unavailable));
 
-  const connectedCount = Object.values(providers).filter((item) => item?.connected).length;
+  const connectedCount = Object.values(providers).filter((item) => item?.active ?? item?.connected).length;
   if (integrationsStatus) {
     integrationsStatus.textContent = canUseIntegrations()
       ? `Подключено источников: ${connectedCount}`
@@ -6744,6 +6747,7 @@ function updateRunalyzeIntegrationControls(status = {}, unavailable = false) {
     changeRunalyzeTokenButton.disabled = !canManage;
   }
   if (disconnectRunalyzeButton) disconnectRunalyzeButton.disabled = !canManage;
+  if (syncRunalyzeButton) syncRunalyzeButton.disabled = !canManage || status.active !== true;
   if (runalyzeTokenInput) runalyzeTokenInput.disabled = !canManage;
 }
 
@@ -6751,8 +6755,10 @@ function updateProviderUi(provider, status, refs, unavailable = false) {
   const configured = Boolean(status.configured);
   const enabled = status.enabled !== false;
   const connected = Boolean(status.connected);
+  const active = status.active === undefined ? connected : Boolean(status.active);
   const card = document.querySelector(`[data-provider-card="${provider}"]`);
-  card?.classList.toggle("connected", connected);
+  card?.classList.toggle("connected", active);
+  card?.classList.toggle("restricted", connected && !active);
   card?.classList.toggle("unavailable", Boolean(unavailable));
 
   if (!canUseIntegrations()) {
@@ -6784,10 +6790,15 @@ function updateProviderUi(provider, status, refs, unavailable = false) {
     refs.connectButton.classList.toggle("connected", connected);
     refs.connectButton.disabled = connected;
   }
-  if (refs.syncButton) refs.syncButton.disabled = !connected;
+  if (refs.syncButton) refs.syncButton.disabled = !active;
   if (!connected) {
     if (refs.statusEl) refs.statusEl.textContent = refs.notConnectedText;
     if (refs.hintEl) refs.hintEl.textContent = refs.notConnectedHint;
+    return;
+  }
+  if (!active) {
+    if (refs.statusEl) refs.statusEl.textContent = refs.inactiveText || "Источник не активен";
+    if (refs.hintEl) refs.hintEl.textContent = refs.inactiveHint || "Синхронизация недоступна.";
     return;
   }
   const lastSync = status.lastSync ? new Date(Number(status.lastSync) * 1000).toLocaleString("ru-RU") : "еще не выполнялась";
@@ -6942,7 +6953,9 @@ async function saveRunalyzeToken(event) {
     if (!response.ok) throw new Error(payload.error || "Runalyze token failed");
     runalyzeTokenInput.value = "";
     runalyzeTokenEditing = false;
-    showToast("Runalyze token сохранен");
+    showToast(payload.active
+      ? "Runalyze подключен: чтение тренировок подтверждено"
+      : (payload.warning || "Token сохранен, но чтение тренировок недоступно"));
     await refreshIntegrationsStatus();
   } catch (error) {
     showToast(`Runalyze: ${error.message}`);

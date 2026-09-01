@@ -2249,9 +2249,22 @@ def exchange_strava_code(code):
 def runalyze_status(coach_id=DEFAULT_COACH_ID, athlete_id=DEFAULT_ATHLETE_ID):
     config = integration_config("runalyze")
     integration = athlete_integration(coach_id, athlete_id, "runalyze")
-    status = public_integration_status("runalyze", integration, configured=True, enabled=bool(config.get("enabled", True)))
+    return runalyze_public_status(integration, config)
+
+
+def runalyze_public_status(integration, config=None):
+    config = config or integration_config("runalyze")
+    integration = integration if isinstance(integration, dict) else {}
+    status = public_integration_status(
+        "runalyze",
+        integration,
+        configured=True,
+        enabled=bool(config.get("enabled", True)),
+    )
     status["readAccess"] = integration.get("readAccess", "")
     status["lastError"] = integration.get("lastError", "")
+    status["active"] = bool(status["connected"] and status["readAccess"] == "granted")
+    status["syncAvailable"] = status["active"]
     return status
 
 
@@ -2260,9 +2273,50 @@ def save_runalyze_token_for_session(session, token):
     if not token:
         raise AppError("Runalyze token is empty.", 400)
     coach_id, athlete_id = current_athlete_target(session)
-    integration = {"token": token, "connectedAt": int(time.time()), "lastSync": "", "readAccess": "unknown", "lastError": ""}
+    read_access, warning = validate_runalyze_read_token(token)
+    integration = {
+        "token": token,
+        "connectedAt": int(time.time()),
+        "lastSync": "",
+        "readAccess": read_access,
+        "lastError": warning,
+    }
     save_athlete_integration(coach_id, athlete_id, "runalyze", integration)
-    return {"ok": True, "status": runalyze_status(coach_id=coach_id, athlete_id=athlete_id)}
+    status = runalyze_public_status(integration)
+    return {
+        "ok": True,
+        "active": status["active"],
+        "warning": warning,
+        "status": status,
+    }
+
+
+def validate_runalyze_read_token(token):
+    config = integration_config("runalyze")
+    endpoint = str(config.get("activitiesUrl") or "https://runalyze.com/api/v1/activity").strip()
+    params = {"itemsPerPage": 1, "page": 1, "order[id]": "desc"}
+    headers = {
+        "token": token,
+        "Accept": "application/json",
+        "User-Agent": "RunFlow/1.0",
+    }
+    try:
+        payload = http_json(endpoint + "?" + urlencode(params), headers=headers)
+        if not isinstance(payload, (list, dict)):
+            return "unknown", "Runalyze вернул неожиданный ответ. Чтение тренировок пока не подтверждено."
+        return "granted", ""
+    except AppError as exc:
+        if exc.status == 401:
+            return "denied", "Runalyze token недействителен или истек. Создайте новый Personal API token."
+        if exc.status == 403:
+            return (
+                "denied",
+                "Этот Runalyze token не дает чтение тренировок. "
+                "Возможно, он создан только для записи или без scope чтения activities; "
+                "read API также требует Supporter/Premium.",
+            )
+        logging.warning("Could not validate Runalyze read token: %s", exc)
+        return "unknown", "Не удалось проверить Runalyze token из-за сетевой ошибки. Синхронизация пока недоступна."
 
 
 def disconnect_integration_for_session(session, provider):
@@ -2615,6 +2669,11 @@ def sync_runalyze_workouts_locked(store=True, automatic=False, coach_id=None, at
     token = str(integration.get("token") or "").strip()
     if not token:
         raise AppError("Runalyze is not connected.", 401)
+    if integration.get("readAccess") == "denied":
+        raise AppError(
+            "Синхронизация Runalyze недоступна: сохраненный token не дает чтение тренировок.",
+            403,
+        )
 
     endpoint = str(config.get("activitiesUrl") or "https://runalyze.com/api/v1/activity").strip()
     items_per_page = min(1000, positive_int(config.get("itemsPerPage"), 200, minimum=1))
