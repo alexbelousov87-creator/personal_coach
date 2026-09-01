@@ -179,6 +179,24 @@ class RunalyzeImportTests(unittest.TestCase):
         self.assertEqual(error.exception.status, 403)
         self.assertIn("Supporter/Premium", str(error.exception))
         self.assertEqual(save_mock.call_args.args[3]["readAccess"], "denied")
+        self.assertNotIn("Access Denied", save_mock.call_args.args[3]["lastError"])
+        self.assertNotIn("403", save_mock.call_args.args[3]["lastError"])
+
+    def test_public_status_hides_raw_provider_error(self):
+        status = server.runalyze_public_status(
+            {
+                "token": "write-token",
+                "readAccess": "denied",
+                "lastError": 'Runalyze API error 403: {"detail":"Access Denied"}',
+            },
+            {"enabled": True},
+        )
+
+        self.assertFalse(status["active"])
+        self.assertFalse(status["syncAvailable"])
+        self.assertNotIn("403", status["lastError"])
+        self.assertNotIn("Access Denied", status["lastError"])
+        self.assertIn("чтение тренировок", status["lastError"])
 
     def test_read_token_validation_activates_runalyze(self):
         with patch.object(server, "http_json", return_value=[]) as request_mock:

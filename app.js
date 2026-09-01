@@ -6747,7 +6747,10 @@ function updateRunalyzeIntegrationControls(status = {}, unavailable = false) {
     changeRunalyzeTokenButton.disabled = !canManage;
   }
   if (disconnectRunalyzeButton) disconnectRunalyzeButton.disabled = !canManage;
-  if (syncRunalyzeButton) syncRunalyzeButton.disabled = !canManage || status.active !== true;
+  if (syncRunalyzeButton) {
+    syncRunalyzeButton.hidden = status.active !== true;
+    syncRunalyzeButton.disabled = !canManage || status.active !== true;
+  }
   if (runalyzeTokenInput) runalyzeTokenInput.disabled = !canManage;
 }
 

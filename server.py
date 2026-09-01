@@ -2262,10 +2262,25 @@ def runalyze_public_status(integration, config=None):
         enabled=bool(config.get("enabled", True)),
     )
     status["readAccess"] = integration.get("readAccess", "")
-    status["lastError"] = integration.get("lastError", "")
+    status["lastError"] = runalyze_public_error(integration)
     status["active"] = bool(status["connected"] and status["readAccess"] == "granted")
     status["syncAvailable"] = status["active"]
     return status
+
+
+def runalyze_public_error(integration):
+    read_access = str(integration.get("readAccess") or "").strip().lower()
+    if read_access == "denied":
+        return (
+            "Сохраненный Runalyze token не дает чтение тренировок или недействителен. "
+            "Создайте новый Personal API token с правом чтения activities."
+        )
+    if read_access == "unknown" and integration.get("lastError"):
+        return (
+            "Не удалось подтвердить чтение тренировок Runalyze. "
+            "Попробуйте сохранить token еще раз."
+        )
+    return ""
 
 
 def save_runalyze_token_for_session(session, token):
@@ -2701,18 +2716,25 @@ def sync_runalyze_workouts_locked(store=True, automatic=False, coach_id=None, at
             if len(batch) < items_per_page:
                 break
     except AppError as exc:
+        logging.warning(
+            "Runalyze API sync failed athlete=%s status=%s: %s",
+            target_athlete_id,
+            exc.status,
+            exc,
+        )
         integration["readAccess"] = "denied" if exc.status in {401, 403} else integration.get("readAccess", "unknown")
-        integration["lastError"] = str(exc)[:500]
-        save_athlete_integration(target_coach_id, target_athlete_id, "runalyze", integration)
         if exc.status == 401:
-            raise AppError("Runalyze token недействителен или истек. Создайте и сохраните новый Personal API token.", 401)
-        if exc.status == 403:
-            raise AppError(
-                "Runalyze отклонил чтение тренировок. Создайте новый Personal API token "
-                "с правом чтения activities; read API доступен для Supporter/Premium.",
-                403,
+            public_error = "Runalyze token недействителен или истек. Создайте и сохраните новый Personal API token."
+        elif exc.status == 403:
+            public_error = (
+                "Runalyze token не дает чтение тренировок. Создайте новый Personal API token "
+                "с правом чтения activities; read API доступен для Supporter/Premium."
             )
-        raise
+        else:
+            public_error = "Не удалось получить тренировки Runalyze. Повторите синхронизацию позже."
+        integration["lastError"] = public_error
+        save_athlete_integration(target_coach_id, target_athlete_id, "runalyze", integration)
+        raise AppError(public_error, exc.status if exc.status >= 400 else 502)
 
     workouts = [runalyze_activity_to_workout(item) for item in activities if isinstance(item, dict)]
     workouts = [item for item in workouts if item.get("date") and item.get("durationMin")]
