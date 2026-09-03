@@ -1781,23 +1781,65 @@ def telegram_reply_markup(telegram):
 
 
 def configure_telegram_bot_ui(telegram):
-    try:
-        scopes = [
-            None,
-            {"type": "all_private_chats"},
-            {"type": "all_group_chats"},
-            {"type": "all_chat_administrators"},
-        ]
-        if telegram.get("chat_id"):
-            scopes.append({"type": "chat", "chat_id": telegram["chat_id"]})
-        for scope in scopes:
-            for language_code in [None, "ru", "en"]:
-                delete_telegram_commands(telegram["bot_token"], scope, language_code)
-        if telegram.get("chat_id"):
-            set_telegram_menu_button(telegram["bot_token"], telegram["chat_id"])
-    except Exception as exc:
-        logging.warning("Telegram menu cleanup error: %s", exc)
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            scopes = telegram_command_scopes(telegram)
+            chat_ids = telegram_menu_chat_ids(telegram)
 
+            # Reset chat-specific buttons first. Command deletion must be the final
+            # state change so Telegram clients do not restore a cached Menu button.
+            set_telegram_menu_button(telegram["bot_token"])
+            for chat_id in chat_ids:
+                set_telegram_menu_button(telegram["bot_token"], chat_id)
+
+            for scope in scopes:
+                for language_code in [None, "ru", "en"]:
+                    delete_telegram_commands(telegram["bot_token"], scope, language_code)
+
+            remaining = []
+            for scope in scopes:
+                for language_code in [None, "ru", "en"]:
+                    commands = get_telegram_commands(telegram["bot_token"], scope, language_code)
+                    if commands:
+                        remaining.append((scope, language_code, commands))
+            if remaining:
+                raise AppError("Telegram commands are still present after cleanup", 502)
+
+            logging.info("Telegram bot menu cleaned: chats=%s", len(chat_ids))
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(3 * attempt)
+    logging.warning("Telegram menu cleanup error after 3 attempts: %s", last_error)
+
+
+def telegram_command_scopes(telegram):
+    scopes = [
+        None,
+        {"type": "all_private_chats"},
+        {"type": "all_group_chats"},
+        {"type": "all_chat_administrators"},
+    ]
+    scopes.extend({"type": "chat", "chat_id": chat_id} for chat_id in telegram_menu_chat_ids(telegram))
+    return scopes
+
+
+def telegram_menu_chat_ids(telegram):
+    chat_ids = []
+
+    def append_chat_id(value):
+        clean = str(value or "").strip()
+        if clean and clean not in chat_ids:
+            chat_ids.append(clean)
+
+    append_chat_id(telegram.get("chat_id"))
+    for coach in load_coaches():
+        coach_id = str(coach.get("id") or DEFAULT_COACH_ID)
+        for athlete in telegram_athletes(coach_id):
+            append_chat_id(athlete_chat_id(athlete))
+    return chat_ids
 
 def delete_telegram_commands(bot_token, scope=None, language_code=None):
     payload = {}
@@ -1808,19 +1850,37 @@ def delete_telegram_commands(bot_token, scope=None, language_code=None):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/deleteMyCommands"
-    http_json(url, method="POST", data=data, headers=headers)
+    response = http_json(url, method="POST", data=data, headers=headers)
+    if not isinstance(response, dict) or not response.get("ok") or response.get("result") is not True:
+        raise AppError("Telegram did not confirm command deletion", 502)
 
 
-def set_telegram_menu_button(bot_token, chat_id):
-    payload = {
-        "chat_id": chat_id,
-        "menu_button": {"type": "default"},
-    }
+def get_telegram_commands(bot_token, scope=None, language_code=None):
+    payload = {}
+    if scope:
+        payload["scope"] = scope
+    if language_code:
+        payload["language_code"] = language_code
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    url = f"https://api.telegram.org/bot{bot_token}/getMyCommands"
+    response = http_json(url, method="POST", data=data, headers=headers)
+    if not isinstance(response, dict) or not response.get("ok"):
+        raise AppError("Telegram did not return the command list", 502)
+    commands = response.get("result")
+    return commands if isinstance(commands, list) else []
+
+
+def set_telegram_menu_button(bot_token, chat_id=None):
+    payload = {"menu_button": {"type": "default"}}
+    if chat_id:
+        payload["chat_id"] = chat_id
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     url = f"https://api.telegram.org/bot{bot_token}/setChatMenuButton"
-    http_json(url, method="POST", data=data, headers=headers)
-
+    response = http_json(url, method="POST", data=data, headers=headers)
+    if not isinstance(response, dict) or not response.get("ok") or response.get("result") is not True:
+        raise AppError("Telegram did not confirm menu reset", 502)
 
 def send_telegram_message(bot_token, chat_id, text, reply_markup=None):
     payload = {
