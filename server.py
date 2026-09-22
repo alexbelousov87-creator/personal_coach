@@ -19,6 +19,7 @@ import sqlite3
 import threading
 import time
 import xml.etree.ElementTree as ET
+from coach_overview import build_coach_overview
 
 
 ROOT = Path(__file__).resolve().parent
@@ -296,6 +297,16 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 return
             self.send_json(state_for_session(session))
             return
+        if clean_path == "/api/coach/overview":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                self.send_json(coach_overview_for_session(session, query))
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            return
         if clean_path == "/api/workout-files":
             session = self.require_workout_file_import_session()
             if session is None:
@@ -546,6 +557,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             "index.html",
             "legal.html",
             "app.js",
+            "coach-overview.js",
             "styles.css",
             "AvaBotTrainingPlan.png",
             "favicon.ico",
@@ -1347,6 +1359,37 @@ def sanitize_state_for_client(state):
     if isinstance(athletes, list):
         safe["athletes"] = [sanitize_athlete_for_client(athlete) for athlete in athletes if isinstance(athlete, dict)]
     return safe
+
+
+def coach_overview_for_session(session, query=None):
+    if not session or session.get("role") != "coach":
+        raise AppError("forbidden", 403)
+    query = query or {}
+    try:
+        today = date.fromisoformat(query.get("today", [date.today().isoformat()])[0])
+        week = date.fromisoformat(query.get("week", [monday_of_week(today).isoformat()])[0])
+        utc_offset = int(query.get("utcOffsetMinutes", ["0"])[0])
+        if not -840 <= utc_offset <= 840:
+            raise ValueError("invalid UTC offset")
+        if week.weekday() != 0:
+            raise ValueError("week must start on Monday")
+    except (ValueError, TypeError, IndexError):
+        raise AppError("Некорректная дата недели.", 400)
+    coach_id = session.get("coach_id") or DEFAULT_COACH_ID
+    athletes = load_state_value("athletes", [], coach_id=coach_id)
+    prepared = []
+    for athlete in athletes if isinstance(athletes, list) else []:
+        if not isinstance(athlete, dict):
+            continue
+        integrations = athlete_integrations(athlete)
+        if coach_id == DEFAULT_COACH_ID and athlete.get("id") == DEFAULT_ATHLETE_ID and not integrations.get("polar"):
+            legacy = load_state_value("polarToken", {}, coach_id=coach_id)
+            if isinstance(legacy, dict) and legacy.get("access_token"):
+                integrations["polar"] = {"token": legacy, "lastSync": load_state_value("polarLastSync", "", coach_id=coach_id)}
+        integrations = {provider: {**value, "enabled": bool(integration_config(provider).get("enabled", True)) and value.get("enabled") is not False}
+                        for provider, value in integrations.items() if isinstance(value, dict) and integration_visible(provider)}
+        prepared.append({**athlete, "integrations": integrations})
+    return build_coach_overview(prepared, week, today, utc_offset_minutes=utc_offset)
 
 
 def state_for_session(session):

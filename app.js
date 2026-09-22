@@ -751,6 +751,7 @@ function updateAuthFormMode() {
 
 
 async function logout() {
+  globalThis.CoachOverview?.clear();
   try {
     await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST" });
   } catch {
@@ -1005,12 +1006,16 @@ function resizeImageToDataUrl(file, maxSize) {
 }
 
 function showView(viewId) {
+  const leavingRoster = document.querySelector("#students").classList.contains("active") && viewId !== "students";
+  if (viewId === "students" && !isCoachRole()) viewId = "dashboard";
   if (!canImportWorkouts() && ["import", "manual"].includes(viewId)) {
     viewId = "dashboard";
   }
   hideAdjustChoice();
   views.forEach((view) => view.classList.toggle("active", view.id === viewId));
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.view === viewId));
+  if (leavingRoster && viewId === "plan") restoreCurrentPlanOrGenerate();
+  if (viewId === "students") globalThis.CoachOverview?.refresh();
   if (viewId === "import") {
     refreshImportViewStatus();
   }
@@ -1616,6 +1621,13 @@ function renderAll() {
 }
 
 function renderUserContext() {
+  document.querySelector("#studentsNav").hidden = !isCoachRole();
+  if (!isCoachRole()) {
+    globalThis.CoachOverview?.clear();
+    if (document.querySelector("#students").classList.contains("active")) showView("dashboard");
+  } else if (document.querySelector("#students").classList.contains("active")) {
+    globalThis.CoachOverview?.refresh();
+  }
   document.body.classList.toggle("role-coach", isCoachRole());
   document.body.classList.toggle("role-student", !isCoachRole());
   if (coachPasswordPanel) coachPasswordPanel.hidden = !isCoachRole() || !state.auth.enabled;
@@ -3750,6 +3762,12 @@ function weekKeyFromPlanDays(days) {
 }
 
 function selectWeek(weekKey) {
+  if (document.querySelector("#students").classList.contains("active")) {
+    state.selectedWeekStart = weekKey;
+    renderPlanWeekLabel();
+    globalThis.CoachOverview?.refresh(true);
+    return;
+  }
   state.selectedWeekStart = weekKey;
   saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
   saveBackendState();
@@ -7249,7 +7267,7 @@ async function saveBackendState() {
   saveJson(CURRENT_ROLE_KEY, state.currentRole);
   saveJson(COACH_PROFILE_KEY, state.coachProfile);
   try {
-    await fetch(`${API_BASE_URL}/api/state`, {
+    const saved = await fetch(`${API_BASE_URL}/api/state`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -7265,6 +7283,7 @@ async function saveBackendState() {
         currentRole: state.currentRole,
       }),
     });
+    if (saved.ok) globalThis.CoachOverview?.refresh(true);
   } catch {
     // Keep localStorage as a fallback if backend is unavailable.
   }

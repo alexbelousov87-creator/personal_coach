@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260901-workout-structure">
+    <link rel="stylesheet" href="styles.css?v=20260922-roster">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -82,6 +82,7 @@
       <main class="main">
         <header class="top-nav-bar">
           <nav class="nav top-nav" aria-label="Основное меню">
+            <button class="nav-item coach-only" data-view="students" id="studentsNav" type="button" hidden>Ученики</button>
             <button class="nav-item active" data-view="dashboard" type="button">Обзор</button>
             <button class="nav-item" data-view="plan" type="button">План</button>
             <button class="nav-item student-import-only" data-view="import" type="button">Импорт</button>
@@ -97,6 +98,23 @@
             <button class="ghost-btn current-week-btn" id="currentWeek" type="button">Текущая</button>
           </div>
         </header>
+        <section class="view coach-only" id="students" aria-labelledby="studentsTitle">
+          <div class="page-head">
+            <div><h1 id="studentsTitle">Ученики</h1><p id="studentsPeriod"></p></div>
+            <div class="roster-commands">
+              <button class="ghost-btn" id="refreshStudents" type="button" title="Обновить сводку" aria-label="Обновить сводку">↻</button>
+              <button class="primary-btn" id="addRosterStudent" type="button">Добавить ученика</button>
+            </div>
+          </div>
+          <div class="roster-totals" id="studentsTotals"></div>
+          <div class="roster-toolbar">
+            <label>Поиск ученика<input type="search" id="studentSearch" placeholder="Имя" autocomplete="off"></label>
+            <label class="roster-check"><input type="checkbox" id="studentsAttention">Требуют внимания</label>
+            <label>Порядок<select id="studentsSort"><option value="attention">Сначала требуют внимания</option><option value="name">По имени</option><option value="latest">По последней тренировке</option></select></label>
+          </div>
+          <p class="roster-status" id="studentsStatus" role="status" aria-live="polite"></p>
+          <div id="studentsResults" aria-busy="false"></div>
+        </section>
         <section class="view active" id="dashboard">
           <div class="page-head">
             <div>
@@ -894,6 +912,7 @@
       </form>
     </div>
 
-    <script src="app.js?v=20260922-short-intervals"></script>
+    <script src="coach-overview.js?v=20260922-roster"></script>
+    <script src="app.js?v=20260922-roster"></script>
   </body>
 </html>
