@@ -3278,7 +3278,7 @@ def enrich_stored_polar_workouts_from_tcx():
 def workout_has_tcx_enrichment(workout):
     if not isinstance(workout, dict):
         return False
-    return number_or_none(workout.get("tcxEnrichmentVersion")) == 2
+    return number_or_none(workout.get("tcxEnrichmentVersion")) == 3
 
 
 def find_polar_tcx_file(polar_id):
@@ -3332,7 +3332,7 @@ def parse_tcx_workout_enrichment(path):
         if max_speed:
             max_speed_values.append(speed_to_kph(max_speed))
 
-    enrichment = {"tcxFile": path.name, "structureAnalyzed": True, "tcxEnrichmentVersion": 2}
+    enrichment = {"tcxFile": path.name, "structureAnalyzed": True, "tcxEnrichmentVersion": 3}
     lap_signals = analyze_tcx_laps_backend(laps)
     if lap_signals:
         enrichment["lapSignals"] = lap_signals
@@ -3405,7 +3405,7 @@ def analyze_tcx_laps_backend(laps):
     long_manual_laps = [lap for lap in manual_laps if lap["duration"] >= 600 or lap["distance"] >= 2500]
     has_auto_distance_only = len(distance_laps) >= max(3, len(lap_rows) * 0.8) and not manual_laps
     has_manual_structure = len(manual_laps) >= 2 and manual_ratio >= 0.5
-    has_interval_laps = has_manual_structure and len(manual_laps) >= 6 and len(short_manual_laps) >= 4 and speed_range >= 1.2
+    has_interval_laps = has_manual_structure and has_tcx_interval_repeats_backend(manual_laps)
     has_tempo_laps = has_manual_structure and not has_interval_laps and len(manual_laps) >= 3 and (
         len(long_manual_laps) >= 2 or (len(long_manual_laps) >= 1 and speed_range >= 0.8)
     )
@@ -3421,6 +3421,26 @@ def analyze_tcx_laps_backend(laps):
         "hasIntervalLaps": has_interval_laps,
         "hasTempoLaps": has_tempo_laps,
     }
+
+
+def has_tcx_interval_repeats_backend(manual_rows):
+    core = list(manual_rows)
+    if len(core) >= 3 and is_tcx_boundary_lap_backend(core[0], core[1:]):
+        core.pop(0)
+    if len(core) >= 2 and is_tcx_boundary_lap_backend(core[-1], core[:-1]):
+        core.pop()
+    work, recovery = split_tcx_lap_intensity_backend(core)
+    # Count alternating work/recovery, not warmup/cooldown or short strides.
+    work = [row for row in work if 30 <= row["duration"] <= 600 and 100 <= row["distance"] <= 2200]
+    if len(work) < 3:
+        return False
+    separated_repeats = sum(
+        any(left["index"] < rest["index"] < right["index"] and rest["duration"] >= 15
+            and min(left["speed"], right["speed"]) - rest["speed"] >= 1.2
+            for rest in recovery)
+        for left, right in zip(work, work[1:])
+    )
+    return separated_repeats >= 2 and separated_repeats >= (len(work) - 1) * 0.75
 
 
 def extract_tcx_workout_structure_backend(laps, lap_signals=None):

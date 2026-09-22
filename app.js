@@ -1538,6 +1538,7 @@ function normalizeWorkout(input) {
     lapSignals,
     workoutStructure,
     structureAnalyzed: Boolean(input.structureAnalyzed),
+    tcxEnrichmentVersion: numberOrNull(input.tcxEnrichmentVersion),
     avgHr,
     hrMax,
     hrRest,
@@ -7443,7 +7444,7 @@ function analyzeTcxLaps(laps) {
   const longManualLaps = manualLaps.filter((lap) => lap.duration >= 600 || lap.distance >= 2500);
   const hasAutoDistanceOnly = distanceLaps.length >= Math.max(3, lapRows.length * 0.8) && manualLaps.length === 0;
   const hasManualStructure = manualLaps.length >= 2 && manualRatio >= 0.5;
-  const hasIntervalLaps = hasManualStructure && manualLaps.length >= 6 && shortManualLaps.length >= 4 && speedRange >= 1.2;
+  const hasIntervalLaps = hasManualStructure && hasTcxIntervalRepeats(manualLaps);
   const hasTempoLaps =
     hasManualStructure &&
     !hasIntervalLaps &&
@@ -7465,6 +7466,22 @@ function analyzeTcxLaps(laps) {
     hasIntervalLaps,
     hasTempoLaps,
   };
+}
+
+function hasTcxIntervalRepeats(manualRows) {
+  const core = [...manualRows];
+  if (core.length >= 3 && isTcxBoundaryLap(core[0], core.slice(1))) core.shift();
+  if (core.length >= 2 && isTcxBoundaryLap(core[core.length - 1], core.slice(0, -1))) core.pop();
+  const [fast, recovery] = splitTcxLapIntensity(core);
+  // Count alternating work/recovery, not warmup/cooldown or short strides.
+  const work = fast.filter((row) => row.duration >= 30 && row.duration <= 600 && row.distance >= 100 && row.distance <= 2200);
+  if (work.length < 3) return false;
+  const separatedRepeats = work.slice(1).filter((right, index) => {
+    const left = work[index];
+    return recovery.some((rest) => left.index < rest.index && rest.index < right.index && rest.duration >= 15 &&
+      Math.min(left.speed, right.speed) - rest.speed >= 1.2);
+  }).length;
+  return separatedRepeats >= 2 && separatedRepeats >= (work.length - 1) * 0.75;
 }
 
 function extractTcxWorkoutStructure(laps, lapSignals = null) {
