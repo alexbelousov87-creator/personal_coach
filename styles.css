@@ -2917,3 +2917,51 @@ textarea {
 @media (max-width: 360px) {
   .roster-table tr { grid-template-columns: minmax(0, 1fr); }
 }
+
+.workout-classification {
+  margin: 6px 0;
+  max-width: 100%;
+  color: #536575;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workout-classification summary {
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 0;
+  font-weight: 600;
+}
+
+.workout-classification summary:focus-visible {
+  outline: 2px solid #2778a5;
+  outline-offset: 3px;
+}
+
+.workout-classification ul {
+  padding-left: 18px;
+  margin: 6px 0 0;
+}
+
+.workout-classification.confidence-low summary { color: #855600; }
+.workout-classification.confidence-manual summary { color: #17675d; }
+
+.plan-card.eval-uncertain,
+.today-plan-panel.eval-uncertain {
+  background: #f4f6f8;
+  border-top-color: #b7c2ca;
+  border-right-color: #b7c2ca;
+  border-bottom-color: #b7c2ca;
+}
+
+.execution-legend .eval-uncertain,
+.plan-card.completed.eval-uncertain .plan-status,
+.plan-execution.uncertain {
+  background: #e8edf1;
+  color: #425868;
+  border-color: #b7c2ca;
+}
+
+.plan-execution.uncertain .section-label { color: #425868; }

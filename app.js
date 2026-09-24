@@ -2307,7 +2307,7 @@ function renderWorkouts() {
           <div>
             <strong>${escapeHtml(workout.sport)} · ${escapeHtml(workoutTypeLabel(workout))}</strong>
             <span>${formatDate(workout.date)} · ${workout.durationMin} мин · ${formatDistance(workout.distanceKm)} · ${formatTrustedPace(workout)}</span>
-            ${workout.workoutTypeOverride ? `<em>тип задан вручную</em>` : ""}
+            ${renderWorkoutClassification(workout)}
             ${renderWorkoutTypeControl(workout)}
             ${renderWorkoutFeedbackBlock(workout)}
           </div>
@@ -2695,7 +2695,8 @@ function summarizeWeekForComparison(weekStart) {
   const planState = storedPlanForWeekKey(weekKey);
   const planDays = planState?.days || [];
   const keyTypes = new Set(["interval", "tempo", "long", "race"]);
-  const actualKeyTypes = [...new Set(workouts.map(getWorkoutType).filter((type) => keyTypes.has(type)))];
+  const actualKeyTypes = [...new Set(workouts.filter((workout) => !getWorkoutClassification(workout).needsReview).map(getWorkoutType).filter((type) => keyTypes.has(type)))];
+  const unconfirmedTypes = workouts.filter((workout) => getWorkoutClassification(workout).needsReview).length;
   const plannedKeyTypes = [...new Set(planDays.map(plannedTypeForDay).filter((type) => keyTypes.has(type)))];
   const actualLoad = workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const actualDistanceKm = workouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0);
@@ -2713,7 +2714,7 @@ function summarizeWeekForComparison(weekStart) {
     actualMinutes,
     plannedLoad,
     plannedDistanceKm,
-    actualKeyLabel: actualKeyTypes.length ? actualKeyTypes.map(actualTypeLabel).join(", ") : "нет",
+    actualKeyLabel: [actualKeyTypes.length ? actualKeyTypes.map(actualTypeLabel).join(", ") : "нет подтвержденных", unconfirmedTypes ? `тип уточняется: ${unconfirmedTypes}` : ""].filter(Boolean).join("; "),
     plannedKeyLabel: plannedKeyTypes.length ? `план: ${plannedKeyTypes.map(plannedTypeLabel).join(", ")}` : "ключевых работ в плане нет",
   };
 }
@@ -3873,6 +3874,7 @@ function renderPlanDayDetails(day) {
               <div class="actual-workout-entry">
                 <p>${escapeHtml(formatActualWorkout(workout))}</p>
                 ${renderActualWorkoutStructure(workout)}
+                ${renderWorkoutClassification(workout)}
               </div>
             `).join("")}
           </div>
@@ -3905,7 +3907,6 @@ function planExecutionDetails(day, execution) {
   const actual = actualWorkoutsForPlanDay(day);
   const completionActual = planCompletionWorkoutsForDay(day);
   const plannedType = plannedTypeForDay(day);
-  const actualTypes = [...new Set(actual.map(getWorkoutType))];
   const actualLoad = Math.round(actual.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0));
   const plannedLoad = Math.round(plannedLoadScoreForDay(day));
   const items = [
@@ -3913,7 +3914,7 @@ function planExecutionDetails(day, execution) {
   ];
 
   if (actual.length) {
-    items.push(`Фактические типы: ${actualTypes.map(actualTypeLabel).join(", ")}.`);
+    items.push(`Фактические типы: ${[...new Set(actual.map(workoutTypeLabel))].join(", ")}.`);
     items.push(`Фактическая нагрузка: ${actualLoad} TRIMP.`);
   }
 
@@ -3996,6 +3997,7 @@ function buildWeekExecutionSummary(plan) {
   const elapsedCompletedDays = elapsedEvaluations.filter((item) => item.completed).length;
   const missedPastDays = elapsedEvaluations.filter((item) => item.level === "missed").length;
   const mismatchDays = elapsedEvaluations.filter((item) => item.level === "mismatch").length;
+  const uncertainDays = elapsedEvaluations.filter((item) => item.typeUncertain).length;
   const heavyDays = elapsedEvaluations.filter((item) => ["harder", "overloaded"].includes(item.level)).length;
   const phase = getPreparationPhase(weekStart);
   const dailyLoads = days.map((day) => {
@@ -4021,6 +4023,10 @@ function buildWeekExecutionSummary(plan) {
     adjustmentLevel = "можно добавить";
     adjustmentReason = "фактическая нагрузка заметно ниже плана на прошедшие дни";
     adjustmentClass = "cool";
+  } else if (uncertainDays) {
+    adjustmentLevel = "уточнить типы";
+    adjustmentReason = "нагрузка учтена, но тип части тренировок требует подтверждения ученика";
+    adjustmentClass = "watch";
   } else if (heavyDays && elapsedCompletedDays > 0) {
     adjustmentLevel = "не нужна";
     adjustmentReason = "суммарная нагрузка близка к плану, хотя отдельные дни были тяжелее задания";
@@ -4043,6 +4049,7 @@ function buildWeekExecutionSummary(plan) {
     previousWeekLoad,
     missedPastDays,
     mismatchDays,
+    uncertainDays,
     heavyDays,
     monotony,
     weekStart,
@@ -4136,6 +4143,9 @@ function buildPlanWarnings(context) {
   }
   if (context.mismatchDays) {
     warnings.push(`Есть дни с другим типом тренировки: ${context.mismatchDays}.`);
+  }
+  if (context.uncertainDays) {
+    warnings.push(`Тип требует уточнения в ${context.uncertainDays} днях: это не подтверждённая замена или пропуск задания.`);
   }
   if (context.missedPastDays) {
     warnings.push(`Есть пропущенные плановые дни: ${context.missedPastDays}.`);
@@ -4233,7 +4243,7 @@ function keyExecutionComment(days, evaluations) {
   const missing = days
     .map((day, index) => ({ type: plannedTypeForDay(day), evaluation: evaluations[index] }))
     .filter((item) => labels[item.type] && !item.evaluation.keyCompleted)
-    .map((item) => labels[item.type]);
+    .map((item) => labels[item.type] + (item.evaluation.typeUncertain ? " (тип уточняется)" : ""));
   return missing.length ? `не закрыто: ${[...new Set(missing)].join(", ")}` : "ключевые работы закрыты";
 }
 
@@ -4272,14 +4282,20 @@ function evaluatePlanDayExecution(day) {
   const actualLoad = actual.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
   const plannedLoad = plannedLoadScoreForDay(day);
   const hasRunningActual = actual.some(isRunningWorkout);
-  const typeMatched = expectsNoRun && hasRunningActual
-    ? false
-    : completionActual.some((workout) => planTypeMatchesActual(plannedType, getWorkoutType(workout), day, workout));
-  const typeMismatch = !typeMatched;
+  const noRunViolation = expectsNoRun && hasRunningActual;
+  const typeMatched = !noRunViolation && completionActual.some((workout) => {
+    const classification = getWorkoutClassification(workout);
+    return !classification.needsReview && planTypeMatchesActual(plannedType, classification.type, day, workout);
+  });
+  const typeUncertain = !noRunViolation && !typeMatched && (
+    completionActual.some((workout) => !getWorkoutClassification(workout).canRejectOtherTypes)
+    || (!completionActual.length && actual.some((workout) => getWorkoutClassification(workout).needsReview))
+  );
+  const typeMismatch = !typeMatched && !typeUncertain;
   const keyCompleted = ["interval", "tempo", "long", "race"].includes(plannedType) && typeMatched;
   const typeMismatchComment = typeMismatch
     ? `по плану ${plannedTypeLabelForDay(day, plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`
-    : "";
+    : typeUncertain ? "Тип требует уточнения: имеющихся признаков недостаточно для уверенного сравнения с заданием" : "";
   const loadComment = plannedLoad ? `факт ${actualLoad} TRIMP против ориентира около ${plannedLoad}` : "";
   const joinedComment = (...parts) => parts.filter(Boolean).join("; ");
 
@@ -4288,8 +4304,9 @@ function evaluatePlanDayExecution(day) {
       show: true,
       completed: false,
       keyCompleted: false,
-      level: "mismatch",
-      label: "есть доп. нагрузка",
+      typeUncertain,
+      level: typeUncertain ? "uncertain" : "mismatch",
+      label: typeUncertain ? "тип требует уточнения" : "есть доп. нагрузка",
       comment: joinedComment(typeMismatchComment || `по плану ${plannedTypeLabelForDay(day, plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`, "нагрузка учтена в TRIMP, но беговое задание не закрыто", loadComment),
     };
   }
@@ -4299,6 +4316,7 @@ function evaluatePlanDayExecution(day) {
       show: true,
       completed: true,
       keyCompleted,
+      typeUncertain,
       level: "overloaded",
       label: typeMismatch ? "сильно тяжелее + другой тип" : "сильно тяжелее плана",
       comment: joinedComment(typeMismatchComment, loadComment),
@@ -4310,6 +4328,7 @@ function evaluatePlanDayExecution(day) {
       show: true,
       completed: true,
       keyCompleted,
+      typeUncertain,
       level: "harder",
       label: typeMismatch ? "тяжелее + другой тип" : "тяжелее плана",
       comment: joinedComment(typeMismatchComment, loadComment),
@@ -4321,12 +4340,24 @@ function evaluatePlanDayExecution(day) {
       show: true,
       completed: true,
       keyCompleted,
+      typeUncertain,
       level: "lighter",
       label: typeMismatch ? "легче + другой тип" : "легче плана",
       comment: joinedComment(typeMismatchComment, loadComment),
     };
   }
 
+  if (typeUncertain) {
+    return {
+      show: true,
+      completed: true,
+      keyCompleted: false,
+      typeUncertain: true,
+      level: "uncertain",
+      label: "тип требует уточнения",
+      comment: joinedComment(typeMismatchComment, loadComment),
+    };
+  }
   if (typeMismatch) {
     return {
       show: true,
@@ -5396,6 +5427,9 @@ function getPlanCaution(readiness) {
 
 function adaptPlanToCompletedWorkouts(plan, weekStart, target, caution) {
   const completedTypes = completedWorkoutTypesForWeek(weekStart);
+  const confirmedTypes = completedWorkoutTypesForWeek(weekStart, true);
+  const completionReason = (type, confirmed) => confirmedTypes.has(type) ? confirmed
+    : "Тип прошлой работы требует уточнения. До подтверждения не добавляем повторный ключевой стимул, оставляем день легким.";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -5405,21 +5439,21 @@ function adaptPlanToCompletedWorkouts(plan, weekStart, target, caution) {
     if (planDate <= today || isPlanDayCompleted(day)) return day;
 
     if (day.focus === "Интервалы" && completedTypes.has("interval")) {
-      return planDay(planDate, "Кросс", target.easyTitle, `${target.easyDetails} Интервальная работа на этой неделе уже выполнена, повторять ее не нужно.`, "умеренная нагрузка");
+      return planDay(planDate, "Кросс", target.easyTitle, `${target.easyDetails} ${completionReason("interval", "Интервальная работа на этой неделе уже выполнена, повторять ее не нужно.")}`, "умеренная нагрузка");
     }
 
     if (day.focus === "Темпо" && completedTypes.has("tempo")) {
-      return planDay(planDate, "Кросс", target.secondEasyTitle, `${target.secondEasyDetails} Темповая работа на этой неделе уже выполнена, оставьте день аэробным.`, "умеренная нагрузка");
+      return planDay(planDate, "Кросс", target.secondEasyTitle, `${target.secondEasyDetails} ${completionReason("tempo", "Темповая работа на этой неделе уже выполнена, оставьте день аэробным.")}`, "умеренная нагрузка");
     }
 
     if (day.focus === "Длительная" && completedTypes.has("long")) {
-      return planDay(planDate, "Восстановление", target.recoveryTitle, `${target.recoveryDetails} Длительная на этой неделе уже выполнена, приоритет - восстановление.`, "низкая нагрузка");
+      return planDay(planDate, "Восстановление", target.recoveryTitle, `${target.recoveryDetails} ${completionReason("long", "Длительная на этой неделе уже выполнена, приоритет - восстановление.")}`, "низкая нагрузка");
     }
 
     if ((completedTypes.has("interval") || completedTypes.has("tempo")) && day.focus === "Кросс") {
       return {
         ...day,
-        details: `${day.details} Уже есть качественная работа на этой неделе, держите этот день строго аэробным.`,
+        details: `${day.details} ${confirmedTypes.has("interval") || confirmedTypes.has("tempo") ? "Уже есть качественная работа на этой неделе, держите этот день строго аэробным." : "Тип прошлой работы требует уточнения; до подтверждения держите этот день аэробным."}`,
       };
     }
 
@@ -5427,7 +5461,7 @@ function adaptPlanToCompletedWorkouts(plan, weekStart, target, caution) {
   });
 }
 
-function completedWorkoutTypesForWeek(weekStart) {
+function completedWorkoutTypesForWeek(weekStart, confirmedOnly = false) {
   const range = weekRange(weekStart);
   return new Set(
     state.workouts
@@ -5435,6 +5469,7 @@ function completedWorkoutTypesForWeek(weekStart) {
         const date = new Date(workout.date);
         return date >= range.start && date < range.end;
       })
+      .filter((workout) => !confirmedOnly || !getWorkoutClassification(workout).needsReview)
       .map(getWorkoutType)
   );
 }
@@ -5500,6 +5535,7 @@ function workoutForAiContext(workout) {
     date: String(workout.date || "").slice(0, 10),
     sport: workout.sport,
     workoutType: getWorkoutType(workout),
+    workoutClassification: getWorkoutClassification(workout),
     durationMin: workout.durationMin,
     distanceKm: workout.distanceKm,
     paceMinPerKm: trustedPace(workout),
@@ -5572,12 +5608,12 @@ function buildWeeklyTrainingHistory(weeks = 8) {
     const workouts = workoutsInDateRange(startOfDay(start), startOfDay(end));
     const running = workouts.filter(isRunningWorkout);
     const keySessions = running.filter((workout) =>
-      ["interval", "tempo", "long", "race"].includes(getWorkoutType(workout))
+      !getWorkoutClassification(workout).needsReview && ["interval", "tempo", "long", "race"].includes(getWorkoutType(workout))
     );
     const qualitySessions = running.filter((workout) =>
-      ["interval", "tempo", "race"].includes(getWorkoutType(workout))
+      !getWorkoutClassification(workout).needsReview && ["interval", "tempo", "race"].includes(getWorkoutType(workout))
     );
-    const longRuns = running.filter((workout) => getWorkoutType(workout) === "long");
+    const longRuns = running.filter((workout) => !getWorkoutClassification(workout).needsReview && getWorkoutType(workout) === "long");
 
     return {
       weekStart: toDateInputValue(start),
@@ -5587,6 +5623,7 @@ function buildWeeklyTrainingHistory(weeks = 8) {
       load: Math.round(workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0)),
       sessions: workouts.length,
       runningSessions: running.length,
+      unconfirmedTypeSessions: running.filter((workout) => getWorkoutClassification(workout).needsReview).length,
       qualitySessions: qualitySessions.length,
       keySessions: keySessions.map(compactKeySession),
       longRunMin: Math.round(Math.max(0, ...longRuns.map((workout) => Number(workout.durationMin) || 0))),
@@ -5604,9 +5641,10 @@ function buildTrainingHistorySummary(days = 28) {
     runningKm: round(running.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0), 1),
     runningMinutes: Math.round(running.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0)),
     runningSessions: running.length,
+    unconfirmedTypeSessions: running.filter((workout) => getWorkoutClassification(workout).needsReview).length,
     totalSessions: workouts.length,
-    qualitySessions: running.filter((workout) => ["interval", "tempo", "race"].includes(getWorkoutType(workout))).length,
-    longRuns: running.filter((workout) => getWorkoutType(workout) === "long").length,
+    qualitySessions: running.filter((workout) => !getWorkoutClassification(workout).needsReview && ["interval", "tempo", "race"].includes(getWorkoutType(workout))).length,
+    longRuns: running.filter((workout) => !getWorkoutClassification(workout).needsReview && getWorkoutType(workout) === "long").length,
     load: Math.round(workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0)),
   };
 }
@@ -5719,6 +5757,7 @@ function buildAiRequest() {
 
   return {
     system:
+      "workoutClassification описывает качественную уверенность в типе, а не вероятность: manual = выбор ученика, high = сильные признаки, medium = косвенные признаки, low = предположение. При needsReview=true не считай тип доказательством выполненной ключевой работы и не делай вывод о замене задания только по этому типу. Учитывай reasons и limitations; TRIMP, время и дистанция таких тренировок по-прежнему входят в общую нагрузку. unconfirmedTypeSessions показывает число предположительных типов, исключенных из счетчиков качественных работ. Не назначай повторную ключевую работу только из-за неопределенности типа; это не доказательство отсутствия стимула. " +
       "Ты опытный тренер по видам спорта на выносливость. Составляй календарный недельный микроцикл с понедельника по воскресенье от текущего тренировочного состояния спортсмена, цели и этапа подготовки preparationPhase. Не используй жесткое расписание по дням: сначала выбери нужные тренировочные стимулы недели, затем разложи их по календарю с учетом восстановления, гонки, предыдущих тренировок и нагрузки. Базовая развивающая неделя обычно содержит 1 скоростной/интервальный стимул, 1 темповый/пороговый/специфический стимул, 1 длительную, легкие кроссы и восстановление, но это ориентир, а не обязанность. Для двух полноценных тяжелых беговых стимулов целись в интервал не менее 72 часов; 48-71 час допускай только как обоснованное исключение с уменьшением качественного объема, меньше 48 часов не планируй. Можешь заменять классические интервалы или темпо на бег в гору, фартлек, прогрессивный бег, марафонский темп, strides, силовую, прыжковые упражнения, ОФП/мобилити или кросс-тренинг, если это лучше соответствует состоянию и цели. Если отклоняешься от базовой структуры, объясни причину в rationale. Не перестраховывайся легкими днями по умолчанию, но при признаках перегруза снижай объем/интенсивность и убирай лишние тяжелые стимулы. Субъективная усталость спортсмена важна: если она низкая у подготовленного спортсмена, высокий TRIMP сам по себе не означает обязательную разгрузочную неделю; если усталость высокая, снижай нагрузку даже при умеренном TRIMP. preparationPhase и phaseHistory являются авторитетной хронологией этапов: не определяй этап только по количеству дней до гонки. Учитывай, сколько недель текущего этапа уже завершено и какова его плановая длительность; решай, продолжить этап или готовить переход к nextPhase. Не давай медицинских диагнозов и не назначай лечение.",
     context: {
       profile: profileForPlanning(),
@@ -7993,15 +8032,35 @@ function formatPace(paceMinPerKm) {
 }
 
 function getWorkoutType(workout) {
-  if (validWorkoutType(workout?.workoutTypeOverride)) return workout.workoutTypeOverride;
-  return classifyWorkout(workout);
+  return getWorkoutClassification(workout).type;
 }
 
 function validWorkoutType(type) {
   return WORKOUT_TYPE_OPTIONS.some(([value]) => value !== "auto" && value === type);
 }
 
+function workoutClassificationResult(type, confidence, source, reasons, limitations = []) {
+  return {
+    type, confidence, source, reasons, limitations,
+    needsReview: confidence === "low",
+    canRejectOtherTypes: ["manual", "high"].includes(confidence),
+  };
+}
+
+function getWorkoutClassification(workout) {
+  if (validWorkoutType(workout?.workoutTypeOverride)) {
+    return workoutClassificationResult(workout.workoutTypeOverride, "manual", "manual",
+      ["Тип выбран учеником вручную; автоматическое предположение не используется."],
+      ["Ручная отметка подтверждает выбор типа, но не оценивает качество выполнения."]);
+  }
+  return getAutomaticWorkoutClassification(workout);
+}
+
 function classifyWorkout(workout) {
+  return getAutomaticWorkoutClassification(workout).type;
+}
+
+function getAutomaticWorkoutClassification(workout = {}, profile = state.profile) {
   const notes = String(workout.notes || "").toLowerCase();
   const sport = String(workout.sport || "").toLowerCase();
   const duration = Number(workout.durationMin) || 0;
@@ -8009,45 +8068,95 @@ function classifyWorkout(workout) {
   const avgHr = Number(workout.avgHr) || 0;
   const rpe = Number(workout.rpe) || 0;
   const load = Number(workout.load) || 0;
-  const avgSpeed = numberOrNull(workout.avgSpeed || workout.speed);
-  const maxSpeed = numberOrNull(workout.maxSpeed);
   const intervalSignals = workout.intervalSignals || null;
   const lapSignals = workout.lapSignals || null;
-  const maxHr = state.profile.maxHr || numberOrNull(workout.hrMax) || 185;
+  const structure = workout.workoutStructure || null;
+  const maxHr = profile.maxHr || numberOrNull(workout.hrMax) || 185;
   const hrRatio = avgHr ? avgHr / maxHr : 0;
-  const targetDistance = state.profile.targetDistance || "10k";
+  const targetDistance = profile.targetDistance || "10k";
   const longMin = targetDistance === "42k" ? 100 : targetDistance === "21k" ? 85 : targetDistance === "10k" ? 70 : targetDistance === "5k" ? 60 : targetDistance === "3k" ? 55 : 45;
   const longKm = targetDistance === "42k" ? 24 : targetDistance === "21k" ? 18 : targetDistance === "10k" ? 14 : targetDistance === "5k" ? 11 : targetDistance === "3k" ? 9 : 7;
-  const isMarathonTarget = targetDistance === "42k";
   const isLongByDuration = duration >= longMin;
-  const isLongByDistance = !isMarathonTarget && duration >= longMin * 0.95 && distance >= longKm * 1.1;
-  const hasStrongSampleIntervals = hasStrongSampleIntervalPattern(intervalSignals, duration, longMin);
+  const isLongByDistance = targetDistance !== "42k" && duration >= longMin * 0.95 && distance >= longKm * 1.1;
+  const result = workoutClassificationResult;
+  const textLimit = "Заметка может описывать задание, отрицание или отдельную часть занятия; она не подтверждает структуру факта.";
+  const noteGroups = [
+    ["interval", ["интервал", "interval", "повтор", "repeat", "vo2", "400", "800", "1000", "фартлек", "fartlek"]],
+    ["tempo", ["темпо", "tempo", "порог", "threshold", "марафонск", "полумарафонск"]],
+    ["long", ["длитель", "long run", "longrun", "long"]],
+    ["recovery", ["восстанов", "recovery", "easy", "легко", "отдых"]],
+  ];
+  for (const [type, patterns] of noteGroups) {
+    if (matchesAny(notes, patterns)) {
+      const conflict = (lapSignals?.hasIntervalLaps && type !== "interval") || (lapSignals?.hasTempoLaps && type !== "tempo");
+      return result(type, "low", "notes", ["Тип предположен по словам или обозначениям в описании тренировки."],
+        [textLimit, ...(conflict ? ["Описание и признаки ручных кругов указывают на разные типы."] : [])]);
+    }
+  }
+  if (!sport.includes("run") && !sport.includes("бег")) {
+    const known = !["", "other", "polar", "unknown"].includes(sport.trim());
+    return result("cross", known ? "high" : "low", "sport",
+      [known ? `В источнике указан небеговой вид спорта: ${workout.sport}.` : "В источнике не указан определённый вид спорта."],
+      known ? [] : ["Недостаточно данных даже для уверенного разделения бега и кросс-тренинга."]);
+  }
+  if (lapSignals?.hasIntervalLaps) {
+    const repeated = (structure?.workGroups || []).reduce((sum, group) => sum + (Number(group.count) || 0), 0);
+    const strong = lapSignals.manualCount >= 6 && lapSignals.manualRatio >= 0.5 && lapSignals.speedRange >= 1.2 &&
+      structure?.kind === "intervals" && repeated >= 3 && structure.recoveryGroups?.length;
+    return result("interval", strong ? "high" : "medium", "manual-laps",
+      ["В ручных кругах обнаружено чередование быстрых отрезков и восстановления.",
+        ...(structure?.kind === "intervals" && structure.display ? [structure.display] : []),
+        `Ручных кругов: ${lapSignals.manualCount || "не указано"}; разброс скорости: ${Number(lapSignals.speedRange || 0).toFixed(1)} км/ч.`],
+      ["Круги подтверждают интервальный формат, но сами по себе не определяют усилие 5 км, 10 км или VO2max."]);
+  }
+  if (lapSignals?.hasTempoLaps) {
+    const sustained = ["tempo-blocks", "tempo-continuous"].includes(structure?.kind) && Number(structure.totalWorkMin) >= 10;
+    return result("tempo", sustained ? "medium" : "low", "manual-laps",
+      [sustained ? `В ручных кругах выделена продолжительная работа: около ${Math.round(structure.totalWorkMin)} мин.` : "Найдены длинные ручные круги, но продолжительная рабочая часть не подтверждена."],
+      ["Длинные круги могут быть разминкой или заминкой; пороговое усилие нельзя установить только по их длине."]);
+  }
+  if (!lapSignals?.hasAutoDistanceOnly && hasStrongSampleIntervalPattern(intervalSignals, duration, longMin)) {
+    return result("interval", "medium", "samples",
+      [`По временным данным найдено быстрых участков: ${intervalSignals.fastSegments}; участков восстановления: ${intervalSignals.recoverySegments}.`],
+      ["Колебания скорости и пульса могут зависеть от рельефа и остановок; ручные круги не подтверждают эти повторения."]);
+  }
+  if (rpe >= 8 && duration < longMin) {
+    return result("interval", "low", "rpe", [`Субъективная тяжесть RPE ${rpe}/10 при длительности ${duration} мин.`],
+      ["Высокий RPE отражает тяжесть, но не доказывает чередование работы и восстановления."]);
+  }
+  if (isLongByDuration || isLongByDistance) {
+    return result("long", "medium", "duration",
+      [isLongByDuration ? `Длительность ${duration} мин достигла порога ${longMin} мин для цели ${targetDistance}.` : `Дистанция ${distance} км и длительность ${duration} мин достигли ориентиров длительного бега для цели ${targetDistance}.`],
+      ["Это оценка по объёму: длительная запись может включать и другие виды работы."]);
+  }
+  if (rpe >= 7 || hrRatio >= 0.83 || (duration > 0 && load >= duration * 2.2)) {
+    const evidence = [];
+    if (rpe >= 7) evidence.push(`Субъективная тяжесть RPE ${rpe}/10.`);
+    if (hrRatio >= 0.83) evidence.push(`Средний пульс ${avgHr} уд/мин составляет ${Math.round(hrRatio * 100)}% от максимального ${maxHr}.`);
+    if (duration > 0 && load >= duration * 2.2) evidence.push(`Нагрузка ${load} TRIMP при длительности ${duration} мин.`);
+    return result("tempo", "low", "summary", evidence,
+      ["Средний пульс, TRIMP и RPE не показывают, была ли работа непрерывной или интервальной."]);
+  }
+  if (duration <= 40 && hrRatio && hrRatio < 0.72) {
+    return result("recovery", "medium", "summary",
+      [`Короткий бег (${duration} мин), средний пульс ${avgHr} ниже 72% от максимального ${maxHr}.`],
+      ["Средние показатели не описывают отдельные ускорения внутри тренировки."]);
+  }
+  const sufficient = duration > 0 && (avgHr > 0 || (rpe > 0 && rpe <= 3));
+  return result("easy", sufficient ? "medium" : "low", "summary",
+    ["Выбран кросс: в доступных данных не обнаружено более специфических признаков работы.",
+      ...(lapSignals?.hasAutoDistanceOnly ? ["В файле только автоматические круги по дистанции."] : [])],
+    ["Отсутствие признаков интервалов не доказывает, что их не было.",
+      ...(!sufficient ? ["Для уточнения не хватает длительности, пульса, ощущений или структуры кругов."] : [])]);
+}
 
-  if (matchesAny(notes, ["интервал", "interval", "повтор", "repeat", "vo2", "400", "800", "1000", "фартлек", "fartlek"])) {
-    return "interval";
-  }
-  if (matchesAny(notes, ["темпо", "tempo", "порог", "threshold", "марафонск", "полумарафонск"])) {
-    return "tempo";
-  }
-  if (matchesAny(notes, ["длитель", "long run", "longrun", "long"])) {
-    return "long";
-  }
-  if (matchesAny(notes, ["восстанов", "recovery", "easy", "легко", "отдых"])) {
-    return "recovery";
-  }
-
-  if (!sport.includes("run") && !sport.includes("бег") && !sport.includes("running")) {
-    return "cross";
-  }
-
-  if (lapSignals?.hasIntervalLaps) return "interval";
-  if (lapSignals?.hasTempoLaps) return "tempo";
-  if (!lapSignals?.hasAutoDistanceOnly && hasStrongSampleIntervals) return "interval";
-  if (rpe >= 8 && duration < longMin) return "interval";
-  if (isLongByDuration || isLongByDistance) return "long";
-  if (rpe >= 7 || hrRatio >= 0.83 || load >= duration * 2.2) return "tempo";
-  if (duration <= 40 && (hrRatio && hrRatio < 0.72)) return "recovery";
-  return "easy";
+function renderWorkoutClassification(workout) {
+  const classification = getWorkoutClassification(workout);
+  const labels = { manual: "Тип задан вручную", high: "Высокая уверенность", medium: "Средняя уверенность", low: "Тип требует уточнения · низкая уверенность" };
+  return `<details class="workout-classification confidence-${classification.confidence}">
+    <summary>${labels[classification.confidence]}</summary>
+    <ul>${[...classification.reasons, ...classification.limitations].map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+  </details>`;
 }
 
 function hasStrongSampleIntervalPattern(intervalSignals, duration, longMin) {
@@ -8071,7 +8180,9 @@ function workoutTypeLabel(workout) {
     easy: "кросс",
     cross: "кросс-тренинг",
   };
-  return labels[getWorkoutType(workout)] || "тренировка";
+  const classification = getWorkoutClassification(workout);
+  const label = labels[classification.type] || "тренировка";
+  return classification.needsReview ? `предположительно ${label}` : label;
 }
 
 function isPlanDayCompleted(day) {
@@ -8133,7 +8244,7 @@ function renderActualWorkoutStructure(workout) {
     structure.cooldownMin ? `заминка около ${structure.cooldownMin} мин` : "",
   ].filter(Boolean);
   const source = structure.source === "tcx-manual-laps" ? "по ручным кругам TCX" : "по данным тренировки";
-  const confidence = structure.confidenceLabel ? `${structure.confidenceLabel} уверенность` : "";
+  const confidence = structure.confidenceLabel ? `выделение отрезков: ${structure.confidenceLabel} уверенность` : "";
 
   return `
     <div class="actual-structure">
