@@ -1317,13 +1317,73 @@ textarea {
 
 .plan-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   margin-bottom: 18px;
 }
 
-.plan-grid.compact-plan {
-  gap: 10px;
+.plan-grid.compact-plan { gap: 10px; }
+
+.plan-grid > .plan-card {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px 24px;
+  min-width: 0;
+  min-height: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-day-heading,
+.plan-day-task,
+.plan-day-result { min-width: 0; }
+
+.plan-day-heading small { display: block; }
+
+.plan-day-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  min-width: 0;
+}
+
+.plan-day-result {
+  border-left: 1px solid var(--line);
+  padding-left: 24px;
+}
+
+.plan-day-content .plan-section {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.plan-day-content .plan-section:first-child { margin-top: 0; }
+
+.plan-day-content .structure-comparison { margin: 12px 0; }
+
+.plan-structure-details { margin: 12px 0; font-size: 13px; }
+.plan-structure-details > summary { cursor: pointer; color: var(--accent-2); font-weight: 600; }
+
+.plan-grid .plan-card > .rationale {
+  grid-column: 2;
+  margin: 0;
+  padding: 12px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+@media (max-width: 1280px) {
+  .plan-grid > .plan-card { grid-template-columns: minmax(0, 1fr); }
+  .plan-grid .plan-card > .rationale { grid-column: 1; }
+}
+
+@media (max-width: 760px) {
+  .plan-day-content { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .plan-day-result { border-left: 0; border-top: 1px solid var(--line); padding: 16px 0 0; }
 }
 
 .plan-analysis {
@@ -2344,8 +2404,7 @@ textarea {
   .plan-legend,
   .plan-control-grid,
   .import-diagnostics-grid,
-  .import-diagnostics-columns,
-  .plan-grid {
+  .import-diagnostics-columns {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2512,7 +2571,6 @@ textarea {
   .plan-control-grid,
   .import-diagnostics-grid,
   .import-diagnostics-columns,
-  .plan-grid,
   .form-grid {
     grid-template-columns: 1fr;
   }
@@ -2692,6 +2750,10 @@ textarea {
 @media (max-width: 420px) {
   .main {
     padding-inline: 10px;
+  }
+
+  .top-nav-bar {
+    margin-inline: -10px;
   }
 
   h1 {
@@ -2984,10 +3046,6 @@ textarea {
 .structure-comparison .structure-unknown small { color: #5e6a73; }
 .plan-card.eval-structure, .today-plan-panel.eval-structure { background: #fff9eb; border-top-color: #ba9753; border-right-color: #ba9753; border-bottom-color: #ba9753; }
 .execution-legend .eval-structure, .plan-card.completed.eval-structure .plan-status, .plan-execution.structure { background: #faf0d9; color: #80520d; border-color: #ba9753; }
-.plan-grid:has(.structure-comparison) {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
-  align-items: start;
-}
 .compact-plan .structure-comparison th,
 .compact-plan .structure-comparison td { padding: 4px; }
 .today-status.structure { background: #faf0d9; color: #80520d; }

@@ -2958,15 +2958,17 @@ function renderPlan(plan) {
       const toneClass = planToneClass(day);
       return `
         <article class="plan-card ${status.className} eval-${execution.level} ${toneClass}" data-plan-day-index="${index}">
-          <div class="plan-card-head">
-            <time>${day.dateLabel}</time>
-            ${isCoachRole() ? `<button class="ghost-btn plan-edit-btn" data-edit-plan-day="${index}" type="button" title="Редактировать день">Править</button>` : ""}
+          <div class="plan-day-heading">
+            <div class="plan-card-head">
+              <time>${day.dateLabel}</time>
+              ${isCoachRole() ? `<button class="ghost-btn plan-edit-btn" data-edit-plan-day="${index}" type="button" title="Редактировать день">Править</button>` : ""}
+            </div>
+            <div class="plan-status">${status.label}</div>
+            <span>${day.focus}</span>
+            <strong>${day.title}</strong>
+            <small>${day.load}</small>
           </div>
-          <div class="plan-status">${status.label}</div>
-          <span>${day.focus}</span>
-          <strong>${day.title}</strong>
-          ${renderPlanDayDetails(day)}
-          <small>${day.load}</small>
+          ${renderPlanDayDetails(day, true)}
         </article>
       `;
     })
@@ -3842,17 +3844,19 @@ function updatePlanSourceButtons(source) {
   });
 }
 
-function renderPlanDayDetails(day) {
+function renderPlanDayDetails(day, rowLayout = false) {
   const planned = day.plannedWorkout || day.details || "";
   const actualGroups = groupedActualWorkoutsForPlanDay(day);
   const execution = evaluatePlanDayExecution(day);
   const executionDetails = planExecutionDetails(day, execution);
+  const structureHtml = renderPlanStructureComparison(execution.structureComparison);
   const meta = [
     day.targetDistance ? `Ориентир: ${day.targetDistance}` : "",
     day.intensity ? `Интенсивность: ${day.intensity}` : "",
   ].filter(Boolean);
 
   return `
+    ${rowLayout ? `<div class="plan-day-content"><div class="plan-day-task">` : ""}
     ${planned ? `
       <div class="plan-section plan-assignment">
         <span class="section-label">Задание</span>
@@ -3865,6 +3869,7 @@ function renderPlanDayDetails(day) {
         <p>${escapeHtml(meta.join(" · "))}</p>
       </div>
     ` : ""}
+    ${rowLayout ? `</div><div class="plan-day-result">` : ""}
     ${actualGroups.length ? `
       <div class="plan-section plan-actual">
         <span class="section-label">Факт</span>
@@ -3882,7 +3887,12 @@ function renderPlanDayDetails(day) {
         `).join("")}
       </div>
     ` : ""}
-    ${renderPlanStructureComparison(execution.structureComparison)}
+    ${rowLayout && structureHtml ? `
+      <details class="plan-structure-details">
+        <summary>Сравнение структуры задания и факта</summary>
+        ${structureHtml}
+      </details>
+    ` : structureHtml}
     ${execution.show ? `
       <div class="plan-section plan-execution ${execution.level}">
         <span class="section-label">Оценка</span>
@@ -3895,6 +3905,7 @@ function renderPlanDayDetails(day) {
         ` : ""}
       </div>
     ` : ""}
+    ${rowLayout ? `</div></div>` : ""}
     ${day.rationale ? `
       <div class="plan-section rationale">
         <span class="section-label">Почему так</span>
