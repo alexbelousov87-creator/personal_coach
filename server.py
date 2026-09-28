@@ -558,6 +558,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             "legal.html",
             "app.js",
             "coach-overview.js",
+            "workout-comparison.js",
             "styles.css",
             "AvaBotTrainingPlan.png",
             "favicon.ico",
