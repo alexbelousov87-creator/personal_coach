@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const source = fs.readFileSync(path.join(__dirname, "../app.js"), "utf8");
 function setup() {
   const context = vm.createContext({
+    WorkoutComparison: require("../workout-comparison.js"),
     state: { profile: { maxHr: 200, targetDistance: "10k" }, workouts: [] },
     WORKOUT_TYPE_OPTIONS: ["auto", "easy", "recovery", "long", "interval", "tempo", "cross", "race"].map(v => [v, v]),
     numberOrNull: v => Number(v) || null,
@@ -25,7 +26,7 @@ function setup() {
     findBackToBackHeavyActualDays: () => null,
     findClosePlannedHardStimuli: () => null,
   });
-  for (const name of ["validWorkoutType", "workoutClassificationResult", "getWorkoutClassification", "getAutomaticWorkoutClassification", "getWorkoutType", "classifyWorkout", "matchesAny", "hasStrongSampleIntervalPattern", "renderWorkoutClassification", "escapeHtml", "workoutTypeLabel", "evaluatePlanDayExecution", "planTypeRequiresRunning", "workoutForAiContext", "compactWorkoutStructureForAi", "buildTrainingHistorySummary", "buildWeeklyTrainingHistory", "compactKeySession", "round", "addDays", "startOfDay", "toDateInputValue", "startOfTrainingWeek", "completedWorkoutTypesForWeek", "adaptPlanToCompletedWorkouts", "planDay", "weekRange", "buildPlanWarnings"]) {
+  for (const name of ["validWorkoutType", "workoutClassificationResult", "getWorkoutClassification", "getAutomaticWorkoutClassification", "getWorkoutType", "classifyWorkout", "matchesAny", "hasStrongSampleIntervalPattern", "renderWorkoutClassification", "escapeHtml", "workoutTypeLabel", "evaluatePlanDayExecution", "evaluatePlanDayLoadAndType", "rescheduleMissedQuality", "renderPlanStructureComparison", "planTypeRequiresRunning", "workoutForAiContext", "compactWorkoutStructureForAi", "buildTrainingHistorySummary", "buildWeeklyTrainingHistory", "compactKeySession", "round", "addDays", "startOfDay", "toDateInputValue", "startOfTrainingWeek", "completedWorkoutTypesForWeek", "adaptPlanToCompletedWorkouts", "planDay", "weekRange", "buildPlanWarnings"]) {
     const start = source.indexOf(`function ${name}(`);
     assert.ok(start >= 0, name);
     const end = source.indexOf("\nfunction ", start + 1);
@@ -181,4 +182,50 @@ test("week warning distinguishes uncertain type from a missed assignment", () =>
   const warnings = setup().buildPlanWarnings({ uncertainDays: 1, dailyLoads: [], monotony: {}, days: [] });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /не подтверждённая замена или пропуск/);
+});
+function structuredRun(count = 5, load = 80) {
+  const w = intervals();
+  w.load = load;
+  const structure = w.workoutStructure;
+  structure.source = "tcx-manual-laps";
+  structure.confidence = 0.96;
+  structure.workGroups = [{ count, basis: "distance", value: 1000 }];
+  structure.recoveryGroups = [{ count: count - 1 }];
+  structure.segments = Array.from({ length: count }, (_, i) => [
+    { role: "work", distanceM: 1000, durationSec: 210 },
+    ...(i < count - 1 ? [{ role: "recovery", distanceM: 400, durationSec: 120 }] : [])
+  ]).flat();
+  return w;
+}
+test("similar type and load cannot hide fewer repetitions", () => {
+  const result = setup().evaluatePlanDayExecution(day("interval", [structuredRun(3)], 80, { details: "5x1000м; восстановление 2 минуты" }));
+  assert.equal(result.level, "structure");
+  assert.equal(result.keyCompleted, false);
+});
+test("structure mismatch retains the load severity", () => {
+  const result = setup().evaluatePlanDayExecution(day("interval", [structuredRun(3, 160)], 80, { details: "5x1000м" }));
+  assert.equal(result.level, "overloaded");
+  assert.equal(result.structureDifferent, true);
+  assert.equal(result.keyCompleted, false);
+});
+test("matching type without manual segments is not full structured completion", () => {
+  const result = setup().evaluatePlanDayExecution(day("interval", [intervals()], 80, { details: "5x1000м" }));
+  assert.equal(result.level, "uncertain");
+  assert.equal(result.keyCompleted, false);
+});
+test("matching measured work retains key credit", () => {
+  const result = setup().evaluatePlanDayExecution(day("interval", [structuredRun()], 80, { details: "5x1000м; восстановление 2 минуты" }));
+  assert.equal(result.level, "matched");
+  assert.equal(result.keyCompleted, true);
+});
+test("unclear structure does not schedule an extra quality workout", () => {
+  const c = setup(), days = [day("interval", [intervals()], 80, { details: "5x1000м" })];
+  const evaluations = days.map(c.evaluatePlanDayExecution);
+  c.findRescheduleSlot = () => { throw Error("must not reschedule an uncertain completed activity"); };
+  c.rescheduleMissedQuality(days, evaluations, "interval", {}, {}, new Date());
+});
+test("comparison rendering escapes all imported text", () => {
+  const html = setup().renderPlanStructureComparison({ summary: "<img>", rows: [{ label: "<script>", planned: "<x>", actual: "<y>", matches: null }], notes: ["<svg>"] });
+  assert.doesNotMatch(html, /<(img|script|svg)>/);
+  assert.match(html, /&lt;img&gt;/);
 });

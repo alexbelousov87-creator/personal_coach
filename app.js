@@ -2204,6 +2204,7 @@ function renderTodayPlan() {
       <div class="today-fact">
         <span class="section-label">Факт и оценка</span>
         ${actual.length ? `<p>${actual.map((line) => escapeHtml(line)).join("<br>")}</p>` : "<p>Факт пока не найден среди импортированных тренировок.</p>"}
+        ${renderPlanStructureComparison(execution.structureComparison)}
         ${execution.show ? `<strong class="${execution.level}">${escapeHtml(execution.label)}</strong><small>${escapeHtml(execution.comment)}</small>` : ""}
       </div>
     </div>
@@ -3881,6 +3882,7 @@ function renderPlanDayDetails(day) {
         `).join("")}
       </div>
     ` : ""}
+    ${renderPlanStructureComparison(execution.structureComparison)}
     ${execution.show ? `
       <div class="plan-section plan-execution ${execution.level}">
         <span class="section-label">Оценка</span>
@@ -3998,6 +4000,7 @@ function buildWeekExecutionSummary(plan) {
   const missedPastDays = elapsedEvaluations.filter((item) => item.level === "missed").length;
   const mismatchDays = elapsedEvaluations.filter((item) => item.level === "mismatch").length;
   const uncertainDays = elapsedEvaluations.filter((item) => item.typeUncertain).length;
+  const structureReviewDays = elapsedEvaluations.filter((item) => item.structureUncertain || item.structureDifferent).length;
   const heavyDays = elapsedEvaluations.filter((item) => ["harder", "overloaded"].includes(item.level)).length;
   const phase = getPreparationPhase(weekStart);
   const dailyLoads = days.map((day) => {
@@ -4027,6 +4030,10 @@ function buildWeekExecutionSummary(plan) {
     adjustmentLevel = "уточнить типы";
     adjustmentReason = "нагрузка учтена, но тип части тренировок требует подтверждения ученика";
     adjustmentClass = "watch";
+  } else if (structureReviewDays) {
+    adjustmentLevel = "проверить структуру";
+    adjustmentReason = "есть отличия или неполные данные по рабочей части; это не повод автоматически повторять работу";
+    adjustmentClass = "watch";
   } else if (heavyDays && elapsedCompletedDays > 0) {
     adjustmentLevel = "не нужна";
     adjustmentReason = "суммарная нагрузка близка к плану, хотя отдельные дни были тяжелее задания";
@@ -4050,6 +4057,7 @@ function buildWeekExecutionSummary(plan) {
     missedPastDays,
     mismatchDays,
     uncertainDays,
+    structureReviewDays,
     heavyDays,
     monotony,
     weekStart,
@@ -4147,6 +4155,9 @@ function buildPlanWarnings(context) {
   if (context.uncertainDays) {
     warnings.push(`Тип требует уточнения в ${context.uncertainDays} днях: это не подтверждённая замена или пропуск задания.`);
   }
+  if (context.structureReviewDays) {
+    warnings.push(`Структура требует проверки в ${context.structureReviewDays} днях. Неполные круги или отличие объема не означают отсутствия тренировочного стимула.`);
+  }
   if (context.missedPastDays) {
     warnings.push(`Есть пропущенные плановые дни: ${context.missedPastDays}.`);
   }
@@ -4243,11 +4254,43 @@ function keyExecutionComment(days, evaluations) {
   const missing = days
     .map((day, index) => ({ type: plannedTypeForDay(day), evaluation: evaluations[index] }))
     .filter((item) => labels[item.type] && !item.evaluation.keyCompleted)
-    .map((item) => labels[item.type] + (item.evaluation.typeUncertain ? " (тип уточняется)" : ""));
+    .map((item) => labels[item.type] + (item.evaluation.typeUncertain ? " (тип уточняется)" : item.evaluation.structureComparison && item.evaluation.structureComparison.coreMatches !== true ? " (структура не подтверждена)" : ""));
   return missing.length ? `не закрыто: ${[...new Set(missing)].join(", ")}` : "ключевые работы закрыты";
 }
 
 function evaluatePlanDayExecution(day) {
+  const execution = evaluatePlanDayLoadAndType(day);
+  const running = actualWorkoutsForPlanDay(day).filter(isRunningWorkout);
+  const comparison = WorkoutComparison.compare(day, running);
+  if (!comparison || !running.length) return execution;
+  execution.structureComparison = comparison;
+  execution.structureUncertain = ["unknown", "partial"].includes(comparison.status);
+  execution.structureDifferent = comparison.status === "different";
+  if (comparison.coreMatches !== true) execution.keyCompleted = false;
+  if (comparison.status === "matched") return execution;
+  execution.comment = [execution.comment, comparison.summary.toLowerCase()].filter(Boolean).join("; ");
+  if (execution.level === "matched") {
+    execution.level = comparison.status === "different" ? "structure" : "uncertain";
+    execution.label = comparison.status === "different" ? "отличается структура" : "структура не подтверждена полностью";
+    execution.comment = "Оценка типа и TRIMP близка к плану; " + comparison.summary.toLowerCase();
+  }
+  return execution;
+}
+
+function renderPlanStructureComparison(comparison) {
+  if (!comparison) return "";
+  return `<section class="structure-comparison" aria-label="Сравнение структуры">
+    <span class="section-label">Структура: план / факт</span>
+    <p><strong>${escapeHtml(comparison.summary)}</strong></p>
+    ${comparison.rows.length ? `<table><thead><tr><th scope="col">Параметр</th><th scope="col">План</th><th scope="col">Факт</th></tr></thead>
+      <tbody>${comparison.rows.map((row) => `<tr class="structure-${row.matches === null ? "unknown" : row.matches ? "matched" : "different"}">
+        <th scope="row">${escapeHtml(row.label)}</th><td>${escapeHtml(row.planned)}</td><td>${escapeHtml(row.actual)}<small>${row.matches === null ? "не проверено" : row.matches ? "близко" : "отличается"}</small></td>
+      </tr>`).join("")}</tbody></table>` : ""}
+    ${comparison.notes.length ? `<details><summary>Основания и ограничения</summary><ul>${comparison.notes.map(note => `<li>${escapeHtml(note)}</li>`).join("")}</ul></details>` : ""}
+  </section>`;
+}
+
+function evaluatePlanDayLoadAndType(day) {
   const actual = actualWorkoutsForPlanDay(day);
   const planDate = new Date(day.date);
   planDate.setHours(0, 0, 0, 0);
