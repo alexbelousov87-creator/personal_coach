@@ -464,6 +464,7 @@ const coachPasswordForm = document.querySelector("#coachPasswordForm");
 const planJsonInput = document.querySelector("#planJsonInput");
 const planEditModal = document.querySelector("#planEditModal");
 const planEditForm = document.querySelector("#planEditForm");
+let planEditContext = null;
 const profilePhotoInput = document.querySelector("#profilePhotoInput");
 const profilePhotoPreview = document.querySelector("#profilePhotoPreview");
 const sidebarProfilePhoto = document.querySelector("#sidebarProfilePhoto");
@@ -590,8 +591,18 @@ function wireNavigation() {
     if (event.target === planEditModal) closePlanEditModal();
   });
   planEditForm?.addEventListener("submit", saveEditedPlanDay);
+  planEditForm?.addEventListener("input", syncStructuredPlanEditor);
+  planEditForm?.addEventListener("change", syncStructuredPlanEditor);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !planEditModal?.hidden) closePlanEditModal();
+    if (!planEditModal || planEditModal.hidden) return;
+    if (event.key === "Escape") { event.preventDefault(); closePlanEditModal(); }
+    if (event.key === "Tab") {
+      const fields = [...planEditForm.querySelectorAll("button, input, select, textarea")]
+        .filter(field => !field.disabled && field.getClientRects().length);
+      const first = fields[0], last = fields[fields.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
   });
 }
 
@@ -3125,6 +3136,7 @@ function buildPlanReviewRequest(planState) {
         focus: day.focus,
         title: day.title,
         plannedWorkout: day.plannedWorkout || day.details || "",
+      ...(PlanStructure.fromDay(day) ? { plannedStructure: PlanStructure.fromDay(day) } : {}),
         targetDistance: day.targetDistance || "",
         intensity: day.intensity || "",
         load: day.load || "",
@@ -3348,7 +3360,84 @@ function handlePlanGridClick(event) {
   openPlanDayEditor(Number(button.dataset.editPlanDay));
 }
 
+
+function setPlanEditError(message = "") {
+  const error = document.querySelector("#planEditError");
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+function readEditorStructure() {
+  const fields = planEditForm.elements;
+  function block(name, required = false) {
+    const value = fields["structure" + name + "Value"].value.trim();
+    if (!value && !required) return null;
+    const intensity = name === "Work" ? fields.intensity.value.trim() : fields["structure" + name + "Intensity"].value.trim();
+    try { return { ...PlanStructure.range(value, fields["structure" + name + "Unit"].value), intensity }; }
+    catch (error) { throw new Error(({Warmup:"Разминка",Work:"Основная часть",Recovery:"Восстановление",Cooldown:"Заминка"})[name] + ": " + error.message); }
+  }
+  const mode = fields.structureMode.value;
+  if (!fields.intensity.value.trim()) throw new Error("Укажите интенсивность основной части.");
+  const value = PlanStructure.normalize({
+    version: 1, mode, count: mode === "repeats" ? Number(fields.structureCount.value) : 1,
+    warmup: block("Warmup"), work: block("Work", true),
+    recovery: mode === "repeats" ? block("Recovery", true) : null,
+    cooldown: block("Cooldown"), notes: fields.structureNotes.value,
+  });
+  if (!value) throw new Error("Проверьте количество повторений (2-100), объемы и длину описаний.");
+  return value;
+}
+
+function syncStructuredPlanEditor(event) {
+  if (event?.type === "input" && event.target.name === "editorMode") return;
+  const fields = planEditForm.elements;
+  let structured = fields.editorMode.value === "structured";
+  if (event?.target?.name === "editorMode" && structured && !planEditContext?.structured &&
+      fields.plannedWorkout.value.trim() &&
+      !confirm("Перейти к конструктору? После заполнения блоков текст задания будет заменен их описанием. Остальные дни не изменятся.")) {
+    fields.editorMode.value = "text";
+    structured = false;
+  }
+  const container = document.querySelector("#structureFields");
+  container.hidden = !structured;
+  container.disabled = !structured;
+  fields.plannedWorkout.readOnly = structured;
+  const repeats = fields.structureMode.value === "repeats";
+  document.querySelector("#structureCountField").hidden = !repeats;
+  fields.structureCount.disabled = !repeats;
+  document.querySelector("#structureRecoveryRow").hidden = !repeats;
+  document.querySelector("#structureMainIntensity").textContent = fields.intensity.value.trim() || "Интенсивность не задана";
+  setPlanEditError();
+  if (!structured) return;
+  try { fields.plannedWorkout.value = PlanStructure.format(readEditorStructure()); }
+  catch (error) { setPlanEditError(error.message); }
+}
+
+function populateStructuredPlanEditor(day) {
+  const fields = planEditForm.elements;
+  const value = PlanStructure.fromDay(day);
+  fields.editorMode.value = value ? "structured" : "text";
+  fields.structureMode.value = value?.mode || "repeats";
+  fields.structureCount.value = String(value?.count || 5);
+  fields.structureNotes.value = value?.notes || "";
+  for (const name of ["Warmup", "Work", "Recovery", "Cooldown"]) {
+    const block = value?.[name.toLowerCase()];
+    const measure = PlanStructure.inputMeasure(block);
+    fields["structure" + name + "Value"].value = measure.value;
+    fields["structure" + name + "Unit"].value = measure.unit;
+    if (name !== "Work") fields["structure" + name + "Intensity"].value = block ? block.intensity : "Z1-Z2";
+  }
+  syncStructuredPlanEditor();
+}
+
+function structuredPlanFocus(structure, focus) {
+  if (structure.mode === "tempo") return "Темпо";
+  if (structure.mode === "repeats") return focus === "Темпо" ? "Темпо" : "Интервалы";
+  return ["Восстановление", "Кросс", "Длительная"].includes(focus) ? focus : "Кросс";
+}
+
 function openPlanDayEditor(index) {
+  if (!requireCoachForPlanChanges()) return;
   const current = loadCurrentPlan();
   const day = current?.days?.[index];
   if (!current || !day || !planEditModal || !planEditForm) {
@@ -3356,6 +3445,7 @@ function openPlanDayEditor(index) {
     return;
   }
 
+  planEditContext = { athleteId: state.activeAthleteId, week: selectedWeekKey(), source: current.source, original: JSON.stringify(day), structured: !!PlanStructure.fromDay(day) };
   planEditForm.elements.dayIndex.value = String(index);
   planEditForm.elements.focus.value = closestPlanFocusOption(day.focus || "Кросс");
   planEditForm.elements.title.value = day.title || "";
@@ -3364,6 +3454,7 @@ function openPlanDayEditor(index) {
   planEditForm.elements.plannedWorkout.value = day.plannedWorkout || day.details || "";
   planEditForm.elements.load.value = day.load || "";
   planEditForm.elements.rationale.value = day.rationale || "";
+  populateStructuredPlanEditor(day);
   document.querySelector("#planEditDate").textContent = day.dateLabel || formatDate(day.date);
   planEditModal.hidden = false;
   planEditForm.elements.title.focus();
@@ -3371,6 +3462,7 @@ function openPlanDayEditor(index) {
 
 function closePlanEditModal() {
   if (planEditModal) planEditModal.hidden = true;
+  planEditContext = null;
 }
 
 function saveEditedPlanDay(event) {
@@ -3388,10 +3480,20 @@ function saveEditedPlanDay(event) {
     return;
   }
 
-  const plannedWorkout = planEditForm.elements.plannedWorkout.value.trim();
+  if (!planEditContext || state.activeAthleteId !== planEditContext.athleteId || selectedWeekKey() !== planEditContext.week ||
+      current.source !== planEditContext.source || JSON.stringify(original) !== planEditContext.original) {
+    setPlanEditError("План или спортсмен изменился. Закройте редактор и откройте нужный день заново.");
+    return;
+  }
+  let plannedStructure = null;
+  try {
+    if (planEditForm.elements.editorMode.value === "structured") plannedStructure = readEditorStructure();
+  } catch (error) { setPlanEditError(error.message); return; }
+  const plannedWorkout = plannedStructure ? PlanStructure.format(plannedStructure) : planEditForm.elements.plannedWorkout.value.trim();
   const edited = {
     ...original,
-    focus: planEditForm.elements.focus.value,
+    focus: plannedStructure ? structuredPlanFocus(plannedStructure, planEditForm.elements.focus.value) : planEditForm.elements.focus.value,
+    plannedStructure,
     title: planEditForm.elements.title.value.trim(),
     details: plannedWorkout,
     plannedWorkout,
@@ -3501,6 +3603,7 @@ function changedPlanDayFields(before, after) {
     ["focus", "тип"],
     ["title", "заголовок"],
     ["plannedWorkout", "задание"],
+    ["plannedStructure", "структура"],
     ["targetDistance", "ориентир"],
     ["intensity", "интенсивность"],
     ["load", "нагрузка"],
@@ -3512,6 +3615,7 @@ function changedPlanDayFields(before, after) {
 }
 
 function planDayFieldValue(day, key) {
+  if (key === "plannedStructure") return JSON.stringify(PlanStructure.fromDay(day));
   if (key === "plannedWorkout") return String(day?.plannedWorkout || day?.details || "").trim();
   return String(day?.[key] || "").trim();
 }
@@ -4552,18 +4656,24 @@ function plannedLoadScoreForDay(day) {
 
 function plannedSegmentedLoadScore(day) {
   const segments = plannedWorkoutSegments(day);
-  if (segments.length < 2) return null;
+  const structured = PlanStructure.fromDay(day);
+  if (!structured && segments.length < 2) return null;
 
   const structureDuration = segments.reduce((sum, segment) => sum + segment.duration, 0);
-  if (structureDuration < 20) return null;
+  if (!structured && structureDuration < 20) return null;
 
-  const distanceDuration = plannedDurationFromDistance(day) || 0;
+  const distanceDuration = structured ? 0 : plannedDurationFromDistance(day) || 0;
   const extraEasyDuration = Math.max(0, distanceDuration - structureDuration);
   const load = segments.reduce((sum, segment) => sum + estimateTrimpFromHrr(segment.duration, segment.hrr), 0);
   return load + estimateTrimpFromHrr(extraEasyDuration, plannedEasyHrReserveRatio(day));
 }
 
 function plannedWorkoutSegments(day) {
+  const structured = PlanStructure.segments(day, recentReliablePace() || 5, plannedFastPaceFactor({ ...day, title: "", details: "", plannedWorkout: "" }));
+  if (structured) return structured.map(segment => {
+    const segmentDay = { focus: segment.kind === "work" ? day.focus : "Восстановление", intensity: segment.intensity, details: segment.intensity };
+    return { ...segment, hrr: segment.kind === "work" ? plannedWorkHrReserveRatio(segmentDay) : plannedHrReserveRatio(segmentDay) };
+  });
   const rawText = `${day.title || ""} ${day.plannedWorkout || day.details || ""} ${day.intensity || ""}`.toLowerCase();
   let text = rawText
     .replace(/при признаках усталости[\s\S]*$/i, "")
@@ -4678,6 +4788,8 @@ function plannedFastPaceFactor(day) {
 }
 
 function plannedDurationMinutes(day) {
+  const structured = PlanStructure.segments(day, recentReliablePace() || 5, plannedFastPaceFactor({ ...day, title: "", details: "", plannedWorkout: "" }));
+  if (structured) return structured.reduce((sum, segment) => sum + segment.duration, 0);
   let text = `${day.title || ""} ${day.plannedWorkout || day.details || ""}`.toLowerCase();
   text = text
     .replace(/при признаках усталости[\s\S]*$/i, "")
@@ -6250,7 +6362,8 @@ function normalizePlanDay(day, fallbackDay, index) {
       });
   const splitDetails = splitPlanAndActual(day);
   const details = splitDetails.planned || fallbackDay?.details || "Детали не указаны.";
-  const focus = normalizedPlanFocus(day, fallbackDay, details);
+  const plannedStructure = PlanStructure.fromDay(day);
+  const focus = plannedStructure ? structuredPlanFocus(plannedStructure, day.focus) : normalizedPlanFocus(day, fallbackDay, details);
   const title = normalizedPlanTitle(day, fallbackDay, focus, details);
 
   return {
@@ -6260,6 +6373,7 @@ function normalizePlanDay(day, fallbackDay, index) {
     title,
     details,
     plannedWorkout: splitDetails.planned,
+    ...(plannedStructure ? { plannedStructure } : {}),
     actualWorkout: "",
     intensity: day.intensity || "",
     targetDistance: day.targetDistance || "",
@@ -6554,6 +6668,7 @@ function buildExportPlanPayload(planState) {
       focus: day.focus || "",
       title: day.title || "",
       plannedWorkout: day.plannedWorkout || day.details || "",
+      ...(PlanStructure.fromDay(day) ? { plannedStructure: PlanStructure.fromDay(day) } : {}),
       targetDistance: day.targetDistance || "",
       intensity: day.intensity || "",
       load: day.load || "",

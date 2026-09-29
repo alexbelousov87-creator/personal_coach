@@ -22,7 +22,10 @@
     const unit = range.basis === "distance" ? "м" : factor === 60 ? "мин" : "с";
     return `${rounded(range.from / factor)}${range.to !== range.from ? `-${rounded(range.to / factor)}` : ""} ${unit}`;
   }
+  const structureApi = typeof module === "object" && module.exports ? require("./plan-structure.js") : root.PlanStructure;
   function parse(day = {}) {
+    const explicit = structureApi?.prescription(day);
+    if (explicit) return explicit;
     const text = String(day.plannedWorkout || day.details || "").toLowerCase().replace(/[–—−]/g, "-").replace(/ё/g, "е");
     if (!text || /без (?:дополнительного )?бегов|полный отдых/.test(text)) return null;
     const qualityText = text.replace(/без\s+(?:темпов[а-я]*(?:\s+финиш[а-я]*)?|ускорени[а-я]*|интервал[а-я]*)/g, "");

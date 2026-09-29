@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260928-plan-rows">
+    <link rel="stylesheet" href="styles.css?v=20260929-editor">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -804,11 +804,11 @@
     </div>
 
     <div class="modal-backdrop" id="planEditModal" hidden>
-      <form class="modal-panel plan-edit-form" id="planEditForm">
+      <form class="modal-panel plan-edit-form" id="planEditForm" role="dialog" aria-modal="true" aria-labelledby="planEditHeading">
         <input name="dayIndex" type="hidden">
         <div class="panel-head">
           <div>
-            <h2>Редактировать день</h2>
+            <h2 id="planEditHeading">Редактировать день</h2>
             <span id="planEditDate">День плана</span>
           </div>
           <button class="ghost-btn" id="cancelPlanEdit" type="button">Отмена</button>
@@ -841,6 +841,71 @@
             Интенсивность
             <input name="intensity" type="text" placeholder="Например: Z2 или RPE 3/10">
           </label>
+
+          <div class="wide plan-editor-mode" role="group" aria-label="Формат задания">
+            <label><input type="radio" name="editorMode" value="text" checked>Текст</label>
+            <label><input type="radio" name="editorMode" value="structured">Конструктор</label>
+          </div>
+          <fieldset class="wide structure-fields" id="structureFields" hidden disabled>
+            <legend>Структура тренировки</legend>
+            <div class="structure-main-mode">
+              <label>Основная часть
+                <select name="structureMode">
+                  <option value="easy">Легкий / длительный бег</option>
+                  <option value="tempo">Непрерывная темповая</option>
+                  <option value="repeats">Повторения</option>
+                </select>
+              </label>
+              <label id="structureCountField" hidden>Повторения
+                <input name="structureCount" type="number" min="2" max="100" step="1" value="5">
+              </label>
+            </div>
+            <div class="structure-field-row" id="structureWarmupRow">
+              <label for="structureWarmupValue">Разминка</label>
+              <div class="structure-measure">
+                <input id="structureWarmupValue" name="structureWarmupValue" type="text" inputmode="decimal" aria-label="Разминка: объем" placeholder="Объем" maxlength="30">
+                <select name="structureWarmupUnit" aria-label="Разминка: единицы">
+                  <option value="min">мин</option><option value="sec">с</option><option value="m">м</option><option value="km">км</option>
+                </select>
+              </div>
+              <input name="structureWarmupIntensity" type="text" aria-label="Разминка: интенсивность" placeholder="Интенсивность" maxlength="200">
+            </div>
+            <div class="structure-field-row" id="structureWorkRow">
+              <label for="structureWorkValue">Рабочий отрезок / бег</label>
+              <div class="structure-measure">
+                <input id="structureWorkValue" name="structureWorkValue" type="text" inputmode="decimal" aria-label="Рабочий отрезок / бег: объем" placeholder="Объем" maxlength="30">
+                <select name="structureWorkUnit" aria-label="Рабочий отрезок / бег: единицы">
+                  <option value="min">мин</option><option value="sec">с</option><option value="m">м</option><option value="km">км</option>
+                </select>
+              </div>
+              <span class="structure-main-intensity" id="structureMainIntensity"></span>
+            </div>
+            <div class="structure-field-row" id="structureRecoveryRow">
+              <label for="structureRecoveryValue">Восстановление между</label>
+              <div class="structure-measure">
+                <input id="structureRecoveryValue" name="structureRecoveryValue" type="text" inputmode="decimal" aria-label="Восстановление между: объем" placeholder="Объем" maxlength="30">
+                <select name="structureRecoveryUnit" aria-label="Восстановление между: единицы">
+                  <option value="min">мин</option><option value="sec">с</option><option value="m">м</option><option value="km">км</option>
+                </select>
+              </div>
+              <input name="structureRecoveryIntensity" type="text" aria-label="Восстановление между: интенсивность" placeholder="Интенсивность" maxlength="200">
+            </div>
+            <div class="structure-field-row" id="structureCooldownRow">
+              <label for="structureCooldownValue">Заминка</label>
+              <div class="structure-measure">
+                <input id="structureCooldownValue" name="structureCooldownValue" type="text" inputmode="decimal" aria-label="Заминка: объем" placeholder="Объем" maxlength="30">
+                <select name="structureCooldownUnit" aria-label="Заминка: единицы">
+                  <option value="min">мин</option><option value="sec">с</option><option value="m">м</option><option value="km">км</option>
+                </select>
+              </div>
+              <input name="structureCooldownIntensity" type="text" aria-label="Заминка: интенсивность" placeholder="Интенсивность" maxlength="200">
+            </div>
+            <label>Дополнительно
+              <textarea name="structureNotes" rows="2" maxlength="2000"></textarea>
+            </label>
+          </fieldset>
+          <p class="wide form-error" id="planEditError" role="alert" hidden></p>
+
           <label class="wide">
             Задание
             <textarea name="plannedWorkout" rows="5" required></textarea>
@@ -915,7 +980,8 @@
     </div>
 
     <script src="coach-overview.js?v=20260922-roster"></script>
-    <script src="workout-comparison.js?v=20260928-structure"></script>
-    <script src="app.js?v=20260928-plan-rows"></script>
+    <script src="plan-structure.js?v=20260929-editor"></script>
+    <script src="workout-comparison.js?v=20260929-editor"></script>
+    <script src="app.js?v=20260929-editor"></script>
   </body>
 </html>

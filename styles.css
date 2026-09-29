@@ -3049,3 +3049,25 @@ textarea {
 .compact-plan .structure-comparison th,
 .compact-plan .structure-comparison td { padding: 4px; }
 .today-status.structure { background: #faf0d9; color: #80520d; }
+
+/* Structured day editor */
+.plan-editor-mode { display: flex; gap: 8px; }
+.plan-editor-mode label { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.plan-editor-mode label:has(input:checked) { background: #e9f4f5; border-color: var(--accent-2); }
+.plan-editor-mode input { width: 16px; height: 16px; min-height: 0; margin: 0; }
+.structure-fields { min-width: 0; margin: 0; padding: 14px 0; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.structure-fields legend { font-weight: 600; padding-right: 10px; }
+.structure-main-mode { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; margin-bottom: 14px; }
+.structure-field-row { display: grid; grid-template-columns: 160px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: center; margin-bottom: 12px; }
+.structure-measure { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 6px; min-width: 0; }
+.structure-fields input, .structure-fields select { min-width: 0; width: 100%; }
+.structure-main-intensity { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.structure-fields[hidden], .structure-field-row[hidden], #structureCountField[hidden] { display: none; }
+.plan-edit-form textarea[readonly] { background: #f0f5f6; }
+.plan-edit-form .form-error { color: var(--bad); margin: 0; }
+@media (max-width: 760px) {
+  .structure-field-row { grid-template-columns: minmax(0, 1fr); gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .structure-main-mode { grid-template-columns: minmax(0, 1fr); }
+}
+
+#planEditModal { z-index: 50; }
