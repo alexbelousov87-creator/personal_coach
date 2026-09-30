@@ -26,12 +26,17 @@
   function parse(day = {}) {
     const explicit = structureApi?.prescription(day);
     if (explicit) return explicit;
-    const text = String(day.plannedWorkout || day.details || "").toLowerCase().replace(/[–—−]/g, "-").replace(/ё/g, "е");
-    if (!text || /без (?:дополнительного )?бегов|полный отдых/.test(text)) return null;
+    let text = String(day.plannedWorkout || day.details || "").toLowerCase().replace(/[–—−]/g, "-").replace(/ё/g, "е");
+    const conditional = text.search(/[.;]\s*при (?:усталости|признаках усталости)(?=\s|[,:.-]|$)/i);
+    // A conditional fallback does not invalidate a fully completed primary prescription.
+    const conditionalAlternative = conditional >= 0;
+    if (conditionalAlternative) text = text.slice(0, conditional);
+    if (!text || /^\s*(?:без (?:дополнительного )?бегов|полный отдых)/.test(text)) return null;
     const qualityText = text.replace(/без\s+(?:темпов[а-я]*(?:\s+финиш[а-я]*)?|ускорени[а-я]*|интервал[а-я]*)/g, "");
     const quality = /интервал|темпо|порог|vo2|vo₂|отрез|усилии?\s*\d+\s*км|марафонск[а-я]*\s+усили/.test(qualityText);
     // Alternatives and nested sets must not silently become a single chosen prescription.
-    const ambiguous = /\b\d+\s*[xх×]\s*\(|\d+\s*(?:сери[а-я]*|блок[а-я]*)\s*(?:по|:)|(?:^|[^а-я])(?:либо|или|если)(?:$|[^а-я])|при усталости|при признаках усталости|вместо/.test(text);
+    const ambiguityText = text.replace(/(?:восстанов[а-я]*|через)\s*[^;!]*?(?=\.(?!\d)|[;!]|$)/g, part => part.replace(/(?:^|\s)(?:или|либо)(?=\s|$)/g, " "));
+    const ambiguous = /\b\d+\s*[xх×]\s*\(|\d+\s*(?:сери[а-я]*|блок[а-я]*)\s*(?:по|:)|(?:^|[^а-я])(?:либо|или|если)(?:$|[^а-я])|при усталости|при признаках усталости|вместо/.test(ambiguityText);
     const repeats = new RegExp(`${span}\\s*(?:[xх×]|(?:интервал[а-я]*|отрез[а-я]*|повтор[а-я]*)\\s+по)\\s*${measurePattern}`, "gi");
     const groups = [];
     for (const match of text.matchAll(repeats)) {
@@ -58,25 +63,30 @@
     }
     const named = name => measure(((text.match(new RegExp(`${name}[а-я]*\\s*[: -]?\\s*([^;.!]+)`)) || [])[1] || "").match(new RegExp(`^${measurePattern}`, "i")));
     const after = text.slice(main.end || text.length);
-    const recoveryText = (after.match(/(?:восстанов[а-я]*|через)\s*([^;.!]+)/) || [])[1] || "";
-    const clock = recoveryText.match(/^(\d+):(\d{2})(?:\s*-\s*(\d+):(\d{2}))?(?![\d:])/);
-    const recovery = clock && Number(clock[2]) < 60 && Number(clock[4] || 0) < 60
-      ? { basis: "duration", from: Number(clock[1]) * 60 + Number(clock[2]), to: Number(clock[3] || clock[1]) * 60 + Number(clock[4] || clock[2]) }
-      : readMeasure(recoveryText);
-    if (recoveryText && (!recovery || recovery.to < recovery.from)) return { supported: false, reason: "Не удалось однозначно прочитать длительность или дистанцию восстановления." };
-    return { supported: true, mode, ...main, recovery, warmup: named("размин"), cooldown: named("замин"), intensity: String(day.intensity || "") };
+    const recoveryText = (after.match(/(?:восстанов[а-я]*|через)\s*([^;!]*?)(?=\.(?!\d)|[;!]|$)/) || [])[1] || "";
+    const recoveryOptions = recoveryText ? recoveryText.split(/\s+(?:или|либо)\s+/).map(part => {
+      const clock = part.trim().match(/^(\d+):(\d{2})(?:\s*-\s*(\d+):(\d{2}))?(?![\d:])/);
+      return clock && Number(clock[2]) < 60 && Number(clock[4] || 0) < 60
+        ? { basis: "duration", from: Number(clock[1]) * 60 + Number(clock[2]), to: Number(clock[3] || clock[1]) * 60 + Number(clock[4] || clock[2]) }
+        : measure(part.trim().match(new RegExp(`^${measurePattern}`, "i")));
+    }) : [];
+    const recovery = recoveryOptions[0] || null;
+    if (recoveryOptions.some(option => !option || option.to < option.from)) return { supported: false, reason: "Не удалось однозначно прочитать длительность или дистанцию восстановления." };
+    return { supported: true, mode, conditionalAlternative, ...main, recovery, recoveryOptions, warmup: named("размин"), cooldown: named("замин"), intensity: String(day.intensity || "") };
   }
   function compare(day, workouts = []) {
     const plan = parse(day);
     if (!plan) return null;
-    const output = { status: "unknown", coreMatches: null, rows: [], notes: [], summary: "Структура не проверена" };
+    const output = { mode: plan.mode, status: "unknown", coreMatches: null, rows: [], notes: [], summary: "Структура не проверена" };
     if (!workouts.length) return { ...output, status: "pending", summary: "Ожидается факт тренировки" };
     if (!plan.supported) return { ...output, notes: [plan.reason] };
+    if (plan.conditionalAlternative) output.notes.push("Сравнивается основной вариант задания. Условный облегченный вариант требует проверки тренером.");
     const structured = workouts.filter(w => w.workoutStructure?.source === "tcx-manual-laps" && Number(w.workoutStructure.confidence) >= 0.85);
     const candidates = plan.mode === "easy" ? workouts : structured;
     if (candidates.length !== 1) return { ...output, notes: [candidates.length > 1 ? "Несколько подходящих беговых тренировок: их рабочие части не объединяются автоматически." : "Нет надежно выделенных ручных кругов. Средний пульс, тип и общий TRIMP не подтверждают выполнение отрезков."] };
     const workout = candidates[0], structure = workout.workoutStructure;
     output.workoutId = workout.id || null;
+    output.actualTypeOverride = workout.workoutTypeOverride || "";
     if (workouts.length > 1) output.notes.push("Сравнение относится к одной тренировке с ручными кругами; остальные занятия не добавлены к ее отрезкам.");
     function row(label, range, values, core = false, tolerance = null) {
       const numeric = values.filter(positive).map(Number);
@@ -107,13 +117,26 @@
       row("Рабочие отрезки", plan.count, [work.length], true, 0);
       row("Каждый отрезок", plan.work, work.map(s => s[key]), true);
       row("Всего работы", { basis: plan.work.basis, from: plan.work.from * plan.count.from, to: plan.work.to * plan.count.to }, [work.every(s => positive(s[key])) ? work.reduce((sum, s) => sum + Number(s[key]), 0) : null], true);
+      const evidence = lapEvidence(segments);
+      output.lapEvidence = evidence;
+      if (work.length > 1 && !evidence.continuous) {
+        output.rows.push({ label: "Чередование работы и отдыха", planned: "восстановление между отрезками", actual: "неполная последовательность", matches: null, core: true });
+      }
       if (plan.recovery) {
-        const first = segments.findIndex(s => s.role === "work"), last = segments.map(s => s.role).lastIndexOf("work");
-        const between = segments.slice(first, last + 1);
-        const alternating = between.every((s, index) => s.role === (index % 2 ? "recovery" : "work"));
-        const rests = between.filter(s => s.role === "recovery");
-        const recoveryKey = plan.recovery.basis === "duration" ? "durationSec" : "distanceM";
-        row("Восстановление между", plan.recovery, alternating && rests.length === work.length - 1 ? rests.map(s => s[recoveryKey]) : [], true);
+        const options = plan.recoveryOptions?.length ? plan.recoveryOptions : [plan.recovery];
+        const start = output.rows.length;
+        for (const option of options) {
+          const recoveryKey = option.basis === "duration" ? "durationSec" : "distanceM";
+          row("Восстановление между", option, evidence.continuous ? evidence.recoveries.map(s => s[recoveryKey]) : [], true,
+            Math.max(option.basis === "duration" ? 15 : 50, option.to * 0.25));
+        }
+        if (options.length > 1) {
+          const variants = output.rows.splice(start);
+          output.rows.push({ label: "Восстановление между", planned: variants.map(r => r.planned).join(" или "),
+            actual: variants.map(r => r.actual).join(" / "), core: true,
+            matches: variants.some(r => r.matches === true) ? true : variants.some(r => r.matches === null) ? null : false });
+          output.notes.push("Для восстановления достаточно соответствия одному из явно заданных вариантов.");
+        }
       }
       for (const [key, label] of [["warmup", "Разминка"], ["cooldown", "Заминка"]]) {
         if (plan[key]) row(label, plan[key], [plan[key].basis === "duration" && positive(structure[`${key}Min`]) ? Number(structure[`${key}Min`]) * 60 : null], false, 60);
@@ -122,12 +145,71 @@
     const core = output.rows.filter(r => r.core);
     output.coreMatches = core.some(r => r.matches === false) ? false : core.some(r => r.matches === null) ? null : true;
     output.status = output.rows.some(r => r.matches === false) ? "different" : output.rows.some(r => r.matches === null) ? "partial" : "matched";
+    if (plan.conditionalAlternative && output.coreMatches !== true) {
+      output.coreMatches = null;
+      output.notes.push("Основной вариант не подтвержден полностью. Нужно уточнить, выполнялся ли облегченный вариант.");
+    }
     output.summary = { different: "Есть отличия в структуре", partial: "Структура проверена частично", matched: "Измеримая структура близка к заданию" }[output.status];
     output.notes.push("Допуск размеров отрезков и объема: 10%, минимум 20 м или 5 с; количество отрезков должно попадать в заданный диапазон. Для разминки и заминки по времени: 1 мин.");
+    if (output.lapEvidence) {
+      output.notes.push("Проверена последовательность рабочих кругов и восстановления. Соседние круги восстановления объединяются; рабочие отрезки не объединяются.");
+      output.notes.push("Допуск восстановления: 25%, минимум 15 с или 50 м. Более заметное отличие требует проверки. Разминка и заминка оцениваются отдельно от зачета основной работы.");
+      const { hrPairs, hrDropPairs, slowerPairs, recoveries } = output.lapEvidence;
+      if (recoveries.length) output.notes.push(`Восстановление медленнее соседних рабочих кругов: ${slowerPairs} из ${recoveries.length}. Сравнение по дистанции и времени кругов доступно при наличии обоих показателей.`);
+      if (hrPairs) output.notes.push(`ЧСС доступна для ${hrPairs} пар работы и восстановления; снижение среднего пульса отмечено в ${hrDropPairs}. Его снижение не обязательно: на коротких отрезках ЧСС запаздывает.`);
+    }
     output.notes.push(plan.intensity ? `Интенсивность «${plan.intensity}» не проверена: средний темп и пульс всей тренировки не заменяют данные рабочих отрезков.` : "Сравнение объема и кругов не подтверждает заданную интенсивность.");
     return output;
   }
-  const api = { parse, compare };
+  function lapEvidence(segments) {
+    const positions = segments.map((s, i) => s.role === "work" ? i : -1).filter(i => i >= 0);
+    const recoveries = [];
+    let continuous = true, hrPairs = 0, hrDropPairs = 0, slowerPairs = 0;
+    for (let i = 1; i < positions.length; i++) {
+      const left = segments[positions[i - 1]], right = segments[positions[i]];
+      const rest = segments.slice(positions[i - 1] + 1, positions[i]);
+      if (!rest.length || rest.some(s => s.role !== "recovery" || !positive(s.durationSec))) {
+        continuous = false; recoveries.push(null);
+        continue;
+      }
+      const durationSec = rest.reduce((sum, s) => sum + Number(s.durationSec), 0);
+      const distanceM = rest.every(s => s.distanceM != null && Number.isFinite(Number(s.distanceM)) && Number(s.distanceM) >= 0)
+        ? rest.reduce((sum, s) => sum + Number(s.distanceM), 0) : null;
+      const avgHr = rest.every(s => positive(s.avgHr))
+        ? Math.round(rest.reduce((sum, s) => sum + s.avgHr * s.durationSec, 0) / durationSec) : null;
+      recoveries.push({ durationSec, distanceM, avgHr });
+      if (avgHr && positive(left.avgHr) && positive(right.avgHr)) {
+        hrPairs++;
+        if (avgHr < (Number(left.avgHr) + Number(right.avgHr)) / 2) hrDropPairs++;
+      }
+      if (distanceM !== null && positive(left.durationSec) && positive(right.durationSec) &&
+          positive(left.distanceM) && positive(right.distanceM) &&
+          distanceM / durationSec < Math.min(left.distanceM / left.durationSec, right.distanceM / right.durationSec)) slowerPairs++;
+    }
+    return { continuous, recoveries, hrPairs, hrDropPairs, slowerPairs, work: segments.filter(s => s.role === "work") };
+  }
+
+  function confirmationSnapshot(day, workouts) {
+    const pick = (object, keys) => Object.fromEntries(keys.map(key => [key, object?.[key] ?? null]));
+    const canonical = value => Array.isArray(value) ? value.map(canonical) :
+      value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+    return JSON.stringify(canonical({
+      plan: { ...pick(day, ["date", "focus", "intensity", "targetDistance", "plannedStructure"]),
+        assignment: day.plannedWorkout || day.details || "" },
+      workouts: workouts.map(w => pick(w, ["id", "date", "sport", "durationMin", "distanceKm", "avgHr", "load",
+        "workoutTypeOverride", "workoutStructure", "lapSignals", "intervalSignals"])).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    }));
+  }
+  function normalizeConfirmation(value) {
+    if (!value || value.version !== 1 || typeof value.snapshot !== "string" || value.snapshot.length > 200000 ||
+        !value.snapshot || !Number.isFinite(Date.parse(value.confirmedAt)) || typeof value.by !== "string") return null;
+    return { version: 1, snapshot: value.snapshot, confirmedAt: value.confirmedAt, by: value.by.slice(0, 120) };
+  }
+  function confirmation(day, workouts) {
+    const saved = normalizeConfirmation(day.keyConfirmation);
+    return saved && workouts.length && saved.snapshot === confirmationSnapshot(day, workouts) ? saved : null;
+  }
+  const api = { parse, compare, lapEvidence, confirmationSnapshot, normalizeConfirmation, confirmation };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.WorkoutComparison = api;
 })(globalThis);

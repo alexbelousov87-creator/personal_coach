@@ -3353,13 +3353,39 @@ function clearPlanAnalysis(message = "Для выбранной недели н�
   renderAiPlanReview();
 }
 
-function handlePlanGridClick(event) {
+async function handlePlanGridClick(event) {
+  const confirmationButton = event.target.closest("[data-confirm-plan-day]");
+  if (confirmationButton) {
+    if (!requireCoachForPlanChanges()) return;
+    const plan = loadCurrentPlan();
+    const day = plan?.days.find(day => day.date === confirmationButton.dataset.confirmPlanDay);
+    const running = day && actualWorkoutsForPlanDay(day).filter(isRunningWorkout);
+    if (!day || !running.length || !["interval", "tempo", "long", "race"].includes(plannedTypeForDay(day))) return;
+    const confirmed = WorkoutComparison.confirmation(day, running);
+    if (!confirm(confirmed ? "Отменить ручной зачет этой работы?" :
+      "Подтвердить выполнение основной работы после проверки тренировки? Оценка нагрузки и импортированные данные останутся без изменений.")) return;
+    if (confirmed) delete day.keyConfirmation;
+    else day.keyConfirmation = {
+      version: 1, snapshot: WorkoutComparison.confirmationSnapshot(day, running),
+      confirmedAt: new Date().toISOString(), by: state.coachProfile?.name || "Тренер",
+    };
+    const athleteId = state.activeAthleteId, week = selectedWeekKey(), source = plan.source;
+    plan.updatedAt = new Date().toISOString();
+    const normalized = saveCurrentPlan(plan, false);
+    if (!normalized) return;
+    confirmationButton.disabled = true;
+    const saved = await persistPlans();
+    if (athleteId !== state.activeAthleteId || week !== selectedWeekKey() || loadCurrentPlan()?.source !== source || !isCoachRole()) return;
+    renderPlan(normalized.days);
+    setAiStatus(saved ? (confirmed ? "Ручной зачет отменен." : "Работа подтверждена тренером.") :
+      "Изменение сохранено в браузере, но запись в БД не подтверждена. Проверьте соединение.", saved ? "ok" : "error");
+    return;
+  }
   const button = event.target.closest("[data-edit-plan-day]");
   if (!button) return;
   if (!requireCoachForPlanChanges()) return;
   openPlanDayEditor(Number(button.dataset.editPlanDay));
 }
-
 
 function setPlanEditError(message = "") {
   const error = document.querySelector("#planEditError");
@@ -3702,7 +3728,7 @@ function loadCurrentPlan() {
   return null;
 }
 
-function saveCurrentPlan(planState) {
+function saveCurrentPlan(planState, persist = true) {
   const normalized = normalizeStoredPlan(planState);
   if (!normalized) return null;
   const bucket = selectedWeekPlans(true);
@@ -3710,7 +3736,7 @@ function saveCurrentPlan(planState) {
   bucket.activePlanSource = normalized.source;
   state.activePlanSource = normalized.source;
   state.plans[normalized.source] = normalized;
-  persistPlans();
+  if (persist) persistPlans();
   return normalized;
 }
 
@@ -3764,7 +3790,7 @@ function persistPlans() {
   saveJson(PLANS_BY_WEEK_KEY, state.plansByWeek);
   saveJson(ACTIVE_PLAN_SOURCE_KEY, state.activePlanSource);
   saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
-  saveBackendState();
+  return saveBackendState();
 }
 
 function migrateLegacyCurrentPlan() {
@@ -4009,6 +4035,7 @@ function renderPlanDayDetails(day, rowLayout = false) {
         ` : ""}
       </div>
     ` : ""}
+    ${renderKeyWorkCredit(day, execution, rowLayout)}
     ${rowLayout ? `</div></div>` : ""}
     ${day.rationale ? `
       <div class="plan-section rationale">
@@ -4360,36 +4387,98 @@ function sumWorkoutsLoadForRange(start, end) {
 }
 
 function keyExecutionComment(days, evaluations) {
-  const labels = {
-    interval: "интервалы",
-    tempo: "темпо",
-    long: "длительная",
-    race: "гонка",
-  };
-  const missing = days
-    .map((day, index) => ({ type: plannedTypeForDay(day), evaluation: evaluations[index] }))
-    .filter((item) => labels[item.type] && !item.evaluation.keyCompleted)
-    .map((item) => labels[item.type] + (item.evaluation.typeUncertain ? " (тип уточняется)" : item.evaluation.structureComparison && item.evaluation.structureComparison.coreMatches !== true ? " (структура не подтверждена)" : ""));
-  return missing.length ? `не закрыто: ${[...new Set(missing)].join(", ")}` : "ключевые работы закрыты";
+  const labels = { interval: "интервалы", tempo: "темпо", long: "длительная", race: "гонка" };
+  const groups = { "предстоит": [], "нужна проверка": [], "есть отличия": [], "нет факта": [] };
+  days.forEach((day, index) => {
+    const evaluation = evaluations[index], label = labels[plannedTypeForDay(day)];
+    if (!label || evaluation.keyCompleted) return;
+    const group = evaluation.level === "pending" ? "предстоит" :
+      evaluation.level === "missed" ? "нет факта" :
+      evaluation.structureComparison?.coreMatches === false ? "есть отличия" : "нужна проверка";
+    groups[group].push(label);
+  });
+  return Object.entries(groups).filter(([, values]) => values.length)
+    .map(([label, values]) => label + ": " + [...new Set(values)].join(", ")).join("; ") || "ключевые работы закрыты";
 }
 
 function evaluatePlanDayExecution(day) {
   const execution = evaluatePlanDayLoadAndType(day);
   const running = actualWorkoutsForPlanDay(day).filter(isRunningWorkout);
+  const keyWork = ["interval", "tempo", "long", "race"].includes(plannedTypeForDay(day));
   const comparison = WorkoutComparison.compare(day, running);
-  if (!comparison || !running.length) return execution;
-  execution.structureComparison = comparison;
-  execution.structureUncertain = ["unknown", "partial"].includes(comparison.status);
-  execution.structureDifferent = comparison.status === "different";
-  if (comparison.coreMatches !== true) execution.keyCompleted = false;
-  if (comparison.status === "matched") return execution;
-  execution.comment = [execution.comment, comparison.summary.toLowerCase()].filter(Boolean).join("; ");
-  if (execution.level === "matched") {
-    execution.level = comparison.status === "different" ? "structure" : "uncertain";
-    execution.label = comparison.status === "different" ? "отличается структура" : "структура не подтверждена полностью";
-    execution.comment = "Оценка типа и TRIMP близка к плану; " + comparison.summary.toLowerCase();
+  if (comparison && running.length) {
+    execution.structureComparison = comparison;
+    execution.structureUncertain = comparison.coreMatches === null;
+    execution.structureDifferent = comparison.coreMatches === false;
+    if (comparison.coreMatches !== true) execution.keyCompleted = false;
+    // Reliable lap structure may establish the work even when the coarse type is uncertain.
+    if (keyWork && ["interval", "tempo"].includes(plannedTypeForDay(day)) &&
+        ["repeats", "tempo"].includes(comparison.mode) && comparison.coreMatches === true &&
+        (!comparison.actualTypeOverride || comparison.actualTypeOverride === plannedTypeForDay(day))) {
+      execution.keyCompleted = true;
+      execution.keyCredit = "auto";
+      execution.typeUncertain = false;
+      if (["uncertain", "mismatch"].includes(execution.level)) execution.level = "matched";
+      execution.label = { matched: "основная работа выполнена", harder: "тяжелее плана",
+        overloaded: "сильно тяжелее плана", lighter: "легче плана" }[execution.level] || execution.label;
+      const actualLoad = actualWorkoutsForPlanDay(day).reduce((sum, workout) => sum + (Number(workout.load) || 0), 0);
+      execution.comment = "Основная работа подтверждена по кругам; факт " + Math.round(actualLoad) +
+        " TRIMP против ориентира около " + plannedLoadScoreForDay(day);
+    }
+    if (comparison.status !== "matched") {
+      execution.comment = [execution.comment, comparison.summary.toLowerCase()].filter(Boolean).join("; ");
+      if (execution.level === "matched" && comparison.coreMatches !== true) {
+        execution.level = comparison.status === "different" ? "structure" : "uncertain";
+        execution.label = comparison.status === "different" ? "отличается структура" : "структура не подтверждена полностью";
+        execution.comment = "Оценка типа и TRIMP близка к плану; " + comparison.summary.toLowerCase();
+      }
+    }
+  }
+  const confirmed = keyWork ? WorkoutComparison.confirmation(day, running) : null;
+  if (confirmed) {
+    execution.keyCompleted = true;
+    execution.keyCredit = "manual";
+    execution.keyConfirmation = confirmed;
+    execution.structureUncertain = false;
+    execution.structureDifferent = false;
+  } else if (execution.keyCompleted) {
+    execution.keyCredit = "auto";
   }
   return execution;
+}
+
+function renderKeyWorkCredit(day, execution, allowAction = false) {
+  if (!["interval", "tempo", "long", "race"].includes(plannedTypeForDay(day))) return "";
+  const hasRun = actualWorkoutsForPlanDay(day).some(isRunningWorkout);
+  if (!hasRun) return "";
+  const confirmed = execution.keyConfirmation;
+  const label = confirmed ? "Работа зачтена тренером" : execution.keyCompleted ? "Основная работа зачтена автоматически" :
+    execution.structureComparison?.coreMatches === false ? "Основная работа отличается от задания" : "Зачет основной работы требует проверки";
+  return `<div class="key-work-credit">
+    <strong>${escapeHtml(label)}</strong>
+    ${confirmed ? `<small>${escapeHtml(confirmed.by)} · ${escapeHtml(formatChangeLogDate(confirmed.confirmedAt))}</small>` : ""}
+    ${allowAction && isCoachRole() && (confirmed || !execution.keyCompleted) ?
+      `<button type="button" class="ghost-btn" data-confirm-plan-day="${escapeHtml(day.date)}">${confirmed ? "Отменить подтверждение" : "Подтвердить работу"}</button>` : ""}
+  </div>`;
+}
+
+function renderLapEvidence(evidence) {
+  if (!evidence?.work?.length) return "";
+  const rows = [];
+  const add = (label, segment) => {
+    const seconds = Math.round(Number(segment?.durationSec));
+    const duration = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds / 60) + ":" + String(Math.round(seconds % 60)).padStart(2, "0") : "нет данных";
+    const distance = Number.isFinite(Number(segment?.distanceM)) && segment?.distanceM != null ? Math.round(segment.distanceM) + " м" : "нет данных";
+    const hr = Number(segment?.avgHr) > 0 ? Math.round(segment.avgHr) : "нет данных";
+    rows.push(`<tr><th scope="row">${escapeHtml(label)}</th><td>${duration}</td><td>${distance}</td><td>${hr}</td></tr>`);
+  };
+  evidence.work.forEach((segment, index) => {
+    add("Работа " + (index + 1), segment);
+    if (index < evidence.work.length - 1) add("Отдых " + (index + 1), evidence.recoveries[index]);
+  });
+  return `<details class="lap-evidence"><summary>Рабочие круги и восстановление</summary>
+    <table><thead><tr><th scope="col">Круг</th><th scope="col">Мин:с</th><th scope="col">Дистанция</th><th scope="col">Ср. ЧСС</th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table></details>`;
 }
 
 function renderPlanStructureComparison(comparison) {
@@ -4401,6 +4490,7 @@ function renderPlanStructureComparison(comparison) {
       <tbody>${comparison.rows.map((row) => `<tr class="structure-${row.matches === null ? "unknown" : row.matches ? "matched" : "different"}">
         <th scope="row">${escapeHtml(row.label)}</th><td>${escapeHtml(row.planned)}</td><td>${escapeHtml(row.actual)}<small>${row.matches === null ? "не проверено" : row.matches ? "близко" : "отличается"}</small></td>
       </tr>`).join("")}</tbody></table>` : ""}
+    ${renderLapEvidence(comparison.lapEvidence)}
     ${comparison.notes.length ? `<details><summary>Основания и ограничения</summary><ul>${comparison.notes.map(note => `<li>${escapeHtml(note)}</li>`).join("")}</ul></details>` : ""}
   </section>`;
 }
@@ -6363,6 +6453,7 @@ function normalizePlanDay(day, fallbackDay, index) {
   const splitDetails = splitPlanAndActual(day);
   const details = splitDetails.planned || fallbackDay?.details || "Детали не указаны.";
   const plannedStructure = PlanStructure.fromDay(day);
+  const keyConfirmation = WorkoutComparison.normalizeConfirmation(day.keyConfirmation);
   const focus = plannedStructure ? structuredPlanFocus(plannedStructure, day.focus) : normalizedPlanFocus(day, fallbackDay, details);
   const title = normalizedPlanTitle(day, fallbackDay, focus, details);
 
@@ -6374,6 +6465,7 @@ function normalizePlanDay(day, fallbackDay, index) {
     details,
     plannedWorkout: splitDetails.planned,
     ...(plannedStructure ? { plannedStructure } : {}),
+    ...(keyConfirmation ? { keyConfirmation } : {}),
     actualWorkout: "",
     intensity: day.intensity || "",
     targetDistance: day.targetDistance || "",
@@ -7492,8 +7584,10 @@ async function saveBackendState() {
       }),
     });
     if (saved.ok) globalThis.CoachOverview?.refresh(true);
+    return saved.ok;
   } catch {
     // Keep localStorage as a fallback if backend is unavailable.
+    return false;
   }
 }
 

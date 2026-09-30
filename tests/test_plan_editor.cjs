@@ -72,7 +72,7 @@ test("comparison consumes explicit prescribed repetitions and recovery",()=>{
 const fs=require("node:fs"), vm=require("node:vm");
 const source=fs.readFileSync(require("node:path").join(__dirname,"../app.js"),"utf8");
 function appFunctions(names,values={}){
- const c=vm.createContext({PlanStructure:S,...values});
+ const c=vm.createContext({PlanStructure:S,WorkoutComparison:C,...values});
  for(const name of names){
   const start=source.indexOf("function "+name+"("), end=source.indexOf("\nfunction ",start+1);
   assert.ok(start>=0,name); vm.runInContext(source.slice(start,end<0?undefined:end),c);

@@ -3071,3 +3071,9 @@ textarea {
 }
 
 #planEditModal { z-index: 50; }
+
+.key-work-credit { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.key-work-credit small { color: var(--muted); }
+.key-work-credit button { max-width: 100%; white-space: normal; }
+.structure-comparison .lap-evidence th:first-child { width: 28%; }
+.structure-comparison .lap-evidence th, .structure-comparison .lap-evidence td { overflow-wrap: anywhere; font-size: 12px; }

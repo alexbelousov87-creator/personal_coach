@@ -81,7 +81,7 @@ test("natural repetition notation and decimal kilometers", () => {
   assert.equal(compare(day("5 интервалов по 1,0 км"), [workout()]).status, "matched");
 });
 test("alternatives and multi-series plans are not silently reduced", () => {
-  for (const text of ["5 x 1000 м; при усталости 4 x 1000 м", "5 x 1000 м или 8 x 2 минуты", "3 x (4 x 400 м)", "2 серии по 5 x 1000 м", "5 x 1000 м + 4 x 400 м"]) {
+  for (const text of ["5 x 1000 м или 8 x 2 минуты", "3 x (4 x 400 м)", "2 серии по 5 x 1000 м", "5 x 1000 м + 4 x 400 м"]) {
     assert.equal(compare(day(text), [workout()]).status, "unknown", text);
   }
 });
