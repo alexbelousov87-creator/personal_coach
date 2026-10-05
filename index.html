@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20260930-credit">
+    <link rel="stylesheet" href="styles.css?v=20261005-versions">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -301,6 +301,7 @@
             <div class="button-row">
               <button class="ghost-btn coach-only" id="generatePlan" type="button">Локальный</button>
               <button class="ghost-btn coach-only" id="adjustPlan" type="button">Скорректировать</button>
+              <button class="ghost-btn coach-only" id="planHistoryButton" type="button">История версий</button>
               <button class="ghost-btn" id="togglePlanDensity" type="button">Компактно</button>
               <button class="ghost-btn coach-only" id="loadPlanJson" type="button">План из JSON</button>
               <input id="planJsonInput" type="file" accept=".json,application/json" hidden>
@@ -979,9 +980,30 @@
       </form>
     </div>
 
+    <dialog id="planRevisionDialog" class="plan-revision-dialog" aria-labelledby="planRevisionTitle" aria-describedby="planRevisionScope">
+      <header class="revision-header">
+        <div><h2 id="planRevisionTitle">История версий</h2><p id="planRevisionScope"></p></div>
+        <button id="planRevisionClose" class="ghost-btn" type="button" aria-label="Закрыть" title="Закрыть">&#215;</button>
+      </header>
+      <div class="revision-body">
+        <nav id="planRevisionList" aria-label="Версии плана"></nav>
+        <button id="planRevisionMore" class="ghost-btn" type="button" hidden>Более ранние версии</button>
+        <div id="planRevisionDiff" aria-live="polite"></div>
+      </div>
+      <footer class="revision-footer">
+        <label for="planRevisionReason">Причина изменения</label>
+        <input id="planRevisionReason" type="text" maxlength="300">
+        <p id="planRevisionError" class="form-error" role="alert" hidden></p>
+        <div class="button-row">
+          <button id="planRevisionCancel" class="ghost-btn" type="button">Отмена</button>
+          <button id="planRevisionApply" class="primary-btn" type="button" hidden>Применить изменения</button>
+        </div>
+      </footer>
+    </dialog>
     <script src="coach-overview.js?v=20260922-roster"></script>
     <script src="plan-structure.js?v=20260929-editor"></script>
     <script src="workout-comparison.js?v=20260930-credit"></script>
-    <script src="app.js?v=20260930-credit"></script>
+    <script src="plan-history.js?v=20261005-versions"></script>
+    <script src="app.js?v=20261005-versions"></script>
   </body>
 </html>

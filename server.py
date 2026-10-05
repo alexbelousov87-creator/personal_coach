@@ -15,6 +15,8 @@ import os
 import re
 import secrets
 import socket
+from contextlib import closing, contextmanager
+import plan_history
 import sqlite3
 import threading
 import time
@@ -164,6 +166,7 @@ SESSIONS = {}
 POLAR_SYNC_LOCK = threading.Lock()
 RUNALYZE_SYNC_LOCK = threading.Lock()
 DB_LOCK = threading.RLock()
+PLAN_WRITE_CONTEXT = threading.local()
 DB_INITIALIZED = False
 ORIGINAL_GETADDRINFO = socket.getaddrinfo
 GETADDRINFO_LOCK = threading.Lock()
@@ -297,6 +300,16 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 return
             self.send_json(state_for_session(session))
             return
+        if clean_path == "/api/plan/history":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
+            try:
+                query = {key: values[0] for key, values in parse_qs(urlparse(self.path).query).items()}
+                self.send_json(plan_history_for_session(session, query))
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            return
         if clean_path == "/api/coach/overview":
             session = self.require_session(roles={"coach"})
             if session is None:
@@ -419,6 +432,19 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 logging.exception("Unexpected coach password change error")
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
+            return
+
+        if clean_path == "/api/plan/apply":
+            session = self.require_session(roles={"coach"})
+            if session is None:
+                return
+            try:
+                self.send_json(apply_plan_change_for_session(session, self.read_json()))
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception:
+                logging.exception("Plan revision save failed")
+                self.send_json({"error": "Не удалось сохранить версию плана."}, status=500)
             return
 
         if clean_path == "/api/state":
@@ -560,6 +586,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             "coach-overview.js",
             "workout-comparison.js",
             "plan-structure.js",
+            "plan-history.js",
             "styles.css",
             "AvaBotTrainingPlan.png",
             "favicon.ico",
@@ -730,7 +757,7 @@ def init_db():
     with DB_LOCK:
         if DB_INITIALIZED:
             return
-        with db_connect() as connection:
+        with closing(db_connect()) as connection, connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(
@@ -885,7 +912,7 @@ def load_state_value(key, fallback, coach_id=DEFAULT_COACH_ID):
     init_db()
     key = scoped_state_key(key, coach_id)
     with DB_LOCK:
-        with db_connect() as connection:
+        with closing(db_connect()) as connection, connection:
             row = connection.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
     if not row:
         return fallback
@@ -979,10 +1006,16 @@ def filter_student_workouts_for_storage(athlete_id, workouts, athletes):
 
 def save_state_value(key, value, coach_id=DEFAULT_COACH_ID):
     init_db()
+    athlete_write = key == "athletes"
     key = scoped_state_key(key, coach_id)
     raw = json.dumps(value, ensure_ascii=False)
     with DB_LOCK:
-        with db_connect() as connection:
+        with closing(db_connect()) as connection, connection:
+            if athlete_write:
+                existing = connection.execute("SELECT value FROM app_state WHERE key=?", (key,)).fetchone()
+                previous = json.loads(existing[0]) if existing else []
+                actor, reason = getattr(PLAN_WRITE_CONTEXT, "value", None) or ("Система", "Изменение задания")
+                plan_history.record_changes(connection, coach_id, previous, value, actor, reason)
             connection.execute(
                 """
                 INSERT INTO app_state (key, value, updated_at)
@@ -1435,7 +1468,120 @@ def state_for_session(session):
     }
 
 
+
+@contextmanager
+def plan_write_context(session, reason="Изменение задания"):
+    previous = getattr(PLAN_WRITE_CONTEXT, "value", None)
+    with DB_LOCK:
+        PLAN_WRITE_CONTEXT.value = (
+            str(session.get("coach_name") or "Тренер") if session.get("role") == "coach" else "Система",
+            str(reason)[:300],
+        )
+        try:
+            yield
+        finally:
+            PLAN_WRITE_CONTEXT.value = previous
+
+
+def plan_history_scope(session, payload):
+    if session.get("role") != "coach":
+        raise AppError("История и изменение плана доступны только тренеру.", 403)
+    coach = session.get("coach_id") or DEFAULT_COACH_ID
+    athlete_id = str(payload.get("athleteId") or "")
+    week = str(payload.get("week") or "")
+    source = str(payload.get("source") or "")
+    try:
+        parsed_week = datetime.strptime(week, "%Y-%m-%d")
+        if parsed_week.weekday() != 0 or parsed_week.strftime("%Y-%m-%d") != week:
+            raise ValueError()
+    except ValueError:
+        raise AppError("Укажите понедельник выбранной недели.", 400) from None
+    if source not in plan_history.SOURCES:
+        raise AppError("Неизвестный источник плана.", 400)
+    athletes = load_state_value("athletes", [], coach_id=coach)
+    athlete = next((a for a in athletes if str(a.get("id")) == athlete_id), None)
+    if athlete is None:
+        raise AppError("Ученик не найден.", 404)
+    current = plan_history.plans(athlete).get((week, source))
+    return coach, athlete_id, week, source, athletes, athlete, current
+
+
+def plan_history_for_session(session, payload):
+    with DB_LOCK:
+        coach, athlete_id, week, source, _, _, current = plan_history_scope(session, payload)
+        try:
+            before = int(payload["before"]) if payload.get("before") else None
+        except (ValueError, TypeError):
+            raise AppError("Некорректная страница истории.", 400) from None
+        with closing(db_connect()) as connection, connection:
+            plan_history.ensure_schema(connection)
+            if current:
+                plan_history.append(connection, coach, athlete_id, week, source, current, "Система", "Исходный сохраненный план")
+            result = plan_history.list_versions(connection, coach, athlete_id, week, source, before)
+        return {**result, "currentPlan": plan_history.snapshot(current), "currentFingerprint": plan_history.fingerprint(current)}
+
+
+def apply_plan_change_for_session(session, payload):
+    if not isinstance(payload, dict):
+        raise AppError("Некорректные данные плана.", 400)
+    with DB_LOCK:
+        coach, athlete_id, week, source, athletes, athlete, current = plan_history_scope(session, payload)
+        restoring = payload.get("versionId") is not None
+        expected = payload.get("expectedFingerprint") if restoring else plan_history.fingerprint(payload.get("basePlan"))
+        if (not restoring and "basePlan" not in payload) or expected != plan_history.fingerprint(current):
+            raise AppError("План уже изменился. Обновите страницу и проверьте изменения заново.", 409)
+        reason = str(payload.get("reason") or "Подтвержденная корректировка")[:300]
+        if restoring:
+            try:
+                version_id = int(payload["versionId"])
+            except (ValueError, TypeError):
+                raise AppError("Некорректная версия.", 400) from None
+            with closing(db_connect()) as connection, connection:
+                found = plan_history.find_version(connection, coach, athlete_id, week, source, version_id)
+            if not found:
+                raise AppError("Версия не найдена.", 404)
+            candidate, number = found
+            reason = f"Восстановлена версия {number}. {reason}"
+        else:
+            candidate = payload.get("plan")
+        try:
+            normalized = plan_history.validate(candidate, week, payload.get("timezoneOffsetMinutes", 0))
+        except ValueError as exc:
+            raise AppError(str(exc), 400) from None
+        now = datetime.now().isoformat(timespec="seconds")
+        # Restore assignments, never old workout facts or their confirmations.
+        current_days = {str(d.get("date")): d for d in (current or {}).get("days", [])}
+        for day in normalized["days"]:
+            day["details"] = day["plannedWorkout"]
+            confirmation = current_days.get(str(day["date"]), {}).get("keyConfirmation")
+            if confirmation:
+                day["keyConfirmation"] = confirmation
+        log = list((current or {}).get("changeLog") or [])[:39]
+        log.insert(0, {"timestamp": now, "type": "restore-version" if restoring else "confirmed-edit",
+                      "title": "Восстановление версии" if restoring else "Подтвержденная корректировка",
+                      "details": reason, "fields": ["план"]})
+        saved = {**normalized, "source": source, "weekStart": week, "savedAt": (current or {}).get("savedAt") or now,
+                 "updatedAt": now, "changeLog": log, "modelUsed": (candidate or {}).get("modelUsed", "")}
+        bucket = athlete.setdefault("plansByWeek", {}).setdefault(week, {"sources": {}})
+        bucket.setdefault("sources", {})[source] = saved
+        bucket["activePlanSource"] = source
+        athlete.setdefault("plans", {})[source] = saved
+        athlete["selectedWeekStart"] = week
+        athlete["activePlanSource"] = source
+        profile = load_state_value("coachProfile", {}, coach_id=coach)
+        author_session = {**session, "coach_name": profile.get("name") or "Тренер"}
+        with plan_write_context(author_session, reason):
+            save_state_value("athletes", athletes, coach_id=coach)
+        mirror_legacy_state_from_primary_athlete(athletes, coach_id=coach)
+        return {"ok": True, "plan": saved, "fingerprint": plan_history.fingerprint(saved)}
+
+
 def save_state_for_session(payload, session):
+    with plan_write_context(session):
+        return _save_state_for_session(payload, session)
+
+
+def _save_state_for_session(payload, session):
     coach_id = session.get("coach_id") or DEFAULT_COACH_ID
     if not auth_enabled():
         save_state(payload, coach_id=coach_id)

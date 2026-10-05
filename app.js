@@ -2843,44 +2843,17 @@ function hideAdjustChoice() {
 function adjustPlanLocally() {
   if (!requireCoachForPlanChanges()) return;
   hideAdjustChoice();
-  const current = loadCurrentPlan() || {
-    source: "local",
-    summary: "Локальный план скорректирован по факту выполненных тренировок.",
-    days: buildPlan(),
-  };
-  const adjustedDays = adjustRemainingPlanDays(current.days);
-  const changeLog = appendPlanChangeLog(
-    current.changeLog,
-    buildPlanAdjustmentChanges(current.days, adjustedDays, "local-adjust", "Локальная корректировка")
-  );
-  const savedPlan = saveCurrentPlan({
-    ...current,
-    summary: current.summary || "План скорректирован по факту выполненных тренировок.",
-    updatedAt: new Date().toISOString(),
-    changeLog,
-    days: adjustedDays,
-  });
-  renderPlan(savedPlan?.days || adjustedDays);
-  updatePlanSourceButtons(savedPlan?.source || current.source || "local");
-  setAiStatus("План скорректирован локально по выполненным тренировкам текущей недели.", "ok");
+  const current = loadCurrentPlan() || {source: "local", summary: "Локальный план", days: buildPlan()};
+  PlanHistory.review({...current, days: adjustRemainingPlanDays(current.days)}, "Локальная корректировка по выполненным тренировкам");
 }
 
 function autoAdjustActiveLocalPlanIfNeeded() {
-  if (selectedWeekKey() !== currentWeekKey()) return;
-  const bucket = selectedWeekPlans();
-  if (bucket.activePlanSource !== "local") return;
+  // Imported facts update assessments; assignments change only after coach confirmation.
+  if (!isCoachRole() || selectedWeekKey() !== currentWeekKey()) return;
   const current = getCurrentWeekPlan("local");
-  if (!current) return;
-  const adjustedDays = adjustRemainingPlanDays(current.days);
-  const adjustmentChanges = buildPlanAdjustmentChanges(current.days, adjustedDays, "auto-adjust", "Автокорректировка");
-  if (!adjustmentChanges.length) return;
-  saveCurrentPlan({
-    ...current,
-    summary: current.summary || "Локальный план автоматически скорректирован по факту.",
-    updatedAt: new Date().toISOString(),
-    changeLog: appendPlanChangeLog(current.changeLog, adjustmentChanges),
-    days: adjustedDays,
-  });
+  if (selectedWeekPlans().activePlanSource !== "local" || !current) return;
+  const changes = buildPlanAdjustmentChanges(current.days, adjustRemainingPlanDays(current.days), "local-adjust", "Корректировка");
+  if (changes.length) setAiStatus("Есть предложение по корректировке оставшихся дней. Проверьте его через «Скорректировать».", "");
 }
 
 function adjustRemainingPlanDays(days) {
@@ -3531,19 +3504,16 @@ function saveEditedPlanDay(event) {
   const editedDay = normalizePlanDay(edited, original, index);
   const change = buildManualPlanChange(original, editedDay);
   const days = current.days.map((day, dayIndex) => (dayIndex === index ? editedDay : day));
-  const savedPlan = saveCurrentPlan({
+  const candidate = {
     ...current,
-    summary: markPlanSummaryEdited(current.summary),
+    summary: change ? markPlanSummaryEdited(current.summary) : current.summary,
     updatedAt: new Date().toISOString(),
     changeLog: change ? appendPlanChangeLog(current.changeLog, change) : normalizePlanChangeLog(current.changeLog),
     days,
-  });
+  };
 
   closePlanEditModal();
-  renderAll();
-  renderPlan(savedPlan?.days || days);
-  updatePlanSourceButtons(savedPlan?.source || current.source);
-  setAiStatus("День плана сохранен вручную.", "ok");
+  PlanHistory.review(candidate, "Ручная правка дня");
 }
 
 function closestPlanFocusOption(value) {
@@ -5013,93 +4983,42 @@ function plannedTypeLabelForDay(day, type) {
 async function generateAiPlan() {
   if (!requireCoachForPlanChanges()) return;
   const button = document.querySelector("#generateAiPlan");
-  const fallbackPlan = buildPlan();
-  renderPlan(fallbackPlan);
+  const athleteId = state.activeAthleteId, week = selectedWeekKey(), source = loadCurrentPlan()?.source;
   setAiStatus("ИИ формирует план...", "");
   if (button) button.disabled = true;
-
   try {
     const response = await fetch(`${API_BASE_URL}/api/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildAiRequest()),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildAiRequest()),
     });
-
     const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "сервер вернул ошибку");
+    if (!response.ok) throw new Error(payload.error || "сервер вернул ошибку");
+    if (!isCoachRole() || state.activeAthleteId !== athleteId || selectedWeekKey() !== week || loadCurrentPlan()?.source !== source) {
+      throw new Error("Спортсмен или план изменился. Повторите запрос для выбранного плана.");
     }
-
-    const aiPlan = normalizeAiPlan(payload.plan);
-    const savedPlan = saveCurrentPlan({
-      source: "ai",
-      summary: aiPlan.summary,
-      modelUsed: aiPlan.modelUsed,
-      days: aiPlan.days,
-    });
-    renderPlan(savedPlan?.days || aiPlan.days);
-    updatePlanSourceButtons("ai");
-    const modelLabel = aiPlan.modelUsed ? `Модель: ${aiPlan.modelUsed}. ` : "";
-    setAiStatus(`План сформирован ИИ. ${modelLabel}${aiPlan.summary}`, "ok");
+    const plan = normalizeAiPlan(payload.plan);
+    PlanHistory.review({...plan, source: "ai"}, "План сформирован ИИ", week);
+    setAiStatus("План сформирован ИИ. Ожидается подтверждение.", "");
   } catch (error) {
-    const savedPlan = saveCurrentPlan({
-      source: "local",
-      summary: "ИИ недоступен. Показан локальный план.",
-      days: fallbackPlan,
-    });
-    renderPlan(savedPlan?.days || fallbackPlan);
-    updatePlanSourceButtons("local");
-    setAiStatus(`ИИ недоступен: ${error.message}. Показан локальный план.`, "error");
-  } finally {
-    if (button) button.disabled = false;
-  }
+    setAiStatus(`ИИ недоступен: ${error.message}. Сохраненный план не изменен.`, "error");
+  } finally { if (button) button.disabled = false; }
 }
 
 async function handlePlanJsonFile(event) {
-  if (!requireCoachForPlanChanges()) {
-    planJsonInput.value = "";
-    return;
-  }
+  if (!requireCoachForPlanChanges()) { planJsonInput.value = ""; return; }
   const file = event.target.files?.[0];
   if (!file) return;
-
+  const athleteId = state.activeAthleteId, week = selectedWeekKey(), source = loadCurrentPlan()?.source;
   try {
     const rawPlan = parsePlanJsonText(await file.text());
-    const plan = normalizeAiPlan(rawPlan.plan || rawPlan);
-    const planWeekKey = weekKeyFromPlanDays(plan.days);
-    const targetWeekKey = planWeekKey || selectedWeekKey();
-    const existingJsonPlan = normalizeStoredPlanForWeek(weekPlans(targetWeekKey).sources?.json, targetWeekKey);
-    const replacingExistingPlan = Boolean(existingJsonPlan);
-    if (planWeekKey && planWeekKey !== selectedWeekKey()) {
-      state.selectedWeekStart = planWeekKey;
-      saveJson(SELECTED_WEEK_KEY, state.selectedWeekStart);
-      renderAll();
+    if (!isCoachRole() || state.activeAthleteId !== athleteId || selectedWeekKey() !== week || loadCurrentPlan()?.source !== source) {
+      throw new Error("Спортсмен или план изменился. Выберите файл заново.");
     }
-    const savedPlan = saveCurrentPlan({
-      source: "json",
-      summary: plan.summary,
-      modelUsed: plan.modelUsed,
-      updatedAt: new Date().toISOString(),
-      changeLog: replacingExistingPlan
-        ? appendPlanChangeLog(existingJsonPlan.changeLog, {
-          timestamp: new Date().toISOString(),
-          type: "json-reload",
-          title: "План из JSON заменен",
-          details: `Загружена новая версия плана на неделю ${targetWeekKey}.`,
-          fields: ["весь план"],
-        })
-        : [],
-      days: plan.days,
-    });
-    renderPlan(savedPlan?.days || plan.days);
-    updatePlanSourceButtons("json");
-    const action = replacingExistingPlan ? "перезагружен и заменил сохраненный план" : "загружен и сохранен";
-    setAiStatus(`План из JSON ${action}: ${plan.summary}`, "ok");
+    const plan = normalizeAiPlan(rawPlan.plan || rawPlan);
+    const targetWeek = weekKeyFromPlanDays(plan.days) || week;
+    PlanHistory.review({...plan, source: "json"}, "Загрузка плана из JSON", targetWeek);
   } catch (error) {
     setAiStatus(`Не удалось загрузить JSON плана: ${error.message}`, "error");
-  } finally {
-    planJsonInput.value = "";
-  }
+  } finally { planJsonInput.value = ""; }
 }
 
 function parsePlanJsonText(text) {
@@ -6897,7 +6816,7 @@ function persistWorkouts() {
 async function loadBackendState() {
   try {
     const response = await fetch(`${API_BASE_URL}/api/state`);
-    if (!response.ok) return;
+    if (!response.ok) return false;
     const payload = await response.json();
     const replaceState = state.auth.enabled;
     const hasBackendWorkouts = Array.isArray(payload.workouts) && (payload.workouts.length > 0 || replaceState);
@@ -6980,8 +6899,9 @@ async function loadBackendState() {
     ) {
       saveBackendState();
     }
+    return true;
   } catch {
-    // Browser storage remains the offline fallback when backend is unavailable.
+    return false;
   }
 }
 

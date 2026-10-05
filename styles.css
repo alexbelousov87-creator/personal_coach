@@ -3077,3 +3077,42 @@ textarea {
 .key-work-credit button { max-width: 100%; white-space: normal; }
 .structure-comparison .lap-evidence th:first-child { width: 28%; }
 .structure-comparison .lap-evidence th, .structure-comparison .lap-evidence td { overflow-wrap: anywhere; font-size: 12px; }
+
+.plan-revision-dialog {
+  width: min(960px, calc(100% - 32px)); max-height: calc(100dvh - 32px);
+  margin: auto; padding: 0; border: 1px solid var(--line, #d9e2e7); border-radius: 8px;
+  color: var(--ink, #18232b); background: #fff; overflow: auto;
+}
+.plan-revision-dialog::backdrop { background: rgb(12 22 29 / 55%); }
+.revision-header, .revision-footer { padding: 18px 22px; background: #f5f8fa; }
+.revision-header { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; border-bottom: 1px solid #d9e2e7; }
+.revision-header h2 { margin: 0; font-size: 20px; }
+.revision-header p { margin: 8px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+#planRevisionClose { flex: 0 0 36px; height: 36px; padding: 0; font-size: 24px; }
+.revision-body { padding: 0 22px 18px; }
+#planRevisionList { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 16px; }
+#planRevisionList:empty { display: none; }
+#planRevisionList button { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+#planRevisionList button[aria-pressed="true"] { border-color: #237da5; background: #edf7fc; }
+#planRevisionMore { margin-top: 12px; }
+.revision-day { padding-top: 12px; }
+.revision-day h3 { font-size: 16px; margin: 12px 0; text-transform: capitalize; }
+.revision-field { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; padding: 12px 0; border-bottom: 1px solid #e1e7eb; }
+.revision-field > strong { grid-column: 1 / -1; font-size: 13px; }
+.revision-field span { color: #627282; font-size: 12px; }
+.revision-field p { margin: 5px 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.revision-field > div:last-child { border-left: 3px solid #269185; padding-left: 12px; }
+.revision-footer { border-top: 1px solid #d9e2e7; }
+.revision-footer label { display: block; font-size: 13px; margin-bottom: 6px; }
+#planRevisionReason { width: 100%; min-width: 0; }
+.revision-footer .button-row { margin-top: 14px; justify-content: flex-end; }
+.revision-footer button { white-space: normal; }
+@media (max-width: 600px) {
+  .plan-revision-dialog { width: calc(100% - 16px); max-height: calc(100dvh - 16px); }
+  .revision-header, .revision-footer { padding: 14px; }
+  .revision-header h2 { font-size: 18px; }
+  .revision-body { padding: 0 14px 14px; }
+  #planRevisionList { grid-template-columns: 1fr; }
+  .revision-field { grid-template-columns: 1fr; }
+  .revision-footer .button-row { display: grid; grid-template-columns: 1fr; }
+}
