@@ -16,7 +16,7 @@ class PublicAssetsTests(unittest.TestCase):
             worker.start()
             origin = f"http://127.0.0.1:{httpd.server_port}"
             try:
-                for name in ("app.js", "coach-overview.js", "workout-comparison.js", "plan-structure.js", "plan-history.js", "fitness-trend.js", "fitness-trend-view.js", "styles.css"):
+                for name in ("app.js", "coach-overview.js", "workout-comparison.js", "plan-structure.js", "plan-history.js", "fitness-trend.js", "fitness-trend-view.js", "diagnostics.js", "styles.css"):
                     with self.subTest(name=name), urlopen(origin + "/" + name + "?v=test", timeout=5) as response:
                         self.assertEqual(response.read(), (server.ROOT / name).read_bytes())
                 with self.assertRaises(HTTPError) as error:

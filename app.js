@@ -713,6 +713,7 @@ function resetRuntimeStateForAuthLoad() {
 }
 
 function showAuthGate() {
+  globalThis.Diagnostics?.clear();
   document.body.classList.remove("auth-pending");
   document.body.classList.add("auth-required");
   if (authGate) authGate.hidden = false;
@@ -762,6 +763,7 @@ function updateAuthFormMode() {
 
 
 async function logout() {
+  globalThis.Diagnostics?.clear();
   globalThis.CoachOverview?.clear();
   try {
     await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST" });
@@ -1027,6 +1029,7 @@ function showView(viewId) {
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.view === viewId));
   if (leavingRoster && viewId === "plan") restoreCurrentPlanOrGenerate();
   if (viewId === "students") globalThis.CoachOverview?.refresh();
+  if (viewId === "diagnostics") Diagnostics.refresh(); else Diagnostics.clear();
   if (viewId === "import") {
     refreshImportViewStatus();
   }
@@ -1625,6 +1628,7 @@ function renderAll() {
   renderBars();
   renderWeekComparison();
   FitnessTrendView.render();
+  Diagnostics.refresh();
   renderProfileHrZones();
   renderWorkoutTemplateLibrary();
   renderPlanWeekLabel();
@@ -6935,13 +6939,16 @@ async function refreshIntegrationsStatus() {
     updateIntegrationsUi({ providers: {} });
     return null;
   }
+  const athleteId = state.activeAthleteId, role = state.currentRole;
   try {
     const response = await fetch(`${API_BASE_URL}/api/integrations/status`);
     if (!response.ok) throw new Error("status failed");
     const status = await response.json();
+    if (athleteId !== state.activeAthleteId || role !== state.currentRole) return null;
     updateIntegrationsUi(status);
     return status;
   } catch {
+    if (athleteId !== state.activeAthleteId || role !== state.currentRole) return null;
     updateIntegrationsUi({ unavailable: true, providers: {} });
     return null;
   }
@@ -7025,7 +7032,7 @@ function updateRunalyzeIntegrationControls(status = {}, unavailable = false) {
   if (disconnectRunalyzeButton) disconnectRunalyzeButton.disabled = !canManage;
   if (syncRunalyzeButton) {
     syncRunalyzeButton.hidden = status.active !== true;
-    syncRunalyzeButton.disabled = !canManage || status.active !== true;
+    syncRunalyzeButton.disabled = !canManage || status.active !== true || status.sync?.state === "running";
   }
   if (runalyzeTokenInput) runalyzeTokenInput.disabled = !canManage;
 }
@@ -7081,8 +7088,14 @@ function updateProviderUi(provider, status, refs, unavailable = false) {
     return;
   }
   const lastSync = status.lastSync ? new Date(Number(status.lastSync) * 1000).toLocaleString("ru-RU") : "еще не выполнялась";
-  if (refs.statusEl) refs.statusEl.textContent = `${refs.connectedText} · последняя синхронизация: ${lastSync}`;
-  if (refs.hintEl) refs.hintEl.textContent = refs.connectedHint;
+  const attempt = status.sync;
+  if (refs.syncButton) refs.syncButton.disabled = attempt?.state === "running";
+  if (refs.statusEl) refs.statusEl.textContent = attempt?.state === "running"
+    ? `Синхронизация выполняется · ${attempt.durationSeconds || 0} с`
+    : `${refs.connectedText} · данные получены: ${lastSync}`;
+  if (refs.hintEl) refs.hintEl.textContent = attempt?.message || (attempt?.state === "success"
+    ? `Последняя попытка: получено ${attempt.received}, добавлено ${attempt.added}, совпадений ${attempt.duplicates}.`
+    : refs.connectedHint);
 }
 
 function updatePolarUi(status) {
@@ -7121,7 +7134,10 @@ async function syncExternalWorkouts(provider, options = {}) {
     if (!options.automatic) showToast("Синхронизация источников доступна только ученику");
     return 0;
   }
+  const athleteId = state.activeAthleteId, role = state.currentRole;
+  const stillCurrent = () => athleteId === state.activeAthleteId && role === state.currentRole;
   const status = options.skipStatus ? null : await refreshIntegrationsStatus();
+  if (!stillCurrent()) return 0;
   if (!options.skipStatus && !status?.providers?.[provider]?.connected) return 0;
 
   const statusEl = { polar: polarStatus, strava: stravaStatus, runalyze: runalyzeStatus }[provider] || polarStatus;
@@ -7136,6 +7152,7 @@ async function syncExternalWorkouts(provider, options = {}) {
       body: JSON.stringify({ provider }),
     });
     const payload = await response.json();
+    if (!stillCurrent()) return 0;
     if (!response.ok) throw new Error(payload.error || `${provider} sync failed`);
     if (payload.skipped) {
       if (!options.automatic) showToast(payload.message || `${providerLabel(provider)}: синхронизация уже выполняется`);
@@ -7146,6 +7163,7 @@ async function syncExternalWorkouts(provider, options = {}) {
     const folderAccepted = provider === "polar" ? await autoImportKnownWorkoutFiles() : 0;
     if (provider === "polar") await enrichKnownCsvWorkouts();
 
+    if (!stillCurrent()) return 0;
     const hasSyncChanges = summary.accepted || folderAccepted || payload.savedTcx?.length;
     if (hasSyncChanges) persistWorkouts();
     if (options.render !== false) {
@@ -7161,11 +7179,14 @@ async function syncExternalWorkouts(provider, options = {}) {
     }
     return accepted + folderAccepted;
   } catch (error) {
-    if (!options.automatic) showToast(`${providerLabel(provider)}: ${error.message}`);
+    if (stillCurrent() && !options.automatic) showToast(`${providerLabel(provider)}: ${error.message}`);
     return 0;
   } finally {
-    if (syncButton) syncButton.disabled = false;
-    await refreshIntegrationsStatus();
+    if (stillCurrent()) {
+      if (syncButton) syncButton.disabled = false;
+      await refreshIntegrationsStatus();
+      Diagnostics.refresh();
+    }
   }
 }
 

@@ -17,6 +17,7 @@ import secrets
 import socket
 from contextlib import closing, contextmanager
 import plan_history
+import sync_monitor
 import sqlite3
 import threading
 import time
@@ -168,6 +169,7 @@ RUNALYZE_SYNC_LOCK = threading.Lock()
 DB_LOCK = threading.RLock()
 PLAN_WRITE_CONTEXT = threading.local()
 DB_INITIALIZED = False
+SYNC_MONITOR = sync_monitor.Monitor(lambda: monitor_connection())
 ORIGINAL_GETADDRINFO = socket.getaddrinfo
 GETADDRINFO_LOCK = threading.Lock()
 SESSION_COOKIE = "training_coach_session"
@@ -279,17 +281,20 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         clean_path = self.path.split("?", 1)[0]
         if clean_path == "/api/health":
-            self.send_json(
-                {
-                    "ok": True,
-                    "provider": LLM_CONFIG.get("provider", "openrouter"),
-                    "model": LLM_CONFIG["model"],
-                    "fallbackModels": LLM_CONFIG.get("fallbackModels", []),
-                    "config": CONF_FILE.name,
-                    "database": str(DB_PATH.relative_to(ROOT)) if DB_PATH.is_relative_to(ROOT) else str(DB_PATH),
-                    "hasApiKey": bool(load_api_key()),
-                }
-            )
+            self.send_json({"ok": True})
+            return
+        if clean_path == "/api/diagnostics":
+            session = self.require_session()
+            if session is None:
+                return
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                self.send_json(diagnostics_for_session(session, query.get("athleteId", [""])[0]))
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception as exc:
+                logging.warning("Diagnostics unavailable: %s", type(exc).__name__)
+                self.send_json({"error": "Сервер отвечает, но диагностика хранилища сейчас недоступна."}, status=503)
             return
         if clean_path == "/api/auth/status":
             self.send_json(auth_status_response(self))
@@ -589,6 +594,7 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             "plan-history.js",
             "fitness-trend.js",
             "fitness-trend-view.js",
+            "diagnostics.js",
             "styles.css",
             "AvaBotTrainingPlan.png",
             "favicon.ico",
@@ -2272,6 +2278,12 @@ def integrations_status(session):
     }
     if integration_visible("strava"):
         providers["strava"] = strava_status(coach_id=coach_id, athlete_id=athlete_id)
+    for provider, status in providers.items():
+        try:
+            events = SYNC_MONITOR.history((coach_id, athlete_id, provider))
+            status["sync"] = events[0] if events else None
+        except sqlite3.Error:
+            status["syncUnavailable"] = True
     return {
         "athleteId": athlete_id,
         "providers": providers,
@@ -2598,16 +2610,82 @@ def disconnect_integration_for_session(session, provider):
     return {"ok": True, "provider": provider}
 
 
+@contextmanager
+def monitor_connection():
+    # A short timeout prevents diagnostics from waiting behind a long writer.
+    with closing(sqlite3.connect(str(DB_PATH), timeout=0.5)) as connection, connection:
+        yield connection
+
+
+def diagnostics_for_session(session, athlete_id=""):
+    if not session or session.get("role") not in {"coach", "student"}:
+        raise AppError("Требуется вход.", 401)
+    coach = session.get("coach_id") or DEFAULT_COACH_ID
+    if session.get("role") == "student":
+        own = str(session.get("athlete_id") or "")
+        if athlete_id and athlete_id != own:
+            raise AppError("Нет доступа к этому спортсмену.", 403)
+        athlete_id = own
+    # Read one scoped snapshot without waiting on the application's write lock.
+    with monitor_connection() as db:
+        row = db.execute("SELECT value FROM app_state WHERE key = ?", (scoped_state_key("athletes", coach),)).fetchone()
+        athletes = json.loads(row[0]) if row else []
+        legacy = None
+        if coach == DEFAULT_COACH_ID and athlete_id == DEFAULT_ATHLETE_ID:
+            legacy = db.execute("SELECT value FROM app_state WHERE key = ?", (scoped_state_key("polarToken", coach),)).fetchone()
+    athlete = next((a for a in athletes if isinstance(a, dict) and str(a.get("id")) == str(athlete_id)), None)
+    if athlete is None and (athlete_id or session.get("role") == "student"):
+        raise AppError("Спортсмен не найден.", 404)
+    providers = []
+    for provider in ("polar", "runalyze", "strava") if athlete else ():
+        if not integration_visible(provider):
+            continue
+        integration = athlete_integrations(athlete).get(provider, {})
+        if not isinstance(integration, dict):
+            integration = {}
+        if provider == "polar" and not integration and legacy:
+            token = json.loads(legacy[0])
+            if isinstance(token, dict) and token.get("access_token"):
+                integration = {"token": token}
+        config = integration_config(provider)
+        token = integration.get("token")
+        connected = bool(token.get("access_token")) if isinstance(token, dict) else bool(token)
+        enabled = config.get("enabled", True) is not False
+        events = SYNC_MONITOR.history((coach, athlete_id, provider))
+        providers.append({"provider":provider,"connected":connected,"enabled":enabled,
+            "backgroundEnabled":enabled and config.get("backgroundSync", True) is not False,
+            "readAccess":integration.get("readAccess", "") if provider=="runalyze" else "",
+            "lastDataAt":integration.get("lastSync") or None,"events":events})
+    handlers = [h for h in logging.getLogger().handlers if isinstance(h, RotatingFileHandler)]
+    return {"athleteId":athlete_id,"athleteName":athlete.get("name", "") if athlete else "",
+        "checkedAt":time.time(),"server":{"available":True,"database":"ok",
+        "uptimeSeconds":int(time.time()-SYNC_MONITOR.started),"logging":bool(handlers),
+        "journalAvailable":SYNC_MONITOR.journal_available,"worker":SYNC_MONITOR.worker_status()},"providers":providers}
+
+
+def observed_sync(provider, automatic=False, coach_id=None, athlete_id=None, store=True):
+    functions = {"polar":sync_polar_workouts,"runalyze":sync_runalyze_workouts,"strava":sync_strava_workouts}
+    if provider not in functions:
+        raise AppError("Неизвестный источник.", 400)
+    coach_id = coach_id or (polar_sync_target_coach_id() if provider=="polar" else DEFAULT_COACH_ID)
+    athlete_id = athlete_id or (polar_sync_target_athlete_id() if provider=="polar" else DEFAULT_ATHLETE_ID)
+    config = integration_config(provider)
+    if config.get("enabled", True) is False:
+        raise AppError("Источник отключен.", 400)
+    try:
+        return SYNC_MONITOR.execute((coach_id,athlete_id,provider),
+            lambda: functions[provider](store=store,automatic=automatic,coach_id=coach_id,athlete_id=athlete_id),
+            automatic=automatic, expect_tcx=provider=="polar" and config.get("downloadTcx",True))
+    except Exception as exc:
+        code = sync_monitor.error_code(exc)
+        status = getattr(exc,"status",502)
+        raise AppError(sync_monitor.MESSAGES[code], status if isinstance(status,int) and 400<=status<=599 else 502) from None
+
+
 def sync_integration_for_session(session, provider):
     provider = str(provider or "polar").strip().lower()
     coach_id, athlete_id = current_athlete_target(session)
-    if provider == "polar":
-        return sync_polar_workouts(coach_id=coach_id, athlete_id=athlete_id)
-    if provider == "strava":
-        return sync_strava_workouts(coach_id=coach_id, athlete_id=athlete_id)
-    if provider == "runalyze":
-        return sync_runalyze_workouts(coach_id=coach_id, athlete_id=athlete_id)
-    raise AppError("Unknown integration provider.", 400)
+    return observed_sync(provider, coach_id=coach_id, athlete_id=athlete_id)
 
 def start_polar_sync_worker():
     polar_enabled = POLAR_CONFIG.get("enabled", True) and POLAR_CONFIG.get("backgroundSync", True)
@@ -2615,6 +2693,7 @@ def start_polar_sync_worker():
     runalyze_config = integration_config("runalyze")
     runalyze_enabled = bool(runalyze_config.get("enabled", True)) and bool(runalyze_config.get("backgroundSync", True))
     if not polar_enabled and not strava_enabled and not runalyze_enabled:
+        SYNC_MONITOR.worker_update(state="disabled", nextCheckAt=None)
         logging.info("Background integration sync is disabled")
         return
     interval = positive_int(POLAR_CONFIG.get("backgroundSyncIntervalSeconds"), 600, minimum=300)
@@ -2625,6 +2704,8 @@ def start_polar_sync_worker():
         name="integration-sync",
         daemon=True,
     )
+    SYNC_MONITOR.thread = thread
+    SYNC_MONITOR.worker_update(state="waiting", intervalSeconds=interval, nextCheckAt=time.time()+initial_delay)
     thread.start()
     logging.info("Background integration sync enabled: every %s seconds", interval)
 
@@ -2633,20 +2714,18 @@ def integration_sync_worker_loop(interval, initial_delay):
     if initial_delay:
         time.sleep(initial_delay)
     while True:
+        SYNC_MONITOR.worker_update(state="running", lastStarted=time.time(), nextCheckAt=None)
+        failed = False
         try:
             result = sync_connected_integrations(automatic=True)
-            if result.get("added") or result.get("savedTcx"):
-                logging.info(
-                    "Background integration sync: providers=%s added=%s workouts=%s tcx=%s",
-                    ",".join(result.get("providers") or []),
-                    result.get("added", 0),
-                    result.get("count", 0),
-                    len(result.get("savedTcx") or []),
-                )
+            failed = not result.get("ok", True)
+            logging.info("Background sync cycle finished: added=%s failed=%s", result.get("added",0), failed)
         except Exception:
+            failed = True
             logging.exception("Unexpected background integration sync error")
+        finally:
+            SYNC_MONITOR.worker_update(state="waiting", lastFinished=time.time(), nextCheckAt=time.time()+interval, lastCycleFailed=failed)
         time.sleep(interval)
-
 
 def connected_integration_targets(provider):
     targets = []
@@ -2676,46 +2755,26 @@ def connected_integration_targets(provider):
 
 
 def sync_connected_integrations(automatic=False):
-    aggregate = {"ok": True, "providers": [], "count": 0, "added": 0, "duplicates": 0, "savedTcx": [], "results": []}
-    for coach_id, athlete_id in connected_integration_targets("polar"):
-        try:
-            result = sync_polar_workouts(store=True, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
-            aggregate["providers"].append("polar")
-            aggregate["count"] += int(result.get("count") or 0)
-            aggregate["added"] += int(result.get("added") or 0)
-            aggregate["duplicates"] += int(result.get("duplicates") or 0)
-            aggregate["savedTcx"].extend(result.get("savedTcx") or [])
-            aggregate["results"].append(result)
-        except AppError as exc:
-            if exc.status != 401:
-                logging.warning("Polar background sync failed for athlete=%s: %s", athlete_id, exc)
-    if load_strava_credentials().get("enabled"):
-        for coach_id, athlete_id in connected_integration_targets("strava"):
-            try:
-                result = sync_strava_workouts(store=True, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
-                aggregate["providers"].append("strava")
-                aggregate["count"] += int(result.get("count") or 0)
-                aggregate["added"] += int(result.get("added") or 0)
-                aggregate["duplicates"] += int(result.get("duplicates") or 0)
-                aggregate["results"].append(result)
-            except AppError as exc:
-                if exc.status != 401:
-                    logging.warning("Strava background sync failed for athlete=%s: %s", athlete_id, exc)
-    runalyze_config = integration_config("runalyze")
-    if runalyze_config.get("enabled", True) and runalyze_config.get("backgroundSync", True):
-        for coach_id, athlete_id in connected_integration_targets("runalyze"):
-            if automatic and athlete_integration(coach_id, athlete_id, "runalyze").get("readAccess") == "denied":
+    aggregate = {"ok":True,"providers":[],"count":0,"added":0,"duplicates":0,"savedTcx":[],"results":[]}
+    for provider in ("polar","strava","runalyze"):
+        config = integration_config(provider)
+        if config.get("enabled", True) is False or (automatic and config.get("backgroundSync", True) is False):
+            continue
+        if provider=="strava" and not load_strava_credentials().get("enabled"):
+            continue
+        for coach, athlete in connected_integration_targets(provider):
+            if automatic and provider=="runalyze" and athlete_integration(coach,athlete,provider).get("readAccess")=="denied":
                 continue
             try:
-                result = sync_runalyze_workouts(store=True, automatic=automatic, coach_id=coach_id, athlete_id=athlete_id)
-                aggregate["providers"].append("runalyze")
-                aggregate["count"] += int(result.get("count") or 0)
-                aggregate["added"] += int(result.get("added") or 0)
-                aggregate["duplicates"] += int(result.get("duplicates") or 0)
+                result = observed_sync(provider, store=True, automatic=automatic, coach_id=coach, athlete_id=athlete)
+                aggregate["providers"].append(provider)
+                for key in ("count","added","duplicates"):
+                    aggregate[key] += int(result.get(key) or 0)
+                aggregate["savedTcx"].extend(result.get("savedTcx") or [])
                 aggregate["results"].append(result)
             except AppError as exc:
-                if exc.status != 401:
-                    logging.warning("Runalyze background sync failed for athlete=%s: %s", athlete_id, exc)
+                aggregate["ok"] = False
+                logging.warning("Background sync failed provider=%s status=%s",provider,exc.status)
     aggregate["providers"] = sorted(set(aggregate["providers"]))
     return aggregate
 

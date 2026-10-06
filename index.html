@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20261006-trend">
+    <link rel="stylesheet" href="styles.css?v=20261006-status">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -89,6 +89,7 @@
             <button class="nav-item student-import-only" data-view="manual" type="button">Добавить</button>
             <button class="nav-item" data-view="reference" type="button">Справка</button>
             <button class="nav-item" data-view="settings" type="button">Профиль</button>
+            <button class="nav-item" data-view="diagnostics" type="button">Состояние</button>
           </nav>
 
           <div class="week-switcher top-week-switcher" aria-label="Выбор недели">
@@ -114,6 +115,14 @@
           </div>
           <p class="roster-status" id="studentsStatus" role="status" aria-live="polite"></p>
           <div id="studentsResults" aria-busy="false"></div>
+        </section>
+        <section class="view" id="diagnostics" aria-labelledby="diagnosticHeading">
+          <div class="page-head"><div><h1 id="diagnosticHeading">Состояние</h1><p id="diagnosticScope"></p></div>
+            <button class="ghost-btn" id="refreshDiagnostics" type="button" title="Обновить состояние" aria-label="Обновить состояние">&#8635;</button>
+          </div>
+          <p id="diagnosticStatus" role="status" aria-live="polite"></p>
+          <div id="diagnosticServer" class="diagnostic-server"></div>
+          <div id="diagnosticSources"></div>
         </section>
         <section class="view active" id="dashboard">
           <div class="page-head">
@@ -1033,6 +1042,7 @@
     <script src="plan-history.js?v=20261005-versions"></script>
     <script src="fitness-trend.js?v=20261006-trend"></script>
     <script src="fitness-trend-view.js?v=20261006-trend"></script>
-    <script src="app.js?v=20261006-trend"></script>
+    <script src="diagnostics.js?v=20261006-status"></script>
+    <script src="app.js?v=20261006-status"></script>
   </body>
 </html>
