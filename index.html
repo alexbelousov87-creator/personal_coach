@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20261005-versions">
+    <link rel="stylesheet" href="styles.css?v=20261006-trend">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -168,6 +168,33 @@
             </section>
           </div>
 
+          <section id="fitnessTrend" class="fitness-panel" aria-labelledby="fitnessHeading">
+            <div class="panel-head"><div><h2 id="fitnessHeading">Динамика формы</h2><span id="fitnessScope"></span></div></div>
+            <div class="fitness-filters">
+              <label>Период<select id="fitnessPeriod"><option value="8">8 недель</option><option value="12">12 недель</option></select></label>
+              <label>Тип бега<select id="fitnessType"><option value="easy">Кросс</option><option value="recovery">Восстановительный</option><option value="long">Длительный</option></select></label>
+              <label>Показатель<select id="fitnessMode"><option value="pace">Темп при близкой ЧСС</option><option value="hr">ЧСС при близком темпе</option></select></label>
+              <label class="fitness-reference">Опорная тренировка<select id="fitnessReference"><option value="">Нет данных</option></select></label>
+            </div>
+            <p id="fitnessStatus" class="fitness-status" role="status" aria-live="polite"></p>
+            <div id="fitnessSummary" class="fitness-summary"></div>
+            <p id="fitnessCriteria" class="fitness-note"></p>
+            <div id="fitnessLegend" class="fitness-legend" hidden><span class="before">Первая половина</span><span class="after">Вторая половина</span><span class="reference">Опора</span></div>
+            <div id="fitnessChart" class="fitness-chart"></div>
+            <p id="fitnessPoint" class="fitness-point" aria-live="polite"></p>
+            <details class="fitness-evidence">
+              <summary id="fitnessEvidenceCount">Сопоставимые тренировки</summary>
+              <div id="fitnessTable" class="fitness-table"></div>
+              <h3>Не вошли в сравнение</h3><ul id="fitnessExclusions"></ul>
+            </details>
+            <details class="fitness-method">
+              <summary>Основания и ограничения</summary>
+              <p>Период разделен пополам. В каждой половине сравниваются медианы по дням: несколько пробежек за день имеют вес одного дня. Для вывода нужны минимум 3 сопоставимых дня в каждой половине и свежие данные за последние 14 дней.</p>
+              <p>Опорная тренировка по умолчанию — последняя подходящая. Допуски отбора: длительность ±20%, средняя ЧСС ±5 уд/мин или темп ±3%. Если медианы длительности или контрольного показателя двух половин различаются сильнее этих допусков, вывод не делается. Изменение до 2% по темпу или до 3 уд/мин отмечается как небольшое; это рабочие допуски сравнения, не статистическая значимость.</p>
+              <p>Средние показатели интервальных и темповых занятий не сопоставляются с ровным бегом. Используется сохраненный темп, пропуски не вычисляются из дистанции и времени. Классификация с низкой уверенностью исключается.</p>
+              <p>Маршрут, погода, рельеф, остановки и точность датчика не контролируются. Покрытие разделяется только по указанному виду спорта. Наблюдаемое изменение не доказывает рост или снижение формы и не меняет план автоматически.</p>
+            </details>
+          </section>
           <section class="panel week-comparison-panel">
             <div class="panel-head">
               <div>
@@ -1004,6 +1031,8 @@
     <script src="plan-structure.js?v=20260929-editor"></script>
     <script src="workout-comparison.js?v=20260930-credit"></script>
     <script src="plan-history.js?v=20261005-versions"></script>
-    <script src="app.js?v=20261005-versions"></script>
+    <script src="fitness-trend.js?v=20261006-trend"></script>
+    <script src="fitness-trend-view.js?v=20261006-trend"></script>
+    <script src="app.js?v=20261006-trend"></script>
   </body>
 </html>

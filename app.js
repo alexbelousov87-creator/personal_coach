@@ -1624,6 +1624,7 @@ function renderAll() {
   renderImportDiagnostics();
   renderBars();
   renderWeekComparison();
+  FitnessTrendView.render();
   renderProfileHrZones();
   renderWorkoutTemplateLibrary();
   renderPlanWeekLabel();
