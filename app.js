@@ -3757,7 +3757,7 @@ function showPlanState(planState) {
   }
   renderPlan(normalized.days);
   updatePlanSourceButtons(normalized.source);
-  setAiStatus(currentPlanStatusText(normalized), normalized.source === "local" ? "" : "ok");
+  setAiStatus(currentPlanStatusText(normalized), normalized.source === "local" ? "" : "ok", normalized.source === "local" ? "" : normalized.summary);
 }
 
 function persistPlans() {
@@ -3901,15 +3901,15 @@ function renderPlanWeekLabel() {
 }
 
 function currentPlanStatusText(planState) {
-  const summary = cleanPlanSummaryForStatus(planState.summary || "");
-  if (planState.source === "ai") {
-    const modelLabel = planState.modelUsed ? ` Модель: ${planState.modelUsed}.` : "";
-    return `Представлен ИИ-план.${modelLabel} ${summary}`.trim();
-  }
-  if (planState.source === "json") {
-    return `Представлен план из JSON. ${summary}`.trim();
-  }
-  return "Представлен локальный недельный план.";
+  if (!["ai", "json"].includes(planState.source)) return "Представлен локальный недельный план.";
+  const source = planState.source === "ai" ? "Представлен ИИ-план." : "Представлен план из JSON.";
+  const goalSummary = typeof planState.summary?.weekGoal === "string" ? `Цель недели: ${planState.summary.weekGoal}` : planSummaryText(planState.summary || "");
+  const summary = cleanPlanSummaryForStatus(goalSummary);
+  const goal = summary.match(/(?:^|\s)Цель(?: недели)?:\s*([^.!?\n]+)/i)?.[1]?.trim() || "";
+  if (!goal) return source;
+  const limit = 120;
+  const shortGoal = goal.length <= limit ? goal : goal.slice(0, limit - 3).replace(/\s+\S*$/, "") + "...";
+  return `${source} Цель: ${shortGoal}`;
 }
 
 function cleanPlanSummaryForStatus(summary) {
@@ -4614,7 +4614,7 @@ function plannedTypeForDay(day) {
   const assignmentType = planTypeFromAssignment(`${day.intensity || ""} ${day.plannedWorkout || day.details || ""} ${day.targetDistance || ""}`);
   const focusType = planTypeFromFocus(day.focus);
   if (assignmentType && !["recovery", "easy"].includes(assignmentType)) return assignmentType;
-  if (assignmentType === "easy") return "easy";
+  if (assignmentType === "easy") return focusType === "long" ? "long" : "easy";
   return focusType || assignmentType || "easy";
 }
 
@@ -4623,7 +4623,7 @@ function planToneClass(day) {
 }
 
 function plannedIntensityTone(day) {
-  const text = planDayComparableText(day);
+  const text = plannedStimulusText([day.focus, day.title, day.intensity, day.targetDistance, day.plannedWorkout || day.details].filter(Boolean).join(". "));
   const type = plannedTypeForDay(day);
   if (type === "rest" || assignmentHasNoRun(text)) return "recovery";
   if (matchesAny(text, ["спринт", "sprint", "максимальн"])) return "sprint";
@@ -6519,6 +6519,7 @@ function normalizedPlanFocus(day, fallbackDay, details) {
   const explicitFocus = day.focus || fallbackDay?.focus || "План";
   const explicitType = planTypeFromFocus(explicitFocus);
   const assignmentType = planTypeFromAssignment(`${details} ${day.intensity || ""}`);
+  if (explicitType === "long" && assignmentType === "easy") return explicitFocus;
   if (assignmentType && !explicitType) {
     return focusForPlannedType(assignmentType);
   }
@@ -6544,8 +6545,19 @@ function normalizedPlanTitle(day, fallbackDay, focus, details) {
   return title;
 }
 
+function plannedStimulusText(value) {
+  let text = String(value || "").toLowerCase();
+  const modifier = "(?:(?:вчерашн|сегодняшн|завтрашн|предыдущ|прошл|следующ|понедельничн|вторничн|средов|четвергов|пятничн|субботн|воскресн|тяжел|тяжёл|интенсивн)[а-яё]*\\s+){0,3}";
+  const session = "(?:порог[а-яё]*|темпов[а-яё]*|интервал[а-яё]*|длитель[а-яё]*|гонк[а-яё]*|старт[а-яё]*|vo2max|vo₂max|threshold)";
+  // References to another session are context, not today's prescribed stimulus.
+  text = text.replace(new RegExp(`(?:после|перед|накануне|вслед за)\\s+${modifier}${session}(?:\\s+(?:работ|тренировк|бег)[а-яё]*)?`, "gu"), " ");
+  const excludedStimulus = /^(?:без|не(?:\s+как)?)\s+(?:перехода\s+в\s+)?(?:(?:дополнительн|полноценн|тяжел|тяжёл|коротк|быстр|прогрессивн)[а-яё]*\s+){0,3}(?:темп|порог|интервал|ускор|прогрес|горок|гонк|спринт|максимальн|strides|vo2|vo₂|threshold|sprint|попытки\s+сразу\s+достичь)/u;
+  return text.replace(/(?:без|не(?:\s+как)?)\s+[^.;!?\n]*?(?=[.;!?\n]|,\s*(?:затем|далее|но|а\s|в\s+конце)|\s+(?:затем|далее)\s|$)/gu,
+    fragment => excludedStimulus.test(fragment) ? " " : fragment);
+}
+
 function planTypeFromFocus(value) {
-  const text = String(value || "").toLowerCase();
+  const text = plannedStimulusText(value);
   if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
   if (matchesAny(text, ["отдых"])) return "rest";
   if (matchesAny(text, ["интервал", "vo2"])) return "interval";
@@ -6558,7 +6570,7 @@ function planTypeFromFocus(value) {
 }
 
 function planTypeFromAssignment(value) {
-  const text = String(value || "").toLowerCase();
+  const text = plannedStimulusText(value);
   if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
   if (matchesAny(text, ["полный отдых", "день отдыха", "без нагрузки"])) return "rest";
   if (matchesAny(text, ["без дополнительного бегового задания", "без бегового задания"])) return "recovery";
@@ -6715,10 +6727,18 @@ function raceGoalSummaryText() {
   return `Цель: подготовка к старту ${race.name}, ${race.distanceLabel}, ${race.dateLabel}`;
 }
 
-function setAiStatus(message, level) {
+function setAiStatus(message, level, explanation = "") {
   const status = document.querySelector("#aiStatus");
   status.textContent = message;
   status.className = `ai-status ${level || ""}`.trim();
+  const details = document.querySelector("#planSummaryDetails");
+  const full = document.querySelector("#planSummaryFull");
+  const text = explanation ? planSummaryText(explanation).trim() : "";
+  if (details && full) {
+    if (full.textContent !== text || !text) details.open = false;
+    full.textContent = text;
+    details.hidden = !text;
+  }
 }
 
 function clearWorkouts() {

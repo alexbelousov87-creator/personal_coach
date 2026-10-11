@@ -470,12 +470,33 @@ p {
 }
 
 .ai-status {
+  overflow-wrap: anywhere;
   margin: -8px 0 18px;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--muted);
+}
+
+.plan-summary-details {
+  margin: -6px 0 18px;
+  color: var(--muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.plan-summary-details summary {
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.plan-summary-details p {
+  max-width: 90ch;
+  line-height: 1.6;
+  white-space: pre-line;
 }
 
 .ai-status.ok {

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20261006-status">
+    <link rel="stylesheet" href="styles.css?v=20261011-summary">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -351,6 +351,10 @@
           </div>
 
           <div class="ai-status" id="aiStatus">Сейчас показан локальный план.</div>
+          <details class="plan-summary-details" id="planSummaryDetails" hidden>
+            <summary>Обоснование плана</summary>
+            <p id="planSummaryFull"></p>
+          </details>
 
           <section class="panel plan-legend" aria-label="Легенда плана">
             <div>
@@ -1043,6 +1047,6 @@
     <script src="fitness-trend.js?v=20261006-trend"></script>
     <script src="fitness-trend-view.js?v=20261006-trend"></script>
     <script src="diagnostics.js?v=20261006-status"></script>
-    <script src="app.js?v=20261011-prompt"></script>
+    <script src="app.js?v=20261011-plan-type"></script>
   </body>
 </html>
