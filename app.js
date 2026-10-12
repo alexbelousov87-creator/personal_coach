@@ -6569,8 +6569,19 @@ function planTypeFromFocus(value) {
   return "";
 }
 
-function planTypeFromAssignment(value) {
+function primaryPlannedStimulusText(value) {
   const text = plannedStimulusText(value);
+  // A fatigue fallback does not replace an explicit primary running prescription.
+  const primary = text
+    .replace(/(?:если(?=[^.!?;\n]*(?:устал|утом|самочувств))|при\s+(?:(?:выраженн|остаточн|сильн|накопленн)[а-яё]*\s+)?усталости)[^.!?;\n]*(?:полный отдых|день отдыха|без нагрузки|выбрать отдых)[^.!?;\n]*/gu, " ")
+    .replace(/\s+(?:или|либо)\s+(?:выбрать\s+)?полный отдых/gu, " ");
+  const hasRunningCue = /(?:^|[^а-яё])(?:бег[а-яё]*|кросс[а-яё]*|легк[а-яё]*|лёгк[а-яё]*|интервал[а-яё]*|порог[а-яё]*|длитель[а-яё]*|vo2max)/u.test(primary);
+  const hasVolume = /\d+(?:[.,]\d+)?\s*(?:[-–—]\s*\d+(?:[.,]\d+)?)?\s*(?:мин|км|метр|м(?:\s|$))/u.test(primary);
+  return hasRunningCue && hasVolume && !assignmentHasNoRun(primary) ? primary : text;
+}
+
+function planTypeFromAssignment(value) {
+  const text = primaryPlannedStimulusText(value);
   if (matchesAny(text, ["гонка", "старт", "race"])) return "race";
   if (matchesAny(text, ["полный отдых", "день отдыха", "без нагрузки"])) return "rest";
   if (matchesAny(text, ["без дополнительного бегового задания", "без бегового задания"])) return "recovery";

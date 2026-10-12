@@ -4,8 +4,8 @@ function setup() {
  const c=vm.createContext({matchesAny:(text,parts)=>parts.some(part=>text.includes(part)),
   PlanStructure:require('../plan-structure.js'),WorkoutComparison:require('../workout-comparison.js'),
   selectedWeekStartDate:()=>new Date('2026-10-12T07:00:00Z'),addDays:(d,n)=>new Date(d.getTime()+n*86400000)});
- const names=['plannedStimulusText','planTypeFromFocus','planTypeFromAssignment','assignmentHasTempoStructure','assignmentHasIntervalStructure','assignmentHasEasyRunVolume','plannedTypeForDay','plannedIntensityTone',
- 'normalizedPlanFocus','normalizedPlanTitle','defaultTitleForPlannedType','focusForPlannedType','titleMentionsRun','titleMentionsStrides','assignmentHasNoRun','assignmentForbidsStrides','splitPlanAndActual','normalizePlanDay','structuredPlanFocus'];
+ const names=['plannedStimulusText','primaryPlannedStimulusText','planTypeFromFocus','planTypeFromAssignment','assignmentHasTempoStructure','assignmentHasIntervalStructure','assignmentHasEasyRunVolume','plannedTypeForDay','plannedIntensityTone',
+ 'normalizedPlanFocus','normalizedPlanTitle','defaultTitleForPlannedType','focusForPlannedType','titleMentionsRun','titleMentionsStrides','assignmentHasNoRun','assignmentForbidsStrides','splitPlanAndActual','normalizePlanDay','structuredPlanFocus','groupedActualWorkoutsForPlanDay','planCompletionWorkoutsForDay','planExpectsNoRun','planTypeRequiresRunning','plannedTypeAllowsOptionalEasyRun','planDayComparableText','evaluatePlanDayLoadAndType','planTypeMatchesActual','actualMatchesPlannedEnvelope','plannedDurationBounds','plannedDistanceBounds','valueWithinRange'];
  for(const name of names) {const start=source.indexOf('function '+name+'('),end=source.indexOf('\nfunction ',start+1);assert.ok(start>=0,name);vm.runInContext(source.slice(start,end<0?undefined:end),c);}
  return c;
 }
@@ -53,4 +53,62 @@ test('explicit long run stays long with purely easy instructions, stale interval
  assert.equal(c.normalizedPlanFocus({focus:'Длительная'},null,details),'Длительная');
  assert.equal(c.plannedTypeForDay({focus:'Длительная',details}),'long');
  assert.equal(c.normalizedPlanFocus({focus:'Интервалы'},null,details),'Кросс');
+});
+const monday={date:'2026-10-12T07:00:00.000Z',focus:'восстановительный бег',title:'Восстановление после длительной',
+ details:'35–45 минут очень легкого бега преимущественно в Z1, до 152 уд/мин, RPE 1–2/10. Темп свободный, без ускорений, прогрессии и горок. Если после воскресной длительной сохраняется выраженная усталость, сократить до 25–35 минут или выбрать полный отдых. Дополнительную интенсивную небеговую работу не проводить.',
+ targetDistance:'7–9 км или отдых при выраженной усталости',intensity:'Z1, RPE 1–2/10',load:'низкая'};
+function withActual(actual) {
+ const c=setup();c.actualWorkoutsForPlanDay=()=>actual;c.workoutDedupKey=w=>w.id;c.isRunningWorkout=w=>w.sport==='Running';
+ c.getWorkoutType=w=>w.sport==='Running'?'easy':'cross';
+ c.getWorkoutClassification=w=>({type:c.getWorkoutType(w),confidence:'medium',needsReview:false,canRejectOtherTypes:false});
+ c.plannedLoadScoreForDay=()=>54;c.plannedTypeLabelForDay=(d,type)=>type;c.actualTypeLabel=type=>type;
+ return c;
+}
+const mondayRun={id:'run',date:'2026-10-12T06:00:00Z',sport:'Running',durationMin:48,distanceKm:10.1,avgHr:139,load:60};
+
+test('October 12 primary run is not replaced by the conditional full-rest fallback',()=>{
+ const c=withActual([mondayRun]),snapshot=JSON.stringify(monday);
+ const d=c.normalizePlanDay(monday,monday,0);
+ assert.ok(['easy','recovery'].includes(c.plannedTypeForDay(d)));
+ const groups=c.groupedActualWorkoutsForPlanDay(d);
+ assert.equal(groups.length,1);assert.equal(groups[0].kind,'single');assert.equal(groups[0].label,'');
+ assert.equal(groups[0].workouts[0].id,'run');
+ const result=c.evaluatePlanDayLoadAndType(d);
+ assert.equal(result.level,'matched');assert.equal(result.completed,true);assert.equal(result.label,'по плану');
+ assert.equal(JSON.stringify(monday),snapshot);assert.equal(mondayRun.load,60);assert.equal(d.details,monday.details);
+});
+test('existing rest label is repaired without editing the saved workout fact',()=>{
+ const c=withActual([mondayRun]);
+ const d=c.normalizePlanDay({...monday,focus:'Отдых',title:'Отдых'},monday,0);
+ assert.notEqual(c.plannedTypeForDay(d),'rest');assert.notEqual(d.title,'Отдых');
+ assert.equal(c.planCompletionWorkoutsForDay(d).length,1);
+});
+test('non-running extra load remains separated and counted in the load assessment',()=>{
+ const c=withActual([mondayRun,{id:'skierg',sport:'SkiErg',load:40}]),d=c.normalizePlanDay(monday,monday,0);
+ const groups=c.groupedActualWorkoutsForPlanDay(d);
+ assert.equal(groups[0].kind,'primary');assert.equal(groups[0].workouts[0].id,'run');
+ assert.equal(groups[1].kind,'additional');assert.equal(groups[1].workouts[0].id,'skierg');
+ assert.equal(c.evaluatePlanDayLoadAndType(d).level,'overloaded');
+});
+test('true rest is not converted to a running day by zone metadata or walking',()=>{
+ const c=withActual([mondayRun]);
+ for(const details of ['Полный отдых. Можно 30 минут ходьбы.', 'День отдыха без нагрузки.', 'Полный отдых. 30 минут бега запрещены.']) {
+  const d={focus:'Отдых',details,intensity:'Z1'};
+  assert.equal(c.plannedTypeForDay(d),'rest');assert.equal(c.planCompletionWorkoutsForDay(d).length,0);
+  assert.equal(c.groupedActualWorkoutsForPlanDay(d)[0].kind,'additional');
+ }
+});
+test('rest-first optional easy run remains creditable; fatigued-run fallback works both orders',()=>{
+ const c=withActual([{...mondayRun,durationMin:35,distanceKm:6}]);
+ const optional={focus:'Отдых',details:'Полный отдых либо 30-40 минут очень легко в Z1.'};
+ assert.equal(c.plannedTypeForDay(optional),'rest');assert.equal(c.planCompletionWorkoutsForDay(optional).length,1);
+ assert.equal(c.evaluatePlanDayLoadAndType(optional).level,'matched');
+ for(const details of ['40 минут легкого бега в Z1 или полный отдых при усталости.', 'При выраженной усталости выбрать полный отдых. Иначе 40 минут легкого бега в Z1.']) {
+  assert.notEqual(c.planTypeFromAssignment(details),'rest');
+ }
+});
+test('a reference to prior rest does not erase a real conditional quality session',()=>{
+ const c=setup();
+ // This wording remains outside the fatigue-fallback rule; its primary text must not be erased.
+ assert.match(c.primaryPlannedStimulusText('Разминка 15 минут легкого бега. Если вчера был полный отдых, выполнить 5 x 1000 м.'),/5 x 1000/);
 });
