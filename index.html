@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png?v=20261012-runflow" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20261011-summary">
+    <link rel="stylesheet" href="styles.css?v=20261014-aerobic">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -178,30 +178,47 @@
           </div>
 
           <section id="fitnessTrend" class="fitness-panel" aria-labelledby="fitnessHeading">
-            <div class="panel-head"><div><h2 id="fitnessHeading">Динамика формы</h2><span id="fitnessScope"></span></div></div>
+            <div class="panel-head"><div><h2 id="fitnessHeading">Аэробная динамика</h2><span id="fitnessScope"></span></div></div>
             <div class="fitness-filters">
               <label>Период<select id="fitnessPeriod"><option value="8">8 недель</option><option value="12">12 недель</option></select></label>
               <label>Тип бега<select id="fitnessType"><option value="easy">Кросс</option><option value="recovery">Восстановительный</option><option value="long">Длительный</option></select></label>
               <label>Показатель<select id="fitnessMode"><option value="pace">Темп при близкой ЧСС</option><option value="hr">ЧСС при близком темпе</option></select></label>
-              <label class="fitness-reference">Опорная тренировка<select id="fitnessReference"><option value="">Нет данных</option></select></label>
             </div>
             <p id="fitnessStatus" class="fitness-status" role="status" aria-live="polite"></p>
             <div id="fitnessSummary" class="fitness-summary"></div>
             <p id="fitnessCriteria" class="fitness-note"></p>
-            <div id="fitnessLegend" class="fitness-legend" hidden><span class="before">Первая половина</span><span class="after">Вторая половина</span><span class="reference">Опора</span></div>
+            <details class="fitness-settings">
+              <summary>Критерии сравнения</summary>
+              <form id="fitnessSettings" class="fitness-settings-form">
+                <label>Покрытие<select id="fitnessSurface"><option value="unspecified">Не указано</option><option value="road">Шоссе</option><option value="track">Стадион</option><option value="treadmill">Беговая дорожка</option><option value="indoor">Помещение</option><option value="trail">Трейл</option></select></label>
+                <label>Длительность, мин (±20%)<input id="fitnessDuration" type="number" min="10" max="240" step="1" required></label>
+                <label id="fitnessHrLabel">ЧСС, уд/мин (±5)<input id="fitnessHr" type="number" min="60" max="220" step="1" required></label>
+                <label id="fitnessPaceLabel" hidden>Темп, мин/км (±3%)<input id="fitnessPace" type="text" inputmode="text" maxlength="5" aria-label="Темп в формате минуты:секунды"></label>
+                <div class="fitness-actions"><button type="submit" class="primary-btn">Применить</button><button type="button" class="ghost-btn" id="fitnessSuggest">Подобрать по истории</button></div>
+              </form>
+              <p class="fitness-note">При первом наличии данных ориентиры подбираются по истории и фиксируются. Новые импорты и смена периода их не меняют. Повторный подбор использует медианы первой половины последних 12 недель, а при менее 3 днях в ней — всю доступную выборку за 12 недель.</p>
+            </details>
+            <div id="fitnessLegend" class="fitness-legend" hidden><span class="observation">Тренировка</span><span class="weekly">Недельная медиана</span><span class="spread">Разброс 25–75%</span></div>
+            <p id="fitnessAxisTitle" class="fitness-note"></p>
             <div id="fitnessChart" class="fitness-chart"></div>
             <p id="fitnessPoint" class="fitness-point" aria-live="polite"></p>
+            <p id="fitnessFreshness" class="fitness-note"></p>
             <details class="fitness-evidence">
-              <summary id="fitnessEvidenceCount">Сопоставимые тренировки</summary>
-              <div id="fitnessTable" class="fitness-table"></div>
+              <summary id="fitnessEvidenceCount">Состав выборки</summary>
+              <h3>Включены</h3><div id="fitnessTable" class="fitness-table" tabindex="0" role="region" aria-label="Включенные тренировки"></div>
               <h3>Не вошли в сравнение</h3><ul id="fitnessExclusions"></ul>
+              <p class="fitness-note">Для каждой записи показана первая причина исключения. Тренировки вне периода и повторные записи с тем же ID не учитываются.</p>
+              <div id="fitnessExcludedTable" class="fitness-table" tabindex="0" role="region" aria-label="Исключенные тренировки"></div>
+              <h3>По неделям</h3><div id="fitnessWeeklyTable" class="fitness-table" tabindex="0" role="region" aria-label="Недельные показатели"></div>
+              <p class="fitness-note">* Неделя частично попадает в выбранный период или еще не завершена.</p>
             </details>
             <details class="fitness-method">
               <summary>Основания и ограничения</summary>
-              <p>Период разделен пополам. В каждой половине сравниваются медианы по дням: несколько пробежек за день имеют вес одного дня. Для вывода нужны минимум 3 сопоставимых дня в каждой половине и свежие данные за последние 14 дней.</p>
-              <p>Опорная тренировка по умолчанию — последняя подходящая. Допуски отбора: длительность ±20%, средняя ЧСС ±5 уд/мин или темп ±3%. Если медианы длительности или контрольного показателя двух половин различаются сильнее этих допусков, вывод не делается. Изменение до 2% по темпу или до 3 уд/мин отмечается как небольшое; это рабочие допуски сравнения, не статистическая значимость.</p>
-              <p>Средние показатели интервальных и темповых занятий не сопоставляются с ровным бегом. Используется сохраненный темп, пропуски не вычисляются из дистанции и времени. Классификация с низкой уверенностью исключается.</p>
-              <p>Маршрут, погода, рельеф, остановки и точность датчика не контролируются. Покрытие разделяется только по указанному виду спорта. Наблюдаемое изменение не доказывает рост или снижение формы и не меняет план автоматически.</p>
+              <p>Недельная медиана рассчитывается по дневным медианам: несколько пробежек в один день имеют вес одного дня. Линия соединяет только соседние недели с минимум 2 сопоставимыми днями в каждой. Пустые недели остаются разрывами; полый ромб — единственный день.</p>
+              <p>Полоса разброса показывает 25-й–75-й процентили дневных значений внутри недели при наличии минимум 3 дней. Это описательный разброс, не доверительный интервал и не оценка точности датчика.</p>
+              <p>Для сравнения двух половин периода нужны минимум 3 сопоставимых дня в каждой и свежие данные за последние 14 дней. Если медианы длительности или контрольного показателя различаются больше допуска, направление не оценивается. Изменение до 2% по темпу или 3 уд/мин по ЧСС считается небольшим. При большем изменении дополнительно учитывается медианное абсолютное отклонение внутри периодов. Это рабочие правила, не проверка статистической значимости.</p>
+              <p>Используются средние показатели всей тренировки, а не выделенного ровного участка. Интервальные и темповые занятия, смешанные работы и неуверенная классификация исключаются. Используется только импортированный темп: пропуски не вычисляются из дистанции и времени.</p>
+              <p>Покрытие определяется только по виду спорта. Маршрут, погода, рельеф, остановки и точность датчика не контролируются. Наблюдаемое изменение не доказывает рост или снижение общей формы и не меняет план автоматически.</p>
             </details>
           </section>
           <section class="panel week-comparison-panel">
@@ -1044,8 +1061,8 @@
     <script src="plan-structure.js?v=20260929-editor"></script>
     <script src="workout-comparison.js?v=20260930-credit"></script>
     <script src="plan-history.js?v=20261005-versions"></script>
-    <script src="fitness-trend.js?v=20261006-trend"></script>
-    <script src="fitness-trend-view.js?v=20261006-trend"></script>
+    <script src="fitness-trend.js?v=20261014-aerobic"></script>
+    <script src="fitness-trend-view.js?v=20261014-aerobic"></script>
     <script src="diagnostics.js?v=20261006-status"></script>
     <script src="app.js?v=20261014-repeat-options"></script>
   </body>
