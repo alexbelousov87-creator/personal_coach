@@ -202,3 +202,27 @@ test("confirmed structure retains partial-load warning instead of claiming match
  assert.equal(value.label,'нагрузка требует уточнения');
  assert.match(value.comment,/длительность части пауз/);
 });
+
+test('optional repetition range credits both boundaries, separates warmup strides and rejects outside counts',()=>{
+ const d={plannedWorkout:'Разминка 20 минут. Затем 4 x 15 секунд свободных ускорений, восстановление 60 секунд. Основная часть: 4-6 x 3 минуты в усилии 5 км, восстановление 150 секунд. Заминка 15 минут.',rationale:'Если состояние хорошее, выбирай верхнюю границу; при усталости нижнюю.'};
+ const parsed=C.parse(d);
+ assert.equal(parsed.supported,true);
+ assert.equal(parsed.count.from,4);assert.equal(parsed.count.to,6);
+ for(const count of [3,4,5,6,7]) {
+  const w=workout(count);
+  w.workoutStructure.segments.filter(s=>s.role==='work').forEach(s=>{s.durationSec=180;s.distanceM=900});
+  assert.equal(C.compare(d,[w]).coreMatches,count>=4&&count<=6,'count='+count);
+ }
+});
+
+test('distance repetition ranges and fixed prescriptions both remain supported',()=>{
+ const d={plannedWorkout:'Разминка 20 минут; затем 3-4 x 3 км, восстановление 150 секунд; заминка 15 минут.'};
+ assert.equal(C.parse(d).supported,true);
+ for(const count of [2,3,4,5]) {
+  const w=workout(count);
+  w.workoutStructure.segments.filter(s=>s.role==='work').forEach(s=>{s.distanceM=3000;s.durationSec=720});
+  assert.equal(C.compare(d,[w]).coreMatches,count>=3&&count<=4);
+ }
+ assert.equal(C.compare(prescription(),[workout(5)]).coreMatches,true);
+ assert.equal(C.compare(prescription(),[workout(4)]).coreMatches,false);
+});

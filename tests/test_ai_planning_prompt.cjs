@@ -102,3 +102,13 @@ test('contract requests full details only, optional plannedWorkout must not trun
   assert.equal(c.splitPlanAndActual(day).actual, '');
   assert.equal(c.splitPlanAndActual({details:'Old details',plannedWorkout:'Explicit legacy assignment'}).planned, 'Explicit legacy assignment');
 });
+
+test('repeat ranges are optional in copied and online prompts, with bounded volume and separate strides',()=>{
+ const c=setup(),request=c.buildAiRequest(),copied=c.buildAiPrompt();
+ for(const prompt of [request.system,copied]) {
+  for(const text of ['диапазон количества повторений допустим, но не обязателен','фиксированное количество или диапазон','4-6 x 3 минуты','3-4 x 3 км','12-18 минут','верхняя граница не обязательная цель','критерии выбора нижней и верхней границы помести в rationale','не включай в количество повторений и объем основной работы']) {
+   assert.ok(prompt.toLowerCase().includes(text.toLowerCase()),text);
+  }
+ }
+ assert.ok(request.context.workoutSpecificationRules.some(s=>s.includes('при необходимости диапазон N-M')));
+});

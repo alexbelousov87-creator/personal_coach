@@ -30,6 +30,18 @@ class PlanningPromptTests(unittest.TestCase):
         self.assertIn('"date": "2026-10-12"', prompt)
         self.assertNotIn("DO_NOT_SEND", prompt)
 
+    def test_repeat_ranges_are_optional_and_do_not_replace_safety_constraints(self):
+        prompt = server.build_user_prompt({"context": {}, "planningWeek": {}})
+        for text in (
+            "Диапазон количества повторений допустим, но не обязателен",
+            "фиксированное количество или диапазон", "4-6 x 3 минуты", "3-4 x 3 км",
+            "12-18 минут", "верхняя граница не обязательная цель",
+            "критерии выбора нижней и верхней границы помести в rationale",
+            "Проверь допустимость верхней границы по возрасту, уровню, восстановлению",
+            "не включай в количество повторений и объем основной работы",
+        ):
+            self.assertIn(text, prompt)
+
     def test_parser_preserves_new_summary_and_removes_model_facts(self):
         summary = {"weekGoal": "Goal", "phaseDecision": "Keep speed", "selectedStimuli": ["threshold"],
                    "loadDecision": "Maintain", "progressionDecision": "One parameter", "warnings": []}
