@@ -16,6 +16,7 @@ function setup() {
     plannedTypeForDay: d => d.type,
     planExpectsNoRun: d => !!d.noRun,
     plannedLoadScoreForDay: d => d.load,
+    plannedWorkoutSegments: d => d.segments || [],
     planTypeMatchesActual: (planned, actual) => planned === actual,
     plannedTypeLabelForDay: (d, t) => t,
     actualTypeLabel: t => t,
@@ -228,4 +229,15 @@ test("comparison rendering escapes all imported text", () => {
   const html = setup().renderPlanStructureComparison({ summary: "<img>", rows: [{ label: "<script>", planned: "<x>", actual: "<y>", matches: null }], notes: ["<svg>"] });
   assert.doesNotMatch(html, /<(img|script|svg)>/);
   assert.match(html, /&lt;img&gt;/);
+});
+
+test("unknown planned recovery prevents confident load grading but preserves type credit",()=>{
+ const c=setup(),actual=run({workoutTypeOverride:'interval',load:180});
+ const d=day('interval',[actual],80,{segments:[{duration:0,unknownDuration:true}]});
+ const result=c.evaluatePlanDayLoadAndType(d);
+ assert.equal(result.loadUncertain,true);
+ assert.equal(result.level,'uncertain');
+ assert.equal(result.keyCompleted,true);
+ assert.equal(result.label,'нагрузка требует уточнения');
+ assert.equal(c.evaluatePlanDayLoadAndType({...d,segments:[]}).level,'overloaded');
 });

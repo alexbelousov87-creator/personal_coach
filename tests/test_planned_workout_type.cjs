@@ -61,7 +61,7 @@ function withActual(actual) {
  const c=setup();c.actualWorkoutsForPlanDay=()=>actual;c.workoutDedupKey=w=>w.id;c.isRunningWorkout=w=>w.sport==='Running';
  c.getWorkoutType=w=>w.sport==='Running'?'easy':'cross';
  c.getWorkoutClassification=w=>({type:c.getWorkoutType(w),confidence:'medium',needsReview:false,canRejectOtherTypes:false});
- c.plannedLoadScoreForDay=()=>54;c.plannedTypeLabelForDay=(d,type)=>type;c.actualTypeLabel=type=>type;
+ c.plannedWorkoutSegments=()=>[];c.plannedLoadScoreForDay=()=>54;c.plannedTypeLabelForDay=(d,type)=>type;c.actualTypeLabel=type=>type;
  return c;
 }
 const mondayRun={id:'run',date:'2026-10-12T06:00:00Z',sport:'Running',durationMin:48,distanceKm:10.1,avgHr:139,load:60};

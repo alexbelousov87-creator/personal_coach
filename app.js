@@ -4042,12 +4042,16 @@ function planExecutionDetails(day, execution) {
     const segments = plannedWorkoutSegments(day);
     const rest = Number(state.profile.restHr) || 50, max = Number(state.profile.maxHr) || 185;
     if (segments.length >= 2 || PlanStructure.fromDay(day)) {
-      const labels = { warmup: "разминка", work: "работа", recovery: "восстановление", cooldown: "заминка", easy: "легкий бег" };
-      items.push(`Расчет по частям: ${segments.map(s => `${labels[s.kind] || "бег"} ${Math.round(s.duration * 10) / 10} мин при расчетной ЧСС ${Math.round(rest + (max - rest) * s.hrr)}`).join("; ")}.`);
+      items.push(`Расчет по частям: ${segments.map(segment => plannedSegmentDescription(segment, rest, max)).join("; ")}.`);
+      const extraEasy = PlanStructure.fromDay(day) ? 0 : Math.max(0, (plannedDurationFromDistance(day) || 0) - segments.reduce((sum, segment) => sum + segment.duration, 0));
+      if (extraEasy) items.push(`Дополнительно в ориентире TRIMP: около ${Math.round(extraEasy)} мин легкого бега по плановой дистанции и недавнему темпу. Это оценка, а не отдельное задание.`);
+      items.push("ЧСС в расчете — приблизительная оценка нагрузки, не целевой пульс каждого отрезка.");
+      if (segments.some(segment => segment.unknownDuration)) items.push("Длительность части пауз не указана: они не рассчитаны отдельно, ориентир TRIMP неполный.");
+      if (segments.some(segment => segment.approximate)) items.push("Для коротких ускорений нагрузка условно оценена по легкой части тренировки; постоянная высокая ЧСС им не назначается.");
     } else {
       items.push(`Расчетная ЧСС для ориентира: около ${Math.round(rest + (max - rest) * plannedHrReserveRatio(day))} уд/мин. Это оценка внутри заданных зон, не предписание держать точный пульс.`);
     }
-    items.push(`Допуск оценки: легче < ${Math.round(plannedLoad * 0.55)} TRIMP, тяжелее > ${Math.round(plannedLoad * 1.35)} TRIMP, сильно тяжелее > ${Math.round(plannedLoad * 1.7)} TRIMP.`);
+    if (!segments.some(segment => segment.unknownDuration)) items.push(`Допуск оценки: легче < ${Math.round(plannedLoad * 0.55)} TRIMP, тяжелее > ${Math.round(plannedLoad * 1.35)} TRIMP, сильно тяжелее > ${Math.round(plannedLoad * 1.7)} TRIMP.`);
   } else {
     items.push("Плановый TRIMP не рассчитан: в задании недостаточно данных о длительности, дистанции или интенсивности.");
   }
@@ -4427,6 +4431,13 @@ function evaluatePlanDayExecution(day) {
   } else if (execution.keyCompleted) {
     execution.keyCredit = "auto";
   }
+  if (execution.loadUncertain) {
+    if (execution.level === "matched") {
+      execution.level = "uncertain";
+      execution.label = "нагрузка требует уточнения";
+    }
+    if (!execution.comment.includes("длительность части пауз")) execution.comment += "; в плане не указана длительность части пауз, сравнение нагрузки приблизительное";
+  }
   return execution;
 }
 
@@ -4539,6 +4550,15 @@ function evaluatePlanDayLoadAndType(day) {
       level: typeUncertain ? "uncertain" : "mismatch",
       label: typeUncertain ? "тип требует уточнения" : "есть доп. нагрузка",
       comment: joinedComment(typeMismatchComment || `по плану ${plannedTypeLabelForDay(day, plannedType)}, по факту ${actualTypes.map(actualTypeLabel).join(", ")}`, "нагрузка учтена в TRIMP, но беговое задание не закрыто", loadComment),
+    };
+  }
+
+  if (plannedWorkoutSegments(day).some(segment => segment.unknownDuration)) {
+    return {
+      show: true, completed: true, keyCompleted, typeUncertain, loadUncertain: true,
+      level: typeMismatch ? "mismatch" : "uncertain",
+      label: typeMismatch ? "другой тип" : "нагрузка требует уточнения",
+      comment: joinedComment(typeMismatchComment, loadComment, "В плане не указана длительность части пауз; сравнение нагрузки приблизительное"),
     };
   }
 
@@ -4747,52 +4767,67 @@ function plannedWorkoutSegments(day) {
     const segmentDay = { focus: segment.kind === "work" ? day.focus : "Восстановление", intensity: segment.intensity, details: segment.intensity };
     return { ...segment, hrr: segment.kind === "work" ? plannedWorkHrReserveRatio(segmentDay) : plannedHrReserveRatio(segmentDay) };
   });
-  const rawText = `${day.title || ""} ${day.plannedWorkout || day.details || ""} ${day.intensity || ""}`.toLowerCase();
-  let text = rawText
-    .replace(/при признаках усталости[\s\S]*$/i, "")
-    .replace(/при усталости[\s\S]*$/i, "")
-    .replace(/каждые\s+\d{1,3}\s*[-–—]?\s*\d{0,3}\s*мин\w*/gi, "");
+  // Titles and intensity can repeat the prescription; parse volume from the assignment only.
+  const text = String(day.plannedWorkout || day.details || day.title || "").toLowerCase()
+    .replace(/(?:при признаках усталости|при усталости|если)[^.!?\n]*/gi, "")
+    .replace(/каждые\s+\d{1,3}\s*[-–—]?\s*\d{0,3}\s*мин[а-яё]*/gi, "");
   const segments = [];
-
-  const addSegment = (duration, hrr, kind) => {
-    if (!duration || duration <= 0 || !hrr) return;
-    segments.push({ duration, hrr, kind });
+  const addSegment = (duration, hrr, kind, offset, extra = {}) => {
+    if (duration < 0 || !hrr) return;
+    segments.push({ duration, hrr, kind, offset, ...extra });
   };
-
-  const addNamedDuration = (pattern, hrr, kind) => {
-    text.replace(pattern, (match, fromMinutes, toMinutes) => {
-      addSegment(averageRange(fromMinutes, toMinutes), hrr, kind);
-      return match;
-    });
+  const addNamedDuration = (pattern, kind) => {
+    for (const match of text.matchAll(pattern)) {
+      const tail = text.slice(match.index + match[0].length).split(/[.;!?\n+]|затем|далее/iu)[0];
+      const local = { details: tail, intensity: "" };
+      const hrr = kind === "warmup" ? plannedEasyHrReserveRatio(local) : plannedRecoveryHrReserveRatio(local);
+      addSegment(averageRange(match[1], match[2]), hrr, kind, match.index);
+    }
   };
+  addNamedDuration(/размин[а-яё]*\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*/gi, "warmup");
+  addNamedDuration(/(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*\s+размин[а-яё]*/gi, "warmup");
+  addNamedDuration(/замин[а-яё]*\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*/gi, "cooldown");
+  addNamedDuration(/(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*\s+замин[а-яё]*/gi, "cooldown");
 
-  addNamedDuration(/размин[а-яё]*\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*/gi, plannedEasyHrReserveRatio(day), "warmup");
-  addNamedDuration(/(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*\s+размин[а-яё]*/gi, plannedEasyHrReserveRatio(day), "warmup");
-  addNamedDuration(/замин[а-яё]*\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*/gi, plannedRecoveryHrReserveRatio(day), "cooldown");
-  addNamedDuration(/(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин[а-яё]*\s+замин[а-яё]*/gi, plannedRecoveryHrReserveRatio(day), "cooldown");
-
-  const repeatPattern = /(\d{1,2})(?:\s*[-–—]\s*(\d{1,2}))?\s*[xх×]\s*(\d{1,4}(?:[.,]\d+)?)(?:\s*[-–—]\s*(\d{1,4}(?:[.,]\d+)?))?\s*(мин\w*|сек\w*|с|м|метр\w*|км)/gi;
-  text.replace(repeatPattern, (match, fromRepeats, toRepeats, fromValue, toValue, unit, offset) => {
-    const repeats = averageRange(fromRepeats, toRepeats);
-    const value = averageRange(String(fromValue).replace(",", "."), toValue ? String(toValue).replace(",", ".") : toValue);
-    const workDuration = plannedRepeatWorkDuration(value, unit, repeats, day);
-    const workHrr = plannedWorkHrReserveRatio(day);
-
-    addSegment(workDuration, workHrr, "work");
-
-    const after = text.slice(offset + match.length, offset + match.length + 170);
-    const recoveryDuration = plannedRecoveryDurationAfterRepeat(after, repeats, day);
-    if (recoveryDuration) addSegment(recoveryDuration, plannedRecoveryHrReserveRatio(day), "recovery");
-    return match;
+  const repeatsFound = [...text.matchAll(/(\d{1,2})(?:\s*[-–—]\s*(\d{1,2}))?\s*[xх×]\s*(\d{1,4}(?:[.,]\d+)?)(?:\s*[-–—]\s*(\d{1,4}(?:[.,]\d+)?))?\s*(мин[а-яё]*|сек[а-яё]*|км|метр[а-яё]*|с|м)(?![а-яё])/gi)];
+  repeatsFound.forEach((match, index) => {
+    const repeats = averageRange(match[1], match[2]);
+    const value = averageRange(match[3].replace(",", "."), match[4]?.replace(",", "."));
+    // Never borrow recovery or intensity from the next repetition block or cooldown.
+    const after = text.slice(match.index + match[0].length, repeatsFound[index + 1]?.index ?? text.length)
+      .split(/замин[а-яё]*|основная часть|суммарн[а-яё]*|первый отрезок/iu)[0];
+    const effort = after.split(/восстанов[а-яё]*|через|пауза|паузы/iu)[0];
+    const previous = text.slice(0, match.index).split(/[.;!?\n+]|затем|далее|основная часть/iu).pop();
+    const localText = plannedStimulusText(`${previous} ${effort}`);
+    const strides = (match[5].startsWith("сек") || match[5] === "с") && value <= 30 && /ускор|strides|свободн|расслаблен/u.test(localText) && !/спринт|sprint/u.test(localText);
+    const localEffort = /\bz[1-5]\b|vo2|vo₂|порог|threshold|спринт|sprint|усили[а-яё]*\s+\d+\s*км|марафон/u.test(localText);
+    const workDay = localEffort ? { focus: "", intensity: effort, details: localText } : { ...day, title: "", details: localText, plannedWorkout: "" };
+    const duration = plannedRepeatWorkDuration(value, match[5], repeats, workDay);
+    addSegment(duration, strides ? plannedEasyHrReserveRatio(day) : plannedWorkHrReserveRatio(workDay), strides ? "strides" : "work", match.index,
+      { label: match[0], approximate: strides });
+    const recovery = plannedRecoveryDurationAfterRepeat(after, repeats, day);
+    const recoveryText = after.slice(Math.max(0, after.search(/восстанов|через|трусц|пауза|паузы/iu)));
+    if (recovery) addSegment(recovery, plannedRecoveryHrReserveRatio({ details: recoveryText }), "recovery", match.index + 0.5);
+    else if (repeats > 1) addSegment(0, plannedRecoveryHrReserveRatio({ details: recoveryText }), "recovery", match.index + 0.5,
+      { unknownDuration: true });
   });
 
+  segments.sort((a, b) => a.offset - b.offset);
   const explicitTotal = plannedTotalDurationMinutes(text);
   const totalFromParts = segments.reduce((sum, segment) => sum + segment.duration, 0);
   if (explicitTotal && totalFromParts && explicitTotal > totalFromParts) {
-    addSegment(explicitTotal - totalFromParts, plannedEasyHrReserveRatio(day), "easy");
+    segments.unshift({ duration: explicitTotal - totalFromParts, hrr: plannedEasyHrReserveRatio(day), kind: "easy" });
   }
+  return segments.map(({ offset, ...segment }) => segment);
+}
 
-  return segments;
+function plannedSegmentDescription(segment, rest, max) {
+  const labels = { warmup: "разминка", work: "работа", strides: "ускорения", recovery: "восстановление", cooldown: "заминка", easy: "легкий бег" };
+  if (segment.unknownDuration) return "восстановление: длительность не указана";
+  const minutes = Math.round(segment.duration * 100) / 100;
+  const volume = segment.label ? `${segment.label} (всего ${minutes} мин)` : `${minutes} мин`;
+  const hr = segment.approximate ? "; нагрузка оценена условно" : ` при расчетной ЧСС ${Math.round(rest + (max - rest) * segment.hrr)}`;
+  return `${labels[segment.kind] || "бег"} ${volume}${hr}`;
 }
 
 function plannedRepeatWorkDuration(value, unit, repeats, day) {
@@ -4808,21 +4843,30 @@ function plannedRepeatWorkDuration(value, unit, repeats, day) {
 }
 
 function plannedRecoveryDurationAfterRepeat(text, repeats, day) {
-  const nextRepeatIndex = text.search(/\d{1,2}(?:\s*[-–—]\s*\d{1,2})?\s*[xх×]\s*\d{1,4}/i);
-  const recoveryIndex = text.search(/(?:восстанов\w*|трусц\w*|через)/i);
-  if (nextRepeatIndex >= 0 && recoveryIndex > nextRepeatIndex) return 0;
+  const bounded = text.split(/\d{1,2}(?:\s*[-–—]\s*\d{1,2})?\s*[xх×]\s*\d|замин[а-яё]*|основная часть/iu)[0];
+  const marker = bounded.match(/(?:восстанов[а-яё]*|трусц[а-яё]*|через|пауз[а-яё]*)[^\d.;!?\n]{0,60}/iu);
+  if (!marker) return 0;
+  const measure = bounded.slice(marker.index + marker[0].length);
+  const time = plannedRecoveryTimeMinutes(measure);
+  if (time !== null) return Math.max(0, repeats - 1) * time;
+  const distance = measure.match(/^(\d+(?:[.,]\d+)?)(?:\s*[-–—]\s*(\d+(?:[.,]\d+)?))?\s*(км|метр[а-яё]*|м)(?![а-яё])/iu);
+  if (!distance) return 0;
+  const km = averageRange(distance[1].replace(",", "."), distance[2]?.replace(",", ".")) / (distance[3] === "км" ? 1 : 1000);
+  return Math.max(0, repeats - 1) * km * (recentReliablePace() || 5) * 1.15;
+}
 
-  const minuteMatch = text.match(/(?:восстанов\w*|трусц\w*|через)\D{0,35}(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин\w*/i);
-  if (minuteMatch) return Math.max(0, repeats - 1) * averageRange(minuteMatch[1], minuteMatch[2]);
-
-  const distanceMatch = text.match(/(?:восстанов\w*|трусц\w*|через)\D{0,35}(\d{2,4})(?:\s*[-–—]\s*(\d{2,4}))?\s*м/i);
-  if (distanceMatch) {
-    const meters = averageRange(distanceMatch[1], distanceMatch[2]);
-    const easyPace = (recentReliablePace() || 5) * 1.15;
-    return Math.max(0, repeats - 1) * (meters / 1000) * easyPace;
-  }
-
-  return 0;
+function plannedRecoveryTimeMinutes(text) {
+  const point = "(?:\\d{1,3}:[0-5]\\d|\\d+(?:[.,]\\d+)?\\s*мин[а-яё]*(?:\\s*\\d+(?:[.,]\\d+)?\\s*(?:сек[а-яё]*|с)(?![а-яё]))?|\\d+(?:[.,]\\d+)?\\s*(?:сек[а-яё]*|с)(?![а-яё]))";
+  const match = String(text).match(new RegExp(`^(${point})(?:\\s*[-–—]\\s*(${point}))?`, "iu"));
+  const parse = value => {
+    if (value.includes(":")) { const [m,s] = value.split(":").map(Number); return m + s / 60; }
+    const minutes = value.match(/(\d+(?:[.,]\d+)?)\s*мин/iu);
+    const seconds = value.match(/(\d+(?:[.,]\d+)?)\s*(?:сек[а-яё]*|с)(?![а-яё])/iu);
+    return (minutes ? Number(minutes[1].replace(",", ".")) : 0) + (seconds ? Number(seconds[1].replace(",", ".")) / 60 : 0);
+  };
+  if (match) return (parse(match[1]) + parse(match[2] || match[1])) / 2;
+  const range = String(text).match(/^(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*(мин[а-яё]*|сек[а-яё]*|с)(?![а-яё])/iu);
+  return range ? averageRange(range[1].replace(",", "."), range[2].replace(",", ".")) / (range[3].startsWith("мин") ? 1 : 60) : null;
 }
 
 function plannedPersonalHrReserveRatio(ratio) {
@@ -4868,7 +4912,7 @@ function plannedRecoveryHrReserveRatio(day) {
 function plannedWorkHrReserveRatio(day) {
   const zone = plannedZoneHrReserveRatio(day.intensity);
   if (zone !== null) return zone;
-  const text = planDayComparableText(day);
+  const text = plannedStimulusText(planDayComparableText(day)).replace(/усили[еяи]\s+/gu, "усилие ");
   if (matchesAny(text, ["спринт", "sprint"])) return plannedPersonalHrReserveRatio(0.92);
   if (matchesAny(text, ["усилие 1 км", "усилие 1-3 км", "1-3 км", "1км", "1 km", "1k"])) return plannedPersonalHrReserveRatio(0.92);
   if (matchesAny(text, ["vo2", "vo₂", "z5", "усилие 3-5 км", "усилие 3 км", "3км", "3 km", "3k", "усилие 5 км", "5км", "5 km", "5k"])) return plannedPersonalHrReserveRatio(0.9);
@@ -4881,7 +4925,7 @@ function plannedWorkHrReserveRatio(day) {
 }
 
 function plannedFastPaceFactor(day) {
-  const text = planDayComparableText(day);
+  const text = plannedStimulusText(planDayComparableText(day)).replace(/усили[еяи]\s+/gu, "усилие ");
   if (matchesAny(text, ["спринт", "sprint"])) return 0.65;
   if (matchesAny(text, ["усилие 1 км", "усилие 1-3 км", "1-3 км", "1км", "1 km", "1k"])) return 0.68;
   if (matchesAny(text, ["vo2", "vo₂", "усилие 3-5 км", "усилие 3 км", "3км", "3 km", "3k", "усилие 5 км", "5км", "5 km", "5k"])) return 0.78;
@@ -4894,6 +4938,10 @@ function plannedFastPaceFactor(day) {
 function plannedDurationMinutes(day) {
   const structured = PlanStructure.segments(day, recentReliablePace() || 5, plannedFastPaceFactor({ ...day, title: "", details: "", plannedWorkout: "" }));
   if (structured) return structured.reduce((sum, segment) => sum + segment.duration, 0);
+  const segments = plannedWorkoutSegments(day);
+  if (segments.some(segment => segment.kind === "work" || segment.kind === "strides")) {
+    return Math.round(segments.reduce((sum, segment) => sum + segment.duration, 0));
+  }
   let text = `${day.title || ""} ${day.plannedWorkout || day.details || ""}`.toLowerCase();
   text = text
     .replace(/при признаках усталости[\s\S]*$/i, "")
@@ -4975,7 +5023,7 @@ function plannedHrReserveRatio(day) {
   const zone = plannedZoneHrReserveRatio(intensity)
     ?? plannedZoneHrReserveRatio(day.plannedWorkout || day.details);
   if (zone !== null) return zone;
-  const text = `${day.focus || ""} ${day.title || ""} ${day.plannedWorkout || day.details || ""} ${intensity}`.toLowerCase();
+  const text = plannedStimulusText(`${day.focus || ""} ${day.title || ""} ${day.plannedWorkout || day.details || ""} ${intensity}`);
   const type = plannedTypeForDay(day);
 
   if (matchesAny(text, ["z5", "vo2", "интервал"])) return plannedPersonalHrReserveRatio(0.9);

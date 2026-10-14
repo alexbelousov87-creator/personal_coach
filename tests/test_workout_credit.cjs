@@ -193,3 +193,12 @@ test("changing weeks still renders the selected plan after saving state",()=>{
   assert.equal(context.state.selectedWeekStart,"2026-10-05");
   assert.deepEqual(calls,["local","backend","render","plan"]);
 });
+
+
+test("confirmed structure retains partial-load warning instead of claiming matched load",()=>{
+ const value=evaluation(prescription(),[workout()],{loadUncertain:true,label:'нагрузка требует уточнения'});
+ assert.equal(value.keyCompleted,true);
+ assert.equal(value.level,'uncertain');
+ assert.equal(value.label,'нагрузка требует уточнения');
+ assert.match(value.comment,/длительность части пауз/);
+});

@@ -4,7 +4,7 @@ function setup(profile={maxHr:201,restHr:45,hrZoneMode:'custom',hrZoneBoundaries
  const c=vm.createContext({state:{profile},PlanStructure:require('../plan-structure.js'),
  matchesAny:(t,p)=>p.some(s=>t.includes(s)),clamp:(v,a,b)=>Math.max(a,Math.min(b,v)),recentReliablePace:()=>4.7,
  plannedTypeForDay:d=>({'Темпо':'tempo','Длительная':'long','Кросс':'easy','Отдых':'rest'})[d.focus]||'easy'});
- const names=['planDayComparableText','plannedLoadScoreForDay','plannedSegmentedLoadScore','plannedWorkoutSegments','plannedRepeatWorkDuration','plannedRecoveryDurationAfterRepeat','plannedEasyHrReserveRatio','plannedRecoveryHrReserveRatio','plannedWorkHrReserveRatio','plannedFastPaceFactor','plannedDurationMinutes','plannedTotalDurationMinutes','plannedDurationFromDistance','plannedDistanceKm','plannedHrReserveRatio','averageRange','estimateTrimpFromHrr','effectiveHrZoneBoundaries','defaultHrZoneBoundaries','normalizeCustomHrZoneBoundaries','plannedPersonalHrReserveRatio','plannedZoneHrReserveRatio'];
+ const names=['planDayComparableText','plannedLoadScoreForDay','plannedSegmentedLoadScore','plannedWorkoutSegments','plannedSegmentDescription','plannedRepeatWorkDuration','plannedRecoveryDurationAfterRepeat','plannedRecoveryTimeMinutes','plannedStimulusText','plannedEasyHrReserveRatio','plannedRecoveryHrReserveRatio','plannedWorkHrReserveRatio','plannedFastPaceFactor','plannedDurationMinutes','plannedTotalDurationMinutes','plannedDurationFromDistance','plannedDistanceKm','plannedHrReserveRatio','averageRange','estimateTrimpFromHrr','effectiveHrZoneBoundaries','defaultHrZoneBoundaries','normalizeCustomHrZoneBoundaries','plannedPersonalHrReserveRatio','plannedZoneHrReserveRatio'];
  for (const name of names) { const start=source.indexOf('function '+name+'('),end=source.indexOf('\nfunction ',start+1);assert.ok(start>=0,name);vm.runInContext(source.slice(start,end<0?undefined:end),c); }
  return c;
 }
@@ -82,4 +82,78 @@ test('easy run with strides retains zone range for the main easy duration',()=>{
 });
 test('nonnumeric zone label and multi-digit Z10 are not treated as Z1',()=>{
  const c=setup();assert.equal(c.plannedZoneHrReserveRatio('Z10'),null);assert.equal(c.plannedZoneHrReserveRatio('RPE 2-3'),null);
+});
+
+test('October 14: strides, bounded recoveries, compound times and chronological order',()=>{
+ const c=setup();
+ const d={focus:'VO2max',title:'4 × 3 минуты высокой аэробной мощности',intensity:'Высокая аэробная мощность, RPE 8–9/10; ЧСС вторична',details:'Разминка 20 минут легкого бега в Z1–Z2. Затем 4 × 15 секунд свободных ускорений с полным восстановлением. Основная часть: 4 × 3 минуты высокой аэробной интенсивности, RPE 8–9/10, восстановление между повторениями 2 минуты 30 секунд — 3 минуты очень легкой трусцы. Суммарный качественный объем — 12 минут. Первый отрезок выполнять контролируемо, без спринта. Если третий отрезок требует предельного усилия, закончить после трех повторений. Заминка 15 минут легко.'};
+ const snapshot=JSON.stringify(d),parts=c.plannedWorkoutSegments(d);
+ assert.deepEqual(Array.from(parts,s=>s.kind),['warmup','strides','recovery','work','recovery','cooldown']);
+ assert.deepEqual(Array.from(parts,s=>s.duration),[20,1,0,12,8.25,15]);
+ assert.equal(parts[2].unknownDuration,true);
+ assert.equal(parts[1].approximate,true);
+ near(parts[3].hrr,c.plannedPersonalHrReserveRatio(.9));
+ assert.ok(bpm(c,parts[3].hrr)<192);
+ assert.ok(bpm(c,parts[4].hrr)<152);
+ assert.equal(JSON.stringify(d),snapshot);
+ const rendered=parts.map(s=>c.plannedSegmentDescription(s,45,201)).join('; ');
+ assert.ok(rendered.includes('4 × 15 секунд (всего 1 мин)'));
+ assert.ok(rendered.includes('длительность не указана'));
+ assert.ok(!c.plannedSegmentDescription(parts[1],45,201).includes('ЧСС'));
+ assert.ok(rendered.includes('8.25 мин'));
+});
+
+test('recovery measures include compound, clock, second and distance ranges',()=>{
+ const c=setup();
+ for(const [text,minutes] of [['2 минуты 30 секунд — 3 минуты',2.75],['2:30–3:00',2.75],['2:30',2.5],['2-3 минуты',2.5],['75–90 секунд',1.375],['90 с',1.5],['1,5 минуты',1.5],['2 минуты 30 секунд',2.5]]) {
+ near(c.plannedRecoveryDurationAfterRepeat('восстановление между повторениями '+text+' трусцой',4,{}),minutes*3);
+ }
+ near(c.plannedRecoveryDurationAfterRepeat('через 400 м трусцы',4,{}),3*.4*4.7*1.15);
+ near(c.plannedRecoveryDurationAfterRepeat('через 0,4 км трусцы',4,{}),3*.4*4.7*1.15);
+ assert.equal(c.plannedRecoveryDurationAfterRepeat('с полным восстановлением. Затем 4 x 3 минуты, восстановление 2 минуты',4,{}),0);
+ assert.equal(c.plannedRecoveryDurationAfterRepeat('полное восстановление. Заминка 15 минут',4,{}),0);
+});
+
+test('negated sprint does not raise work HR or distance speed factor',()=>{
+ const c=setup(),base={focus:'VO2max',intensity:'RPE 8-9/10'};
+ for(const details of ['Без спринта.','Не спринт.','Не как спринт.']) {
+ near(c.plannedWorkHrReserveRatio({...base,details}),c.plannedPersonalHrReserveRatio(.9));
+ near(c.plannedFastPaceFactor({...base,details}),.78);
+ }
+ near(c.plannedWorkHrReserveRatio({details:'Спринт'}),c.plannedPersonalHrReserveRatio(.92));
+ near(c.plannedFastPaceFactor({details:'Спринт'}),.65);
+});
+
+test('separate work blocks retain their own zones and recoveries',()=>{
+ const c=setup();
+ const parts=c.plannedWorkoutSegments({focus:'VO2max',intensity:'Z5',details:'Разминка 15 минут в Z1. Затем 3 x 8 минут в Z4, восстановление 2 минуты. Затем 4 x 1 минуту в Z5, восстановление 90 секунд. Заминка 10 минут в Z1.'});
+ const work=parts.filter(s=>s.kind==='work'),recovery=parts.filter(s=>s.kind==='recovery');
+ near(work[0].hrr,c.plannedPersonalHrReserveRatio(.84));
+ near(work[1].hrr,c.plannedPersonalHrReserveRatio(.9));
+ assert.deepEqual(Array.from(recovery,s=>s.duration),[4,4.5]);
+});
+
+test('fatigue alternative does not erase cooldown or add backup repetitions',()=>{
+ const c=setup();
+ const parts=c.plannedWorkoutSegments({intensity:'Z4',details:'Разминка 15 минут. 3 x 8 минут, восстановление 2 минуты. При усталости 2 x 8 минут. Заминка 10 минут.'});
+ assert.deepEqual(Array.from(parts,s=>s.duration),[15,24,4,10]);
+});
+
+test('total duration reuses blocks instead of title and descriptive totals',()=>{
+ const c=setup(),d={title:'4 x 3 минуты',intensity:'Z5',details:'Разминка 20 минут в Z1-Z2; затем 4 x 3 минуты, восстановление 2:30-3:00. Всего качественной работы 12 минут. Заминка 15 минут.'};
+ assert.equal(c.plannedWorkoutSegments(d).filter(s=>s.kind==='work').length,1);
+ assert.equal(c.plannedDurationMinutes(d),55);
+});
+
+test('warmup zone does not leak into following work in the same sentence',()=>{
+ const c=setup(),d={focus:'VO2max',intensity:'RPE 8-9/10',details:'Разминка 20 минут в Z1-Z2 затем 4 x 3 минуты быстро, восстановление 3 минуты. Заминка 15 минут.'};
+ near(c.plannedWorkoutSegments(d).find(s=>s.kind==='work').hrr,c.plannedPersonalHrReserveRatio(.9));
+});
+
+test('local threshold and race effort override general VO2max focus',()=>{
+ const c=setup();
+ const parts=c.plannedWorkoutSegments({focus:'VO2max',intensity:'RPE 8-9',details:'3 x 8 минут порогового бега, восстановление 2 минуты. Затем 5 x 1000 м в усилии 10 км, восстановление 400 м.'});
+ const work=parts.filter(s=>s.kind==='work');
+ near(work[0].hrr,c.plannedPersonalHrReserveRatio(.84));
+ near(work[1].hrr,c.plannedPersonalHrReserveRatio(.86));
 });
