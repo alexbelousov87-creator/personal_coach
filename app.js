@@ -6595,14 +6595,7 @@ function normalizedPlanTitle(day, fallbackDay, focus, details) {
 }
 
 function plannedStimulusText(value) {
-  let text = String(value || "").toLowerCase();
-  const modifier = "(?:(?:вчерашн|сегодняшн|завтрашн|предыдущ|прошл|следующ|понедельничн|вторничн|средов|четвергов|пятничн|субботн|воскресн|тяжел|тяжёл|интенсивн)[а-яё]*\\s+){0,3}";
-  const session = "(?:порог[а-яё]*|темпов[а-яё]*|интервал[а-яё]*|длитель[а-яё]*|гонк[а-яё]*|старт[а-яё]*|vo2max|vo₂max|threshold)";
-  // References to another session are context, not today's prescribed stimulus.
-  text = text.replace(new RegExp(`(?:после|перед|накануне|вслед за)\\s+${modifier}${session}(?:\\s+(?:работ|тренировк|бег)[а-яё]*)?`, "gu"), " ");
-  const excludedStimulus = /^(?:без|не(?:\s+как)?)\s+(?:перехода\s+в\s+)?(?:(?:дополнительн|полноценн|тяжел|тяжёл|коротк|быстр|прогрессивн)[а-яё]*\s+){0,3}(?:темп|порог|интервал|ускор|прогрес|горок|гонк|спринт|максимальн|strides|vo2|vo₂|threshold|sprint|попытки\s+сразу\s+достичь)/u;
-  return text.replace(/(?:без|не(?:\s+как)?)\s+[^.;!?\n]*?(?=[.;!?\n]|,\s*(?:затем|далее|но|а\s|в\s+конце)|\s+(?:затем|далее)\s|$)/gu,
-    fragment => excludedStimulus.test(fragment) ? " " : fragment);
+  return PlanStructure.stimulusText(value);
 }
 
 function planTypeFromFocus(value) {
@@ -6637,8 +6630,9 @@ function planTypeFromAssignment(value) {
   if (assignmentHasTempoStructure(text)) return "tempo";
   if (assignmentHasIntervalStructure(text)) return "interval";
   if (matchesAny(text, ["длитель", "long"])) return "long";
-  if (matchesAny(text, ["офп", "мобилити", "силов", "координац", "баланс"])) return "cross";
-  if (assignmentHasEasyRunVolume(text)) return "easy";
+  const runningText = PlanStructure.primaryRunText(text);
+  if (matchesAny(text, ["офп", "мобилити", "силов", "координац", "баланс"]) && !runningText) return "cross";
+  if (assignmentHasEasyRunVolume(runningText || text)) return "easy";
   if (matchesAny(text, ["восстановительный бег", "очень легко", "z1"])) return "recovery";
   if (matchesAny(text, ["легк", "легкого бега", "z1-z2", "z2", "разговорн", "аэроб"])) return "easy";
   return "";

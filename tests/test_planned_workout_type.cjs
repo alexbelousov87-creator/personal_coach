@@ -5,7 +5,7 @@ function setup() {
   PlanStructure:require('../plan-structure.js'),WorkoutComparison:require('../workout-comparison.js'),
   selectedWeekStartDate:()=>new Date('2026-10-12T07:00:00Z'),addDays:(d,n)=>new Date(d.getTime()+n*86400000)});
  const names=['plannedStimulusText','primaryPlannedStimulusText','planTypeFromFocus','planTypeFromAssignment','assignmentHasTempoStructure','assignmentHasIntervalStructure','assignmentHasEasyRunVolume','plannedTypeForDay','plannedIntensityTone',
- 'normalizedPlanFocus','normalizedPlanTitle','defaultTitleForPlannedType','focusForPlannedType','titleMentionsRun','titleMentionsStrides','assignmentHasNoRun','assignmentForbidsStrides','splitPlanAndActual','normalizePlanDay','structuredPlanFocus','groupedActualWorkoutsForPlanDay','planCompletionWorkoutsForDay','planExpectsNoRun','planTypeRequiresRunning','plannedTypeAllowsOptionalEasyRun','planDayComparableText','evaluatePlanDayLoadAndType','planTypeMatchesActual','actualMatchesPlannedEnvelope','plannedDurationBounds','plannedDistanceBounds','valueWithinRange'];
+ 'normalizedPlanFocus','normalizedPlanTitle','defaultTitleForPlannedType','focusForPlannedType','titleMentionsRun','titleMentionsStrides','assignmentHasNoRun','assignmentForbidsStrides','splitPlanAndActual','normalizePlanDay','structuredPlanFocus','groupedActualWorkoutsForPlanDay','planCompletionWorkoutsForDay','planExpectsNoRun','planTypeRequiresRunning','plannedTypeAllowsOptionalEasyRun','planDayComparableText','evaluatePlanDayLoadAndType','evaluatePlanDayExecution','planTypeMatchesActual','actualMatchesPlannedEnvelope','plannedDurationBounds','plannedDistanceBounds','valueWithinRange'];
  for(const name of names) {const start=source.indexOf('function '+name+'('),end=source.indexOf('\nfunction ',start+1);assert.ok(start>=0,name);vm.runInContext(source.slice(start,end<0?undefined:end),c);}
  return c;
 }
@@ -111,4 +111,41 @@ test('a reference to prior rest does not erase a real conditional quality sessio
  const c=setup();
  // This wording remains outside the fatigue-fallback rule; its primary text must not be erased.
  assert.match(c.primaryPlannedStimulusText('Разминка 15 минут легкого бега. Если вчера был полный отдых, выполнить 5 x 1000 м.'),/5 x 1000/);
+});
+const thursday={date:'2026-10-15T07:00:00.000Z',focus:'восстановительный бег',title:'Восстановительный кросс после интервалов',
+ details:'40–50 минут очень спокойного бега преимущественно в Z1, RPE 1–2/10. Темп не форсировать. Без strides, горок, темповых вставок и прогрессивного финиша. Допустимы 10–15 минут легкой мобилити без силового утомления. При выраженной остаточной усталости уменьшить продолжительность.',
+ targetDistance:'8–10 км',intensity:'Преимущественно Z1, RPE 1–2/10'};
+test('October 15 supplementary mobility does not replace the prescribed recovery run',()=>{
+ const c=withActual([{...mondayRun,durationMin:57,distanceKm:12.06,load:89}]);
+ c.plannedLoadScoreForDay=()=>78;
+ const original=JSON.stringify(thursday),d=c.normalizePlanDay(thursday,thursday,3);
+ assert.equal(c.plannedTypeForDay(d),'recovery');
+ assert.equal(c.evaluatePlanDayLoadAndType(d).typeUncertain,undefined);
+ assert.equal(c.evaluatePlanDayLoadAndType(d).level,'matched');
+ assert.equal(c.planCompletionWorkoutsForDay(d).length,1);
+ assert.equal(JSON.stringify(thursday),original);
+ const structure=c.WorkoutComparison.compare(d,[{id:'run',durationMin:57,distanceKm:12.06}]);
+ assert.equal(structure.mode,'easy');assert.equal(structure.status,'different');
+ assert.equal(structure.rows[0].matches,false);assert.equal(structure.rows[1].matches,false);
+ const execution=c.evaluatePlanDayExecution(d);
+ assert.equal(execution.level,'structure');assert.equal(execution.structureUncertain,false);
+ assert.equal(execution.structureDifferent,true);assert.ok(!execution.typeUncertain);
+});
+test('easy running plus supplementary strength is not a strength-only day',()=>{
+ const c=setup();
+ for(const extra of ['Допустимы 10 минут мобилити.', 'Дополнительно 15 минут ОФП.', 'После бега упражнения на баланс.', 'Затем легкая силовая работа.']) {
+  assert.equal(c.planTypeFromAssignment('50-60 минут легко в Z2. '+extra),'easy',extra);
+ }
+ assert.equal(c.planTypeFromAssignment('Легкий бег 50 минут; дополнительно ОФП.'),'easy');
+});
+test('standalone strength and strength with a running warmup remain cross-training',()=>{
+ const c=setup();
+ for(const text of ['ОФП 40 минут, легко в Z1.', '20 минут легкой мобилити.', 'Силовая 40 минут. Разминка 10 минут легкого бега.', 'Разминка 10 минут легкого бега; затем силовая 30 минут.']) {
+  assert.equal(c.planTypeFromAssignment(text),'cross',text);
+ }
+});
+test('real threshold and interval prescriptions still outrank additional mobility',()=>{
+ const c=setup();
+ assert.equal(c.planTypeFromAssignment('Разминка 15 минут. Затем 5 x 1000 м; восстановление 2 минуты. Дополнительно мобилити.'),'interval');
+ assert.equal(c.planTypeFromAssignment('3 x 10 минут порог; пауза 2 минуты. Затем ОФП.'),'tempo');
 });

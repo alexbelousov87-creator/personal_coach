@@ -3,6 +3,28 @@
   const units = { min: ["duration", 60, "мин"], sec: ["duration", 1, "с"], m: ["distance", 1, "м"], km: ["distance", 1000, "км"] };
   const clean = value => String(value || "").trim();
   const rounded = value => Math.round(value * 1000) / 1000;
+  function stimulusText(value) {
+    let text = String(value || "").toLowerCase();
+    const modifier = "(?:(?:вчерашн|сегодняшн|завтрашн|предыдущ|прошл|следующ|понедельничн|вторничн|средов|четвергов|пятничн|субботн|воскресн|тяжел|тяжёл|интенсивн)[а-яё]*\\s+){0,3}";
+    const session = "(?:порог[а-яё]*|темпов[а-яё]*|интервал[а-яё]*|длитель[а-яё]*|гонк[а-яё]*|старт[а-яё]*|vo2max|vo₂max|threshold)";
+    // References to another session are context, not today's prescribed stimulus.
+    text = text.replace(new RegExp(`(?:после|перед|накануне|вслед за)\\s+${modifier}${session}(?:\\s+(?:работ|тренировк|бег)[а-яё]*)?`, "gu"), " ");
+    const excludedStimulus = /^(?:без|не(?:\s+как)?)\s+(?:перехода\s+в\s+)?(?:(?:дополнительн|полноценн|тяжел|тяжёл|коротк|быстр|прогрессивн)[а-яё]*\s+){0,3}(?:темп|порог|интервал|ускор|прогрес|горок|гонк|спринт|максимальн|strides|vo2|vo₂|threshold|sprint|попытки\s+сразу\s+достичь)/u;
+    return text.replace(/(?:без|не(?:\s+как)?)\s+[^.;!?\n]*?(?=[.;!?\n]|,\s*(?:затем|далее|но|а\s|в\s+конце|\d+\s*(?:мин|км))|\s+(?:затем|далее)\s|$)/gu,
+      fragment => excludedStimulus.test(fragment) ? " " : fragment);
+  }
+  // Only a prescribed run, not a strength session's warmup, can take precedence over supplementary mobility.
+  function primaryRunText(value) {
+    const text = stimulusText(value).replace(/ё/g, "е");
+    const volume = "\\d+(?:[.,]\\d+)?(?:\\s*[-–—]\\s*\\d+(?:[.,]\\d+)?)?\\s*(?:мин[а-я]*|км)(?![а-я])";
+    const running = "(?:(?:очень|преимущественно)\\s+)*(?:легко(?![а-я])|спокойно(?![а-я])|(?:легк|спокойн|восстановительн)[а-я]*\\s+бег[а-я]*|бег[а-я]*|в\\s+z[12])";
+    const pattern = new RegExp(`${volume}\\s+${running}|(?:легк|спокойн|восстановительн)[а-я]*\\s+бег[а-я]*\\s*[: -]?\\s*${volume}`, "gu");
+    for (const match of text.matchAll(pattern)) {
+      const preceding = text.slice(0,match.index);
+      if (!/размин|замин|офп|мобилити|силов|координац|баланс|без бег|бег[^.;!?]*запрещ/u.test(preceding)) return text.slice(match.index).split(/[;!?\n]|\.(?!\d)/u)[0];
+    }
+    return "";
+  }
   function range(value, unit) {
     const match = clean(value).replace(/,/g, ".").replace(/[–—−]/g, "-").match(/^(\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?$/);
     if (!match || !units[unit]) throw new Error("Укажите положительное число или диапазон, например 15-20.");
@@ -89,7 +111,7 @@
     add(s.cooldown, "cooldown", 1, 1.15);
     return result;
   }
-  const api = { range, normalize, format, inputMeasure, fromDay, prescription, segments };
+  const api = { stimulusText, primaryRunText, range, normalize, format, inputMeasure, fromDay, prescription, segments };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.PlanStructure = api;
 })(globalThis);

@@ -26,7 +26,7 @@
   function parse(day = {}) {
     const explicit = structureApi?.prescription(day);
     if (explicit) return explicit;
-    let text = String(day.plannedWorkout || day.details || "").toLowerCase().replace(/[–—−]/g, "-").replace(/ё/g, "е");
+    let text = structureApi.stimulusText(day.plannedWorkout || day.details || "").replace(/[–—−]/g, "-").replace(/ё/g, "е");
     const conditional = text.search(/[.;]\s*при (?:усталости|признаках усталости)(?=\s|[,:.-]|$)/i);
     // A conditional fallback does not invalidate a fully completed primary prescription.
     const conditionalAlternative = conditional >= 0;
@@ -53,7 +53,7 @@
       const work = measure(continuous);
       if (work) { main = { count: { from: 1, to: 1, basis: "count" }, work, end: continuous.index + continuous[0].length }; mode = "tempo"; }
     }
-    if (!main && !quality && !/strides|ускорени|[xх×]/.test(text.replace(/без ускорени[а-я]*/g, "")) && /легк|кросс|длител|z[12]|спокойн/.test(text)) {
+    if (!main && !quality && !/strides|ускорени|\d\s*[xх×]\s*\d/.test(text) && /легк|кросс|длител|z[12]|спокойн/.test(text)) {
       const work = measure(text.match(new RegExp(`^\\s*${measurePattern}`, "i")));
       if (work) { main = { work }; mode = "easy"; }
     }

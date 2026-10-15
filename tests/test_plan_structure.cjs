@@ -157,3 +157,26 @@ test("equal recovery counts do not hide missing recovery between a pair of repea
   [segments[2], segments[3]] = [segments[3], segments[2]];
   assert.equal(compare(day(base), [w]).coreMatches, null);
 });
+test("negative stimulus lists do not create a quality session or ambiguous structure",()=>{
+ for(const prohibition of ['Без strides, горок, темповых вставок и прогрессивного финиша.', 'Без прогрессии, темповых блоков и быстрого финиша.', 'Без интервалов и порога.', 'Без ускорений, не спринт.']) {
+  const d=day('40–50 минут очень спокойного бега в Z1. '+prohibition+' Допустимы 10–15 минут мобилити.',{targetDistance:'8–10 км'});
+  const p=parse(d);assert.equal(p.supported,true,prohibition);assert.equal(p.mode,'easy');
+  assert.deepEqual(p.work,{basis:'duration',from:2400,to:3000});
+  assert.equal(compare(d,[{id:'run',durationMin:45,distanceKm:9}]).status,'matched');
+  assert.equal(compare(d,[{id:'run',durationMin:57,distanceKm:12.06}]).status,'different');
+ }
+});
+test("negations do not erase explicitly prescribed quality after a separator",()=>{
+ for(const connector of ['; затем ', ', затем ', '. Затем ']) {
+  const p=parse(day('Без ускорений'+connector+'5 x 1000 м в усилии 10 км; восстановление 2 минуты.'));
+  assert.equal(p.supported,true);assert.equal(p.mode,'repeats');assert.equal(p.count.from,5);
+ }
+ assert.equal(parse(day('Без спринта, 20 минут порога.')).mode,'tempo');
+});
+test("another-day interval reference is not today's quality structure",()=>{
+ const p=parse(day('50 минут легкого бега после вчерашних интервалов. Без ускорений.'));
+ assert.equal(p.supported,true);assert.equal(p.mode,'easy');
+});
+test("optional workout alternatives remain explicitly uncertain",()=>{
+ assert.equal(parse(day('5 x 1000 м или 8 x 400 м; восстановление 2 минуты.')).supported,false);
+});
