@@ -6,12 +6,17 @@
   function stimulusText(value) {
     let text = String(value || "").toLowerCase();
     const modifier = "(?:(?:вчерашн|сегодняшн|завтрашн|предыдущ|прошл|следующ|понедельничн|вторничн|средов|четвергов|пятничн|субботн|воскресн|тяжел|тяжёл|интенсивн)[а-яё]*\\s+){0,3}";
-    const session = "(?:порог[а-яё]*|темпов[а-яё]*|интервал[а-яё]*|длитель[а-яё]*|гонк[а-яё]*|старт[а-яё]*|vo2max|vo₂max|threshold)";
+    const session = "(?:порог[а-яё]*|темпов[а-яё]*|интервал[а-яё]*|длитель[а-яё]*|гонк[а-яё]*|старт[а-яё]*|vo2max|vo₂max|threshold|ускорени[а-яё]*|strides)";
     // References to another session are context, not today's prescribed stimulus.
     text = text.replace(new RegExp(`(?:после|перед|накануне|вслед за)\\s+${modifier}${session}(?:\\s+(?:работ|тренировк|бег)[а-яё]*)?`, "gu"), " ");
-    const excludedStimulus = /^(?:без|не(?:\s+как)?)\s+(?:перехода\s+в\s+)?(?:(?:дополнительн|полноценн|тяжел|тяжёл|коротк|быстр|прогрессивн)[а-яё]*\s+){0,3}(?:темп|порог|интервал|ускор|прогрес|горок|гонк|спринт|максимальн|strides|vo2|vo₂|threshold|sprint|попытки\s+сразу\s+достичь)/u;
+    // A postfix prohibition is not a prescription (but "not a sprint" can qualify real strides).
+    text = text.replace(/(?:ускорени[а-яё]*|strides|интервал[а-яё]*|темпов[а-яё]*\s+(?:работ[а-яё]*|встав[а-яё]*|блок[а-яё]*))\s+(?:не\s+(?:выполнять|добавлять|делать|нужны)|исключены|запрещены)(?![а-яё])/gu, " ");
+    const excludedStimulus = /^(?:без|не(?:\s+(?:как|(?:(?:нужно|следует|стоит)\s+)?(?:добавлять|добавляйте|выполнять|выполняйте|делать|делайте|включать|включайте|проводить|проводите)))?)\s+(?:перехода\s+в\s+)?(?:(?:дополнительн|полноценн|тяжел|тяжёл|коротк|быстр|прогрессивн|финишн|длинн|резк|лишн|специальн)[а-яё]*\s+){0,3}(?:темп|порог|интервал|ускор|прогрес|горок|гонк|спринт|максимальн|strides|vo2|vo₂|threshold|sprint|попытки\s+сразу\s+достичь)/u;
     return text.replace(/(?:без|не(?:\s+как)?)\s+[^.;!?\n]*?(?=[.;!?\n]|,\s*(?:затем|далее|но|а\s|в\s+конце|\d+\s*(?:мин|км))|\s+(?:затем|далее)\s|$)/gu,
       fragment => excludedStimulus.test(fragment) ? " " : fragment);
+  }
+  function hasStrides(value) {
+    return /(?:^|[^а-яёa-z])(?:ускорени[а-яё]*|strides)(?![а-яёa-z])/u.test(stimulusText(value));
   }
   // Only a prescribed run, not a strength session's warmup, can take precedence over supplementary mobility.
   function primaryRunText(value) {
@@ -111,7 +116,7 @@
     add(s.cooldown, "cooldown", 1, 1.15);
     return result;
   }
-  const api = { stimulusText, primaryRunText, range, normalize, format, inputMeasure, fromDay, prescription, segments };
+  const api = { stimulusText, hasStrides, primaryRunText, range, normalize, format, inputMeasure, fromDay, prescription, segments };
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.PlanStructure = api;
 })(globalThis);

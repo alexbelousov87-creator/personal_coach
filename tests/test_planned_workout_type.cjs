@@ -149,3 +149,54 @@ test('real threshold and interval prescriptions still outrank additional mobilit
  assert.equal(c.planTypeFromAssignment('Разминка 15 минут. Затем 5 x 1000 м; восстановление 2 минуты. Дополнительно мобилити.'),'interval');
  assert.equal(c.planTypeFromAssignment('3 x 10 минут порог; пауза 2 минуты. Затем ОФП.'),'tempo');
 });
+const october26={date:'2026-10-26T07:00:00.000Z',focus:'Кросс',title:'Легкий бег с ускорениями',
+ details:'45–50 минут очень легкого бега преимущественно в Z1, RPE 1–2/10. Темп свободный, дыхание комфортное. Не добавлять ускорения, горки и прогрессию. При выраженной остаточной усталости сократить бег до 35–40 минут. После пробежки 10 минут легкой мобилити без силового утомления.',
+ intensity:'Преимущественно Z1, RPE 1–2/10',targetDistance:'9–10 км'};
+test('October 26 saved title is corrected without altering prescription or inventing strides',()=>{
+ const c=setup(),snapshot=JSON.stringify(october26),d=c.normalizePlanDay(october26,october26,0);
+ assert.equal(d.title,'Легкий аэробный бег');assert.equal(d.details,october26.details);
+ assert.equal(d.plannedWorkout,october26.details);assert.equal(JSON.stringify(october26),snapshot);
+ assert.equal(c.defaultTitleForPlannedType('easy',october26.details),'Легкий аэробный бег');
+ assert.equal(c.WorkoutComparison.parse(d).mode,'easy');
+ assert.equal(c.normalizePlanDay(d,d,0).title,d.title);
+});
+test('equivalent stride prohibitions never create a positive stride title',()=>{
+ const c=setup();
+ for(const prohibition of ['Не добавлять ускорения, горки и прогрессию.', 'Не выполняйте ускорения.', 'Не следует добавлять strides.', 'Ускорения не нужны.', 'Ускорения не выполнять.', 'Strides исключены.', 'Без дополнительных ускорений.', 'Без длинных ускорений.', 'Без финишного ускорения.']) {
+  const details='50 минут легко в Z2. '+prohibition;
+  const d=c.normalizePlanDay({...october26,details},null,0);
+  assert.equal(d.title,'Легкий аэробный бег',prohibition);
+  assert.equal(c.defaultTitleForPlannedType('easy',details),'Легкий аэробный бег',prohibition);
+  assert.equal(c.WorkoutComparison.parse(d).mode,'easy',prohibition);
+ }
+});
+test('stale strides title is removed even when new assignment does not mention strides',()=>{
+ const c=setup(),details='50 минут легко в Z2.';
+ assert.equal(c.normalizedPlanTitle(october26,null,'Кросс',details),'Легкий аэробный бег');
+ assert.equal(c.normalizedPlanTitle({title:'Легкий бег без ускорений'},null,'Кросс',details),'Легкий бег без ускорений');
+});
+test('real and optional strides survive restrictions on extra work or sprinting',()=>{
+ const c=setup();
+ for(const details of [
+  '50 минут легко в Z2; затем 4 x 15 секунд strides. Не добавлять лишние ускорения.',
+  '50 минут легко в Z2. При хорошем самочувствии 4 x 15 секунд ускорения, не как спринт.',
+  '50 минут легко в Z2; в конце 4 x 15 секунд strides. Без финишного ускорения.',
+  'Не добавлять горки; затем 4 x 15 секунд ускорения.'
+ ]) {
+  assert.equal(c.normalizedPlanTitle(october26,null,'Кросс',details),october26.title,details);
+  assert.equal(c.defaultTitleForPlannedType('easy',details),october26.title,details);
+ }
+});
+test('references to previous or next strides do not prescribe them today',()=>{
+ const c=setup();
+ for(const reference of ['после вчерашних ускорений','перед завтрашними strides']) {
+  const details='50 минут легкого бега '+reference+'.';
+  assert.equal(c.normalizedPlanTitle(october26,null,'Кросс',details),'Легкий аэробный бег');
+ }
+});
+test('directive prohibitions apply to types too, without deleting later real work',()=>{
+ const c=setup();
+ assert.equal(c.planTypeFromAssignment('50 минут легко в Z2. Не выполнять интервалы и темповую работу.'),'easy');
+ assert.equal(c.planTypeFromAssignment('Не добавлять ускорения; затем 3 x 8 минут пороговой работы.'),'tempo');
+ assert.equal(c.planTypeFromAssignment('Не добавлять горки, затем 5 x 1000 м в усилии 10 км.'),'interval');
+});
