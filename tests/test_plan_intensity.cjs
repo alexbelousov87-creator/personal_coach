@@ -5,7 +5,7 @@ const tone=(details,intensity='',type='interval',extra={})=>S.intensityTone({det
 
 test('November 11 controlled 4 x 6 minutes is not sprint or an invented VO2max zone',()=>{
  const details='Разминка 20–25 минут легкого бега в Z1–Z2. Затем 4 × 15 секунд свободных ускорений с полным восстановлением. Основная часть: 4 × 6 минут в контролируемом высоком усилии RPE 7–8/10. Восстановление между повторениями — 2 минуты 30 секунд очень легкой трусцы. Суммарная основная работа — 24 минуты. Второй и третий — максимально ровно по скорости и усилию. Заминка 15–20 минут очень легкого бега.';
- assert.equal(tone(details,'Контролируемое высокое усилие, RPE 7–8/10'),'unspecified');
+ assert.equal(tone(details,'Контролируемое высокое усилие, RPE 7–8/10'),'intensive');
 });
 test('maximum consistency, relaxation and control are not maximal effort',()=>{
  for(const phrase of ['максимально ровно','максимально расслабленно','максимальный контроль техники','максимальная устойчивость скорости'])
@@ -53,8 +53,29 @@ test('negative sprint restrictions and prior-day references are not sprint presc
  assert.equal(tone('4 x 6 минут. Спринт запрещен.'),'unspecified');
  assert.equal(tone('4 x 6 минут. Контролировать спринтерскую технику.'),'unspecified');
 });
-test('unknown intervals, tempo and race do not invent a physiological zone',()=>{
- for(const type of ['interval','tempo','race']) assert.equal(tone('Контролируемая работа, RPE 7-8/10','',type),'unspecified');
+test('RPE specifies intensity without assigning a physiological zone or a workout format',()=>{
+ for(const type of ['interval','tempo','race']) assert.equal(tone('Контролируемая работа, RPE 7-8/10','',type),'intensive');
+ for(const type of ['interval','tempo','race']) assert.equal(tone('Контролируемая работа','',type),'unspecified');
+});
+
+test('RPE-only prescriptions use a graded intensity scale',()=>{
+ for(const [rpe,expected] of [['1–2','recovery'],['2-3','easy'],['4–5','moderate'],['6–7','intensive'],['7–8','intensive'],['8–9','very-intensive'],['9–10','very-intensive'],['10','very-intensive']])
+  assert.equal(tone('4 x 6 минут',`RPE ${rpe}/10`),expected,rpe);
+ assert.equal(tone('4 x 6 минут','RPE: 7 из 10'),'intensive');
+});
+test('main RPE is not replaced by warmup or a conditional caution threshold',()=>{
+ assert.equal(tone('Разминка 20 минут, RPE 2/10. Основная часть: 4 x 6 минут, RPE 7–8/10. Если RPE выше 9, снизить скорость. Заминка RPE 1/10.'),'intensive');
+});
+test('an explicit work effort still takes precedence over a generic RPE',()=>{
+ assert.equal(tone('4 x 6 минут в пороговом усилии','RPE 7–8/10'),'threshold');
+ assert.equal(tone('4 x 6 минут','Усилие 10 км, RPE 7–8/10'),'10k');
+});
+test('structured RPE is read from the main block only',()=>{
+ const s={version:1,mode:'repeats',count:4,work:{basis:'duration',from:360,to:360,intensity:'RPE 7–8/10'},recovery:{basis:'duration',from:150,to:150,intensity:'RPE 1–2/10'},notes:''};
+ assert.equal(S.intensityTone({plannedStructure:s,plannedWorkout:S.format(s),intensity:s.work.intensity},'interval'),'intensive');
+});
+test('invalid, overly broad and non-10-point RPE cannot select an intensity',()=>{
+ for(const intensity of ['RPE 11/10','RPE 8–6/10','RPE 1–10/10','RPE 7/20','RPE 6–20']) assert.equal(tone('4 x 6 минут',intensity),'unspecified',intensity);
 });
 test('easy, recovery and long preserve their own low-intensity colors',()=>{
  assert.equal(tone('80 минут легко','Z1-Z2','long'),'long');

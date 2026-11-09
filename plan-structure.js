@@ -121,10 +121,19 @@
     if (/(?:^|[^а-я])легко(?![а-я])|легк[а-я]*\s+(?:бег|усилие)|разговорн[а-я]*\s+(?:темп|усилие)/u.test(text)) return "easy";
     return null;
   }
+  function rpeIntensityTone(value) {
+    const text=mainIntensityText(value);
+    const match=text.match(/\brpe\s*(?::|=|около)?\s*(\d{1,2}(?:[.,]\d+)?)(?:\s*-\s*(\d{1,2}(?:[.,]\d+)?))?(?:\s*(?:\/|из)\s*(\d{1,2}))?(?!\d)/u);
+    if (!match) return null;
+    const from=Number(match[1].replace(",",".")),to=Number((match[2] || match[1]).replace(",","."));
+    if (from<0 || to>10 || from>to || to-from>3 || (match[3] && Number(match[3])!==10)) return null;
+    const effort=(from+to)/2;
+    return effort<=2 ? "recovery" : effort<=3 ? "easy" : effort<=5 ? "moderate" : effort<=8 ? "intensive" : "very-intensive";
+  }
   function intensityTone(day, type) {
     const structured = fromDay(day);
     if (structured) {
-      const tone = explicitIntensityTone(structured.work.intensity);
+      const tone = explicitIntensityTone(structured.work.intensity) || rpeIntensityTone(structured.work.intensity);
       return type === "long" && ["easy", "recovery"].includes(tone) ? "long" : tone || "unspecified";
     }
     const assignment = String(day.plannedWorkout || day.details || "");
@@ -134,6 +143,10 @@
     for (const source of sources) {
       const tone = explicitIntensityTone(source);
       if (tone) return type === "long" && ["easy", "recovery"].includes(tone) ? "long" : tone;
+    }
+    for (const source of sources) {
+      const tone=rpeIntensityTone(source);
+      if (tone) return type === "long" && ["easy","recovery"].includes(tone) ? "long" : tone;
     }
     return ["easy", "recovery", "long"].includes(type) ? type : "unspecified";
   }

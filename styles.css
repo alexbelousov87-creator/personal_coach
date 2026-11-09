@@ -1717,6 +1717,17 @@ textarea {
   --tone-bg: #f6f7f8;
 }
 
+.tone-moderate { --tone-color: var(--tone-long); --tone-bg: #f2f7fc; }
+.tone-intensive { --tone-color: var(--tone-10k); --tone-bg: #fff5ef; }
+.tone-very-intensive { --tone-color: var(--tone-vo2); --tone-bg: #f7f4ff; }
+
+.plan-card.plan-tone-moderate, .today-plan-panel.plan-tone-moderate { --plan-tone: var(--tone-long); --tone-color: var(--tone-long); }
+.plan-card.plan-tone-intensive, .today-plan-panel.plan-tone-intensive { --plan-tone: var(--tone-10k); --tone-color: var(--tone-10k); }
+.plan-card.plan-tone-very-intensive, .today-plan-panel.plan-tone-very-intensive { --plan-tone: var(--tone-vo2); --tone-color: var(--tone-vo2); }
+.plan-card.upcoming.plan-tone-moderate { background: #f2f7fc; }
+.plan-card.upcoming.plan-tone-intensive { background: #fff5ef; }
+.plan-card.upcoming.plan-tone-very-intensive { background: #f7f4ff; }
+
 .legend-scale .tone-unspecified {
   border-left-style: dashed;
 }

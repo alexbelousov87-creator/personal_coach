@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png?v=20261012-runflow" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20261109-intensity">
+    <link rel="stylesheet" href="styles.css?v=20261109-rpe">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -387,6 +387,9 @@
                 <span class="tone-1k">1 км</span>
                 <span class="tone-vo2">VO2max</span>
                 <span class="tone-sprint">спринт</span>
+                <span class="tone-moderate" title="Умеренная интенсивность по RPE, если точная зона не указана">RPE 4–5</span>
+                <span class="tone-intensive" title="Высокая контролируемая интенсивность по RPE, если точная зона не указана">RPE 6–8</span>
+                <span class="tone-very-intensive" title="Очень высокая интенсивность по RPE, если точная зона не указана">RPE 9–10</span>
                 <span class="tone-unspecified" title="Нет однозначного соответствия основной работы шкале интенсивности">не уточн.</span>
               </div>
             </div>
@@ -1059,7 +1062,7 @@
       </footer>
     </dialog>
     <script src="coach-overview.js?v=20260922-roster"></script>
-    <script src="plan-structure.js?v=20261109-plan-fact"></script>
+    <script src="plan-structure.js?v=20261109-rpe"></script>
     <script src="workout-comparison.js?v=20261109-plan-fact"></script>
     <script src="plan-history.js?v=20261005-versions"></script>
     <script src="fitness-trend.js?v=20261014-aerobic"></script>
