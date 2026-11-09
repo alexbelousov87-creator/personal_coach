@@ -1712,6 +1712,15 @@ textarea {
   --tone-bg: #f3f4f6;
 }
 
+.tone-unspecified {
+  --tone-color: #929aa2;
+  --tone-bg: #f6f7f8;
+}
+
+.legend-scale .tone-unspecified {
+  border-left-style: dashed;
+}
+
 .reference-notes {
   margin-top: 14px;
 }
@@ -2066,6 +2075,13 @@ textarea {
 
 .plan-card.plan-tone-sprint {
   --plan-tone: var(--tone-sprint);
+}
+
+.plan-card.plan-tone-unspecified,
+.today-plan-panel.plan-tone-unspecified {
+  --plan-tone: #929aa2;
+  --tone-color: #929aa2;
+  border-left: 6px dashed #929aa2;
 }
 
 .plan-card.upcoming.plan-tone-recovery {

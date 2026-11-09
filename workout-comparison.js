@@ -15,7 +15,7 @@
     const factor = /^(км|километр)/.test(unit) ? 1000 : /^мин/.test(unit) ? 60 : 1;
     return Number.isFinite(low) && Number.isFinite(high) && low > 0 && high >= low ? { basis, from: low * factor, to: high * factor } : null;
   }
-  function readMeasure(text) { return measure(text.match(new RegExp(measurePattern, "i"))); }
+  function readMeasure(text) { return structureApi.timeRange(text.trim()) || measure(text.match(new RegExp(measurePattern, "i"))); }
   function textRange(range) {
     if (!range) return "не задано";
     const factor = range.basis === "duration" && range.from >= 60 ? 60 : 1;
@@ -26,17 +26,13 @@
   function parse(day = {}) {
     const explicit = structureApi?.prescription(day);
     if (explicit) return explicit;
-    let text = structureApi.stimulusText(day.plannedWorkout || day.details || "").replace(/[–—−]/g, "-").replace(/ё/g, "е");
-    const conditional = text.search(/[.;]\s*при (?:усталости|признаках усталости)(?=\s|[,:.-]|$)/i);
-    // A conditional fallback does not invalidate a fully completed primary prescription.
-    const conditionalAlternative = conditional >= 0;
-    if (conditionalAlternative) text = text.slice(0, conditional);
+    const parts = structureApi.assignmentParts(day.plannedWorkout || day.details || "");
+    const text = structureApi.stimulusText(parts.text);
+    const conditionalAlternative = parts.conditionalAlternative;
     if (!text || /^\s*(?:без (?:дополнительного )?бегов|полный отдых)/.test(text)) return null;
     const qualityText = text.replace(/без\s+(?:темпов[а-я]*(?:\s+финиш[а-я]*)?|ускорени[а-я]*|интервал[а-я]*)/g, "");
     const quality = /интервал|темпо|порог|vo2|vo₂|отрез|усилии?\s*\d+\s*км|марафонск[а-я]*\s+усили/.test(qualityText);
     // Alternatives and nested sets must not silently become a single chosen prescription.
-    const ambiguityText = text.replace(/(?:восстанов[а-я]*|через)\s*[^;!]*?(?=\.(?!\d)|[;!]|$)/g, part => part.replace(/(?:^|\s)(?:или|либо)(?=\s|$)/g, " "));
-    const ambiguous = /\b\d+\s*[xх×]\s*\(|\d+\s*(?:сери[а-я]*|блок[а-я]*)\s*(?:по|:)|(?:^|[^а-я])(?:либо|или|если)(?:$|[^а-я])|при усталости|при признаках усталости|вместо/.test(ambiguityText);
     const repeats = new RegExp(`${span}\\s*(?:[xх×]|(?:интервал[а-я]*|отрез[а-я]*|повтор[а-я]*)\\s+по)\\s*${measurePattern}`, "gi");
     const groups = [];
     for (const match of text.matchAll(repeats)) {
@@ -54,25 +50,28 @@
       if (work) { main = { count: { from: 1, to: 1, basis: "count" }, work, end: continuous.index + continuous[0].length }; mode = "tempo"; }
     }
     if (!main && !quality && !/strides|ускорени|\d\s*[xх×]\s*\d/.test(text) && /легк|кросс|длител|z[12]|спокойн/.test(text)) {
-      const work = measure(text.match(new RegExp(`^\\s*${measurePattern}`, "i")));
-      if (work) { main = { work }; mode = "easy"; }
+      const match = text.match(new RegExp(`^\\s*${measurePattern}`, "i")), work = measure(match);
+      if (work) { main = { work,end:match[0].length }; mode = "easy"; }
     }
     if (!main) return quality ? { supported: false, reason: "Не удалось однозначно выделить рабочую часть задания." } : null;
+    const separators=[...text.slice(0,main.end).matchAll(/[;!?\n]|\.(?!\d)/gu)];
+    const clauseStart=separators.length ? separators.at(-1).index+1 : 0;
+    const clauseEnd=main.end+(text.slice(main.end).search(/[;!?\n]|\.(?!\d)/u)+1 || text.length-main.end);
+    const ambiguityText=text.slice(clauseStart,clauseEnd).replace(/(?:восстанов[а-я]*|через|между\s+(?:повторени[а-я]*|блок[а-я]*|отрез[а-я]*))\s*[^;!]*?(?=\.(?!\d)|[;!]|$)/g, part=>part.replace(/(?:^|\s)(?:или|либо)(?=\s|$)/g," "));
+    const ambiguous=/\b\d+\s*[xх×]\s*\(|\d+\s*(?:сери[а-я]*|блок[а-я]*)\s*(?:по|:)/u.test(text)
+      || /(?:^|[^а-я])(?:либо|или)(?:$|[^а-я])|^\s*если[^.;]*\d+\s*[xх×]|вместо/u.test(ambiguityText);
     if (ambiguous || groups.length > 1 || (main.count && (!Number.isInteger(main.count.from) || !Number.isInteger(main.count.to) || main.count.from < 1 || main.count.to < main.count.from))) {
       return { supported: false, reason: "В задании есть альтернативы, несколько серий или неоднозначная запись. Автоматическое сравнение не выбирает вариант за спортсмена." };
     }
     const named = name => measure(((text.match(new RegExp(`${name}[а-я]*\\s*[: -]?\\s*([^;.!]+)`)) || [])[1] || "").match(new RegExp(`^${measurePattern}`, "i")));
     const after = text.slice(main.end || text.length);
-    const recoveryText = (after.match(/(?:восстанов[а-я]*|через)\s*([^;!]*?)(?=\.(?!\d)|[;!]|$)/) || [])[1] || "";
-    const recoveryOptions = recoveryText ? recoveryText.split(/\s+(?:или|либо)\s+/).map(part => {
-      const clock = part.trim().match(/^(\d+):(\d{2})(?:\s*-\s*(\d+):(\d{2}))?(?![\d:])/);
-      return clock && Number(clock[2]) < 60 && Number(clock[4] || 0) < 60
-        ? { basis: "duration", from: Number(clock[1]) * 60 + Number(clock[2]), to: Number(clock[3] || clock[1]) * 60 + Number(clock[4] || clock[2]) }
-        : measure(part.trim().match(new RegExp(`^${measurePattern}`, "i")));
-    }) : [];
+    const marker = mode === "easy" ? null : after.match(/(?:восстановлени[а-я]*|через|пауз[а-я]*|между\s+(?:повторени[а-я]*|блок[а-я]*|отрез[а-я]*))[^\d.;!\n]{0,80}/u);
+    const recoveryText = marker ? after.slice(marker.index+marker[0].length).split(/[;!\n]|\.(?!\d)/u)[0] : "";
+    const recoveryOptions = recoveryText ? recoveryText.split(/\s+(?:или|либо)\s+/).map(part => readMeasure(part.trim())) : [];
+    if (marker && !recoveryText) return { supported:false,reason:"Не удалось однозначно прочитать длительность или дистанцию восстановления." };
     const recovery = recoveryOptions[0] || null;
     if (recoveryOptions.some(option => !option || option.to < option.from)) return { supported: false, reason: "Не удалось однозначно прочитать длительность или дистанцию восстановления." };
-    return { supported: true, mode, conditionalAlternative, ...main, recovery, recoveryOptions, warmup: named("размин"), cooldown: named("замин"), intensity: String(day.intensity || "") };
+    return { supported: true, mode, conditionalAlternative, alternatives:parts.alternatives, ...main, recovery, recoveryOptions, warmup: named("размин"), cooldown: named("замин"), intensity: String(day.intensity || "") };
   }
   function compare(day, workouts = []) {
     const plan = parse(day);
@@ -146,8 +145,31 @@
     output.coreMatches = core.some(r => r.matches === false) ? false : core.some(r => r.matches === null) ? null : true;
     output.status = output.rows.some(r => r.matches === false) ? "different" : output.rows.some(r => r.matches === null) ? "partial" : "matched";
     if (plan.conditionalAlternative && output.coreMatches !== true) {
-      output.coreMatches = null;
-      output.notes.push("Основной вариант не подтвержден полностью. Нужно уточнить, выполнялся ли облегченный вариант.");
+      const fits = candidate => {
+        if (candidate.mode !== plan.mode) return true;
+        const key=candidate.work.basis === "duration" ? "durationSec" : "distanceM";
+        const values=plan.mode === "easy" ? [candidate.work.basis === "duration" ? Number(workout.durationMin)*60 : Number(workout.distanceKm)*1000]
+          : output.lapEvidence?.work.map(s=>Number(s[key])) || [];
+        if (!values.length || values.some(v=>!Number.isFinite(v) || v<=0)) return true;
+        if (candidate.count && (values.length<candidate.count.from || values.length>candidate.count.to)) return false;
+        const slack=Math.max(candidate.work.basis === "duration" ? 5 : 20,candidate.work.to*.1);
+        return values.every(v=>v>=candidate.work.from-slack && v<=candidate.work.to+slack);
+      };
+      const mayMatchAlternative=(plan.alternatives || []).some(text=>{
+        const alternative=parse({plannedWorkout:text,intensity:plan.intensity});
+        if (alternative?.supported) return fits(alternative);
+        // An instruction to stop earlier can only reduce the primary count or volume.
+        if (/законч|заверш|сократ|уменьш/u.test(text) && !/\d+\s*[xх×]/u.test(text)) {
+          const upper={...plan,work:{...plan.work,from:0},...(plan.count ? {count:{...plan.count,from:0}} : {})};
+          return fits(upper);
+        }
+        return true;
+      });
+      if (output.coreMatches === false && !mayMatchAlternative) output.notes.push("Факт отличается от основного задания и не соответствует указанному облегченному варианту.");
+      else {
+        output.coreMatches = null;
+        output.notes.push("Основной вариант не подтвержден полностью. Нужно уточнить, выполнялся ли облегченный вариант.");
+      }
     }
     output.summary = { different: "Есть отличия в структуре", partial: "Структура проверена частично", matched: "Измеримая структура близка к заданию" }[output.status];
     output.notes.push("Допуск размеров отрезков и объема: 10%, минимум 20 м или 5 с; количество отрезков должно попадать в заданный диапазон. Для разминки и заминки по времени: 1 мин.");

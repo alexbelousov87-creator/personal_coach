@@ -180,3 +180,33 @@ test("another-day interval reference is not today's quality structure",()=>{
 test("optional workout alternatives remain explicitly uncertain",()=>{
  assert.equal(parse(day('5 x 1000 м или 8 x 400 м; восстановление 2 минуты.')).supported,false);
 });
+
+test('equipment choices and conditional pacing advice do not block main interval comparison',()=>{
+ const d=day('Разминка 20 минут + 4 x 15 секунд свободных ускорений. Основная часть: 4 x 3 минуты VO2max. Восстановление между повторениями 2 минуты 30 секунд — 3 минуты. Если техника ухудшается, закончить после трех повторений. Заминка 15 минут. Предпочтительны дорожка или манеж.');
+ const p=parse(d);assert.equal(p.supported,true);assert.equal(p.count.from,4);assert.equal(p.recovery.from,150);assert.equal(p.recovery.to,180);
+ const result=compare(d,[workout(6,180,850,150)]);
+ assert.equal(result.coreMatches,false);assert.equal(result.status,'different');
+});
+test('nonprescriptive or-clause does not make a continuous easy run ambiguous',()=>{
+ const p=parse(day('60–65 минут легкого бега в Z1–Z2. Не ориентироваться на привычный темп при повышенной ЧСС или необычной тяжести.'));
+ assert.equal(p.supported,true);assert.equal(p.mode,'easy');
+});
+test('an actual workout exceeding every explicit alternative is a measured difference',()=>{
+ const d=day('5 x 1000 м; восстановление 2 минуты. При усталости 4 x 1000 м.');
+ assert.equal(compare(d,[workout(5,420,2000,120)]).coreMatches,false);
+ assert.equal(compare(d,[workout(4,210,1000,120)]).coreMatches,null);
+});
+test('a lower-volume alternative with more shorter repeats remains available for review',()=>{
+ const d=day('5 x 1000 м; восстановление 2 минуты. При усталости 8 x 200 м.');
+ assert.equal(compare(d,[workout(8,45,200,120)]).coreMatches,null);
+});
+test('full rest between intervals is not permission to skip the whole workout',()=>{
+ const S=require('../plan-structure.js'),d=day('5 x 1000 м; восстановление 150 секунд или полный отдых до готовности.');
+ assert.equal(S.assignmentParts(d.details).restAllowed,false);
+ assert.equal(parse(d).supported,false);
+});
+test('the adjective recovery in a continuous run does not create a missing interval pause',()=>{
+ const d=day('40-50 минут восстановительного бега преимущественно в Z1.');
+ assert.equal(parse(d).supported,true);assert.equal(parse(d).mode,'easy');
+ assert.equal(compare(d,[{durationMin:45,distanceKm:9}]).coreMatches,true);
+});

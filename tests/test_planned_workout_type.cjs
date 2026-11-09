@@ -200,3 +200,29 @@ test('directive prohibitions apply to types too, without deleting later real wor
  assert.equal(c.planTypeFromAssignment('Не добавлять ускорения; затем 3 x 8 минут пороговой работы.'),'tempo');
  assert.equal(c.planTypeFromAssignment('Не добавлять горки, затем 5 x 1000 м в усилии 10 км.'),'interval');
 });
+
+test('October 16 adjectival running prescription outranks optional mobility',()=>{
+ const c=setup(),details='55–65 минут ровного легкого бега в Z1–Z2. Дополнительно можно выполнить 10 минут легкой мобилити.';
+ assert.equal(c.plannedTypeForDay({focus:'План',details,intensity:'Z1–Z2'}),'easy');
+});
+test('race-week references cannot turn ordinary running into a race',()=>{
+ const c=setup();
+ for(const details of ['60-75 минут легко в Z2. Неделя старта: оставьте запас.', '60 минут легко на неделе гонки.']) {
+  assert.equal(c.plannedTypeForDay({focus:'Гонка',details}),'easy');
+ }
+ assert.equal(c.plannedTypeForDay({focus:'Гонка',details:'Стартуйте контролируемо. Гонка 42 км.'}),'race');
+});
+test('allowed complete rest is not a missed session and does not invent a completed run',()=>{
+ const c=withActual([]),d={date:'2026-08-08T07:00:00Z',focus:'Отдых',details:'20-30 минут очень легко или полный отдых. Можно 4 x 15 секунд ускорения только если ноги свежие.'};
+ const result=c.evaluatePlanDayLoadAndType(d);
+ assert.equal(result.level,'pending');assert.equal(result.label,'отдых допустим');assert.equal(result.completed,false);
+ const required=c.normalizePlanDay({...d,details:'20-30 минут очень легко.'},null,0);
+ assert.equal(c.evaluatePlanDayLoadAndType(required).level,'missed');
+});
+test('accessory unknown pauses cannot override a known normal main load assessment',()=>{
+ const c=withActual([mondayRun]);
+ c.plannedWorkoutSegments=()=>[{kind:'recovery',unknownDuration:true,accessory:true}];
+ assert.equal(c.evaluatePlanDayLoadAndType({date:'2026-10-12T07:00:00Z',focus:'Кросс',details:'50 минут легко в Z2.'}).level,'matched');
+ c.plannedWorkoutSegments=()=>[{kind:'recovery',unknownDuration:true}];
+ assert.equal(c.evaluatePlanDayLoadAndType({date:'2026-10-12T07:00:00Z',focus:'Кросс',details:'50 минут легко в Z2.'}).loadUncertain,true);
+});

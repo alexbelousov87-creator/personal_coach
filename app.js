@@ -4500,6 +4500,10 @@ function evaluatePlanDayLoadAndType(day) {
   const expectsNoRun = planExpectsNoRun(day);
 
   if (!actual.length) {
+    if (planDate <= today && PlanStructure.assignmentParts(day.plannedWorkout || day.details).restAllowed) {
+      return {show:true,completed:false,keyCompleted:false,level:"pending",label:"отдых допустим",
+        comment:"задание разрешает полный отдых; отсутствие тренировки не считается пропуском"};
+    }
     if (planDate < today && plannedType !== "rest") {
       return {
         show: true,
@@ -4553,7 +4557,7 @@ function evaluatePlanDayLoadAndType(day) {
     };
   }
 
-  if (plannedWorkoutSegments(day).some(segment => segment.unknownDuration)) {
+  if (plannedWorkoutSegments(day).some(segment => segment.unknownDuration && !segment.accessory)) {
     return {
       show: true, completed: true, keyCompleted, typeUncertain, loadUncertain: true,
       level: typeMismatch ? "mismatch" : "uncertain",
@@ -4643,22 +4647,9 @@ function planToneClass(day) {
 }
 
 function plannedIntensityTone(day) {
-  const text = plannedStimulusText([day.focus, day.title, day.intensity, day.targetDistance, day.plannedWorkout || day.details].filter(Boolean).join(". "));
   const type = plannedTypeForDay(day);
-  if (type === "rest" || assignmentHasNoRun(text)) return "recovery";
-  if (matchesAny(text, ["спринт", "sprint", "максимальн"])) return "sprint";
-  if (matchesAny(text, ["усилие 1 км", "усилие 1-3 км", "1-3 км", "1км", "1 km", "1k"])) return "1k";
-  if (matchesAny(text, ["усилие 3 км", "3км", "3 km", "3k", "усилие 3-5 км"])) return "3k";
-  if (matchesAny(text, ["усилие 5 км", "5км", "5 km", "5k", "z5"])) return "5k";
-  if (matchesAny(text, ["vo2", "vo₂", "z5"])) return "vo2";
-  if (matchesAny(text, ["усилие 10 км", "10км", "10 km", "10k"])) return "10k";
-  if (matchesAny(text, ["порог", "threshold", "z4"])) return "threshold";
-  if (matchesAny(text, ["марафонск", "полумарафонск", "z3"])) return "threshold";
-  if (type === "interval" || type === "race") return "vo2";
-  if (type === "tempo") return "threshold";
-  if (type === "long") return "long";
-  if (type === "recovery" || matchesAny(text, ["z1", "восстанов", "очень легко"])) return "recovery";
-  return "easy";
+  if (type === "rest" || assignmentHasNoRun(day.plannedWorkout || day.details)) return "recovery";
+  return PlanStructure.intensityTone(day, type);
 }
 
 function planTypeMatchesActual(plannedType, actualType, day = null, workout = null) {
@@ -4695,7 +4686,9 @@ function actualMatchesPlannedEnvelope(day, workout) {
 }
 
 function plannedDurationBounds(day) {
-  const text = planDayComparableText(day);
+  const overall = PlanStructure.overallDuration(day.plannedWorkout || day.details);
+  if (overall) return {from:overall.from/60,to:overall.to/60};
+  const text = PlanStructure.assignmentParts(day.plannedWorkout || day.details).text;
   const ranges = [...text.matchAll(/(\d{1,3})\s*[-–—]\s*(\d{1,3})\s*мин\w*/gi)]
     .map((match) => ({ from: Number(match[1]), to: Number(match[2]) }))
     .filter((range) => range.from > 0 && range.to >= range.from);
@@ -4704,7 +4697,7 @@ function plannedDurationBounds(day) {
 }
 
 function plannedDistanceBounds(day) {
-  const text = planDayComparableText(day);
+  const text = `${day.targetDistance || ""} ${PlanStructure.assignmentParts(day.plannedWorkout || day.details).text}`.replace(/,/g,".");
   const ranges = [...text.matchAll(/(\d{1,2}(?:\.\d+)?)\s*[-–—]\s*(\d{1,2}(?:\.\d+)?)\s*км/gi)]
     .map((match) => ({ from: Number(match[1]), to: Number(match[2]) }))
     .filter((range) => range.to > 0 && range.to >= range.from);
@@ -4768,8 +4761,7 @@ function plannedWorkoutSegments(day) {
     return { ...segment, hrr: segment.kind === "work" ? plannedWorkHrReserveRatio(segmentDay) : plannedHrReserveRatio(segmentDay) };
   });
   // Titles and intensity can repeat the prescription; parse volume from the assignment only.
-  const text = String(day.plannedWorkout || day.details || day.title || "").toLowerCase()
-    .replace(/(?:при признаках усталости|при усталости|если)[^.!?\n]*/gi, "")
+  const text = PlanStructure.assignmentParts(day.plannedWorkout || day.details || "").text
     .replace(/каждые\s+\d{1,3}\s*[-–—]?\s*\d{0,3}\s*мин[а-яё]*/gi, "");
   const segments = [];
   const addSegment = (duration, hrr, kind, offset, extra = {}) => {
@@ -4796,7 +4788,7 @@ function plannedWorkoutSegments(day) {
     // Never borrow recovery or intensity from the next repetition block or cooldown.
     const after = text.slice(match.index + match[0].length, repeatsFound[index + 1]?.index ?? text.length)
       .split(/замин[а-яё]*|основная часть|суммарн[а-яё]*|первый отрезок/iu)[0];
-    const effort = after.split(/восстанов[а-яё]*|через|пауза|паузы/iu)[0];
+    const effort = after.split(/восстанов[а-яё]*|через|пауза|паузы|между\s+(?:повторени[а-яё]*|блок[а-яё]*|отрез[а-яё]*)/iu)[0];
     const previous = text.slice(0, match.index).split(/[.;!?\n+]|затем|далее|основная часть/iu).pop();
     const localText = plannedStimulusText(`${previous} ${effort}`);
     const strides = (match[5].startsWith("сек") || match[5] === "с") && value <= 30 && /ускор|strides|свободн|расслаблен/u.test(localText) && !/спринт|sprint/u.test(localText);
@@ -4809,7 +4801,7 @@ function plannedWorkoutSegments(day) {
     const recoveryText = after.slice(Math.max(0, after.search(/восстанов|через|трусц|пауза|паузы/iu)));
     if (recovery) addSegment(recovery, plannedRecoveryHrReserveRatio({ details: recoveryText }), "recovery", match.index + 0.5);
     else if (repeats > 1) addSegment(0, plannedRecoveryHrReserveRatio({ details: recoveryText }), "recovery", match.index + 0.5,
-      { unknownDuration: true });
+      { unknownDuration: true, ...(strides ? {accessory:true,approximate:true} : {}) });
   });
 
   segments.sort((a, b) => a.offset - b.offset);
@@ -4844,7 +4836,7 @@ function plannedRepeatWorkDuration(value, unit, repeats, day) {
 
 function plannedRecoveryDurationAfterRepeat(text, repeats, day) {
   const bounded = text.split(/\d{1,2}(?:\s*[-–—]\s*\d{1,2})?\s*[xх×]\s*\d|замин[а-яё]*|основная часть/iu)[0];
-  const marker = bounded.match(/(?:восстанов[а-яё]*|трусц[а-яё]*|через|пауз[а-яё]*)[^\d.;!?\n]{0,60}/iu);
+  const marker = bounded.match(/(?:восстанов[а-яё]*|трусц[а-яё]*|через|пауз[а-яё]*|между\s+(?:повторени[а-яё]*|блок[а-яё]*|отрез[а-яё]*))[^\d.;!?\n]{0,80}/iu);
   if (!marker) return 0;
   const measure = bounded.slice(marker.index + marker[0].length);
   const time = plannedRecoveryTimeMinutes(measure);
@@ -4856,17 +4848,8 @@ function plannedRecoveryDurationAfterRepeat(text, repeats, day) {
 }
 
 function plannedRecoveryTimeMinutes(text) {
-  const point = "(?:\\d{1,3}:[0-5]\\d|\\d+(?:[.,]\\d+)?\\s*мин[а-яё]*(?:\\s*\\d+(?:[.,]\\d+)?\\s*(?:сек[а-яё]*|с)(?![а-яё]))?|\\d+(?:[.,]\\d+)?\\s*(?:сек[а-яё]*|с)(?![а-яё]))";
-  const match = String(text).match(new RegExp(`^(${point})(?:\\s*[-–—]\\s*(${point}))?`, "iu"));
-  const parse = value => {
-    if (value.includes(":")) { const [m,s] = value.split(":").map(Number); return m + s / 60; }
-    const minutes = value.match(/(\d+(?:[.,]\d+)?)\s*мин/iu);
-    const seconds = value.match(/(\d+(?:[.,]\d+)?)\s*(?:сек[а-яё]*|с)(?![а-яё])/iu);
-    return (minutes ? Number(minutes[1].replace(",", ".")) : 0) + (seconds ? Number(seconds[1].replace(",", ".")) / 60 : 0);
-  };
-  if (match) return (parse(match[1]) + parse(match[2] || match[1])) / 2;
-  const range = String(text).match(/^(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*(мин[а-яё]*|сек[а-яё]*|с)(?![а-яё])/iu);
-  return range ? averageRange(range[1].replace(",", "."), range[2].replace(",", ".")) / (range[3].startsWith("мин") ? 1 : 60) : null;
+  const range = PlanStructure.timeRange(text);
+  return range ? (range.from+range.to)/120 : null;
 }
 
 function plannedPersonalHrReserveRatio(ratio) {
@@ -4938,18 +4921,15 @@ function plannedFastPaceFactor(day) {
 function plannedDurationMinutes(day) {
   const structured = PlanStructure.segments(day, recentReliablePace() || 5, plannedFastPaceFactor({ ...day, title: "", details: "", plannedWorkout: "" }));
   if (structured) return structured.reduce((sum, segment) => sum + segment.duration, 0);
+  const primary = PlanStructure.assignmentParts(day.plannedWorkout || day.details || "").text;
+  const totalDuration = plannedTotalDurationMinutes(primary);
+  if (totalDuration) return totalDuration;
   const segments = plannedWorkoutSegments(day);
   if (segments.some(segment => segment.kind === "work" || segment.kind === "strides")) {
     return Math.round(segments.reduce((sum, segment) => sum + segment.duration, 0));
   }
-  let text = `${day.title || ""} ${day.plannedWorkout || day.details || ""}`.toLowerCase();
-  text = text
-    .replace(/при признаках усталости[\s\S]*$/i, "")
-    .replace(/при усталости[\s\S]*$/i, "")
+  let text = primary
     .replace(/каждые\s+\d{1,3}\s*[-–—]?\s*\d{0,3}\s*мин\w*/gi, "");
-
-  const totalDuration = plannedTotalDurationMinutes(text);
-  if (totalDuration) return totalDuration;
 
   let total = 0;
   const repeatedBlockPattern = /(\d{1,2})(?:\s*[-–—]\s*(\d{1,2}))?\s*[xх×]\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин\w*/gi;
@@ -4976,18 +4956,8 @@ function plannedDurationMinutes(day) {
 }
 
 function plannedTotalDurationMinutes(text) {
-  const firstTimeMatch = text.match(/(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?\s*мин\w*/i);
-  if (!firstTimeMatch) return null;
-
-  const before = text.slice(0, firstTimeMatch.index);
-  const after = text.slice(firstTimeMatch.index + firstTimeMatch[0].length, firstTimeMatch.index + firstTimeMatch[0].length + 90);
-  const value = averageRange(firstTimeMatch[1], firstTimeMatch[2]);
-  const looksLikeOverall =
-    value >= 30 &&
-    !matchesAny(before, ["размин", "затем", "после", "восстанов", "замин", "первые", "в конце", "между"]) &&
-    !matchesAny(after, ["с восстановлением", "восстановление", "между блоками"]);
-
-  return looksLikeOverall ? Math.round(value) : null;
+  const range = PlanStructure.overallDuration(text);
+  return range ? Math.round((range.from+range.to)/120) : null;
 }
 
 function plannedDurationFromDistance(day) {
@@ -4998,7 +4968,7 @@ function plannedDurationFromDistance(day) {
 }
 
 function plannedDistanceKm(day) {
-  const text = `${day.targetDistance || ""} ${day.title || ""} ${day.plannedWorkout || day.details || ""}`.toLowerCase().replace(",", ".");
+  const text = `${day.targetDistance || ""} ${PlanStructure.assignmentParts(day.plannedWorkout || day.details || "").text}`.replace(/,/g, ".");
   const ranges = [...text.matchAll(/(\d{1,2}(?:\.\d+)?)\s*[-–—]\s*(\d{1,2}(?:\.\d+)?)\s*км/g)]
     .map((match) => averageRange(match[1], match[2]))
     .filter((value) => value > 0);
@@ -6568,7 +6538,7 @@ function normalizedPlanFocus(day, fallbackDay, details) {
   const explicitFocus = day.focus || fallbackDay?.focus || "План";
   const explicitType = planTypeFromFocus(explicitFocus);
   const assignmentType = planTypeFromAssignment(`${details} ${day.intensity || ""}`);
-  if (explicitType === "long" && assignmentType === "easy") return explicitFocus;
+  if (explicitType === "long" && ["easy", "recovery"].includes(assignmentType)) return explicitFocus;
   if (assignmentType && !explicitType) {
     return focusForPlannedType(assignmentType);
   }
@@ -6612,14 +6582,8 @@ function planTypeFromFocus(value) {
 }
 
 function primaryPlannedStimulusText(value) {
-  const text = plannedStimulusText(value);
-  // A fatigue fallback does not replace an explicit primary running prescription.
-  const primary = text
-    .replace(/(?:если(?=[^.!?;\n]*(?:устал|утом|самочувств))|при\s+(?:(?:выраженн|остаточн|сильн|накопленн)[а-яё]*\s+)?усталости)[^.!?;\n]*(?:полный отдых|день отдыха|без нагрузки|выбрать отдых)[^.!?;\n]*/gu, " ")
-    .replace(/\s+(?:или|либо)\s+(?:выбрать\s+)?полный отдых/gu, " ");
-  const hasRunningCue = /(?:^|[^а-яё])(?:бег[а-яё]*|кросс[а-яё]*|легк[а-яё]*|лёгк[а-яё]*|интервал[а-яё]*|порог[а-яё]*|длитель[а-яё]*|vo2max)/u.test(primary);
-  const hasVolume = /\d+(?:[.,]\d+)?\s*(?:[-–—]\s*\d+(?:[.,]\d+)?)?\s*(?:мин|км|метр|м(?:\s|$))/u.test(primary);
-  return hasRunningCue && hasVolume && !assignmentHasNoRun(primary) ? primary : text;
+  const parts = PlanStructure.assignmentParts(value);
+  return plannedStimulusText(parts.restFirst ? value : parts.text);
 }
 
 function planTypeFromAssignment(value) {
@@ -6629,7 +6593,7 @@ function planTypeFromAssignment(value) {
   if (matchesAny(text, ["без дополнительного бегового задания", "без бегового задания"])) return "recovery";
   if (assignmentHasTempoStructure(text)) return "tempo";
   if (assignmentHasIntervalStructure(text)) return "interval";
-  if (matchesAny(text, ["длитель", "long"])) return "long";
+  if (matchesAny(text, ["длитель", "long"]) || PlanStructure.assignmentParts(value).alternatives.some(part=>/сократ[а-я]*\s+длительн/u.test(part))) return "long";
   const runningText = PlanStructure.primaryRunText(text);
   if (matchesAny(text, ["офп", "мобилити", "силов", "координац", "баланс"]) && !runningText) return "cross";
   if (assignmentHasEasyRunVolume(runningText || text)) return "easy";

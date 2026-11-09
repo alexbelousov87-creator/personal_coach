@@ -80,6 +80,48 @@ test('easy run with strides retains zone range for the main easy duration',()=>{
  assert.equal(c.plannedLoadScoreForDay(d),102);
  assert.ok(c.plannedWorkoutSegments(d).find(s=>s.kind==='easy').hrr>.69);
 });
+
+test('November 1 total duration excludes inner portions and the reduced alternative regardless of title',()=>{
+ const c=setup(),details='90–95 минут непрерывного легкого бега. Первые 15 минут в Z1, затем преимущественно Z1–Z2. При заметной остаточной усталости после пороговой тренировки сократить до 75–85 минут.';
+ const d={focus:'Восстановление',title:'Восстановительный день',details,intensity:'Z1–Z2',targetDistance:'19–21 км'};
+ const before=JSON.stringify(d);
+ assert.equal(c.plannedDurationMinutes(d),93);
+ const load=c.plannedLoadScoreForDay(d);
+ assert.ok(load>=150 && load<=175,load);
+ for(const title of ['', 'Длительная тренировка', 'Восстановительный день']) assert.equal(c.plannedLoadScoreForDay({...d,title}),load);
+ assert.equal(JSON.stringify(d),before);
+});
+test('July 16 total duration does not add first and last portions to the overall run',()=>{
+ const c=setup(),d={title:'Восстановительный день',details:'75-85 минут аэробного бега: первые 20 минут очень легко, затем ровно в Z2; при хорошем самочувствии последние 10 минут в верхней части Z2.',intensity:'Z2',targetDistance:'15-18 км'};
+ assert.equal(c.plannedDurationMinutes(d),80);
+ assert.equal(c.plannedLoadScoreForDay(d),c.plannedLoadScoreForDay({...d,title:''}));
+});
+test('an explicitly named total includes rather than adds named warmup and cooldown',()=>{
+ const c=setup(),d={title:'Восстановительный день',details:'Общая длительность тренировки 60 минут. Разминка 15 минут в Z1; затем 3 x 8 минут в Z4; восстановление 3 минуты; заминка 10 минут.',intensity:'Z4'};
+ assert.equal(c.plannedDurationMinutes(d),60);
+ assert.equal(c.plannedWorkoutSegments(d).reduce((sum,s)=>sum+s.duration,0),60);
+});
+test('mobility duration and main quality-work totals are not overall running durations',()=>{
+ const S=require('../plan-structure.js');
+ for(const text of ['20 минут легкой мобилити.', 'ОФП 40 минут; разминка 10 минут легкого бега.', 'Суммарная качественная работа 24 минуты.']) assert.equal(S.overallDuration(text),null);
+ assert.deepEqual(S.timeRange('2 минуты 30 секунд – 3 минуты'),{basis:'duration',from:150,to:180});
+ assert.equal(S.timeRange('2:99'),null);
+});
+test('recovery phrased as between repeats or blocks includes compound minutes',()=>{
+ const c=setup();
+ for(const text of ['Между повторениями 2 минуты 30 секунд трусцой.', 'Между блоками — 2:30 легко.', 'Пауза между отрезками 2.5 минуты.']) {
+  near(c.plannedRecoveryDurationAfterRepeat(text,5,{}),10);
+ }
+ const parts=c.plannedWorkoutSegments({focus:'Темпо',details:'Разминка 20 минут; затем 2 x 15 минут порог. Между блоками 3 минуты очень легкой трусцы. Заминка 15 минут.',intensity:'Z4'});
+ assert.equal(parts.find(s=>s.kind==='recovery').duration,3);
+ assert.ok(!parts.some(s=>s.unknownDuration));
+});
+test('unknown pauses of warmup strides are marked as accessory, not unknown main recovery',()=>{
+ const c=setup(),parts=c.plannedWorkoutSegments({focus:'Темпо',details:'Разминка 20 минут + 4 x 15 секунд свободных ускорений с полным восстановлением. Основная часть: 3 x 10 минут порог. Между блоками 3 минуты легкого бега. Заминка 15 минут.'});
+ const unknown=parts.filter(s=>s.unknownDuration);
+ assert.equal(unknown.length,1);assert.equal(unknown[0].accessory,true);
+ assert.equal(parts.filter(s=>s.kind==='recovery'&&!s.accessory).length,1);
+});
 test('nonnumeric zone label and multi-digit Z10 are not treated as Z1',()=>{
  const c=setup();assert.equal(c.plannedZoneHrReserveRatio('Z10'),null);assert.equal(c.plannedZoneHrReserveRatio('RPE 2-3'),null);
 });
