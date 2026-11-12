@@ -1,7 +1,7 @@
 /* Read-only overview. Preferences are local and isolated by coach and athlete. */
 (() => {
   const el = id => document.getElementById(id);
-  let owner = "", prefs = null, result = null, selected = "", storageAvailable = true;
+  let owner = "", prefs = null, result = null, mainResult = null, selected = "", selectedWeek = "", storageAvailable = true;
   const memory = new Map();
   let suggestibleSurfaces = new Set();
   const esc = value => escapeHtml(String(value ?? ""));
@@ -37,12 +37,12 @@
     el("fitnessHr").value=criteria.hr;
     el("fitnessPace").value=pace(criteria.pace);
     el("fitnessPace").setCustomValidity("");
-    el("fitnessHrLabel").hidden=prefs.mode!=="pace";
+    el("fitnessHrLabel").hidden=false;
     el("fitnessPaceLabel").hidden=prefs.mode!=="hr";
   }
   function render() {
     if (!el("fitnessTrend")) return;
-    if (owner!==settingsKey()) { owner=settingsKey(); selected=""; load(); }
+    if (owner!==settingsKey()) { owner=settingsKey(); selected=""; selectedWeek=""; el("fitnessDetails").open=false; load(); }
     const workouts=normalizedWorkouts();
     if (!prefs.criteria[prefs.type]) {
       // Freeze the initial suggestion once data exists, never on an empty loading state.
@@ -50,7 +50,8 @@
       if (suggestion && state.activeAthleteId) { prefs.criteria[prefs.type]=suggestion; save(); }
     }
     const criteria=FitnessTrend.normalizeCriteria(prefs.criteria[prefs.type]);
-    result=FitnessTrend.analyze(workouts,{weeks:prefs.weeks,mode:prefs.mode,type:prefs.type,criteria});
+    mainResult=FitnessTrend.analyze(workouts,{weeks:prefs.weeks,mode:"pace",type:prefs.type,criteria});
+    result=prefs.mode==="pace" ? mainResult : FitnessTrend.analyze(workouts,{weeks:prefs.weeks,mode:prefs.mode,type:prefs.type,criteria});
     setInputs(criteria);
     el("fitnessScope").textContent=`${activeAthlete()?.name || "Спортсмен"} · ${date(result.start,true)} – ${date(result.end,true)}`;
     const meaningful=["lower","higher","stable","variable"].includes(result.status);
@@ -63,7 +64,13 @@
       lower:result.mode==="pace" ? "Темп быстрее при близкой ЧСС" : "ЧСС ниже при близком темпе",
       higher:result.mode==="pace" ? "Темп медленнее при близкой ЧСС" : "ЧСС выше при близком темпе",
     };
-    el("fitnessStatus").textContent=statuses[result.status];
+    const mainStatuses={...statuses,lower:"Темп быстрее при сопоставимом пульсе",higher:"Темп медленнее при сопоставимом пульсе"};
+    mainStatuses.different="Сравнение ограничено: различаются " + mainResult.conditions.map(key=>({duration:"длительность",hr:"средняя ЧСС"}[key])).join(", ");
+    const mainChange=["lower","higher"].includes(mainResult.status)
+      ? ` · на ${number(Math.abs(mainResult.delta)*60)} с/км относительно первой половины периода` : "";
+    el("fitnessStatus").textContent=mainStatuses[mainResult.status]+mainChange;
+    el("fitnessCount").textContent=`Подходящих тренировок: ${mainResult.matched.length} · ЧСС ${number(criteria.hr-5)}–${number(criteria.hr+5)} уд/мин · ${number(criteria.duration*.8)}–${number(criteria.duration*1.2)} мин`;
+    el("fitnessDetailStatus").textContent=statuses[result.status];
     const firstEnd=new Date(result.split+"T12:00:00"); firstEnd.setDate(firstEnd.getDate()-1);
     const previousEnd=firstEnd.toLocaleDateString("ru-RU",{day:"numeric",month:"short"});
     const delta=result.delta==null ? "" : result.mode==="pace"
@@ -85,9 +92,12 @@
     el("fitnessExclusions").innerHTML=Object.entries(result.excluded).map(([key,count])=>`<li>${esc(reasons[key])}: <strong>${count}</strong></li>`).join("") || "<li>Исключенных записей нет.</li>";
     el("fitnessWeeklyTable").innerHTML=`<table><caption class="visually-hidden">Недельные медианы и разброс</caption><thead><tr><th>Неделя</th><th>Дни</th><th>Медиана, ${unit}</th><th>Разброс 25–75%</th></tr></thead><tbody>${result.weekly.map(w=>`<tr><th scope="row">${esc(date(w.weekStart))}${w.partial ? " *" : ""}</th><td>${w.days}</td><td>${w.value==null ? "Нет данных" : esc(format(w.value))}</td><td>${w.q1==null ? "Недостаточно дней" : `${esc(format(w.q1))}–${esc(format(w.q3))}`}</td></tr>`).join("")}</tbody></table>`;
     el("fitnessLegend").hidden=!result.matched.length;
-    el("fitnessAxisTitle").textContent=result.mode==="pace" ? "Темп, мин/км · быстрее выше" : "ЧСС, уд/мин · ниже пульс выше";
-    el("fitnessAxisTitle").hidden=!result.matched.length;
-    chart();
+    el("fitnessAxisTitle").textContent="Недельный темп, мин/км · быстрее выше";
+    el("fitnessAxisTitle").hidden=!mainResult.matched.length;
+    el("fitnessDetailAxisTitle").textContent=result.mode==="pace" ? "Темп, мин/км · быстрее выше" : "ЧСС, уд/мин · ниже пульс выше";
+    el("fitnessDetailAxisTitle").hidden=!result.matched.length;
+    chart(mainResult,false);
+    chart(result,true);
   }
   function summaryDetail(s) {
     return `${s.days} дн. · ${s.sessions} тренировок${s.days ? ` · ${number(s.duration)} мин · ${result.mode==="pace" ? number(s.hr)+" уд/мин" : pace(s.pace)+" мин/км"}` : ""}`;
@@ -96,10 +106,13 @@
     if (!rows.length) return `<p class="fitness-note">${excluded ? "Исключенных записей нет." : "Сопоставимых тренировок нет."}</p>`;
     return `<table><caption class="visually-hidden">${excluded ? "Исключенные" : "Включенные"} тренировки</caption><thead><tr><th>Дата</th><th>Данные</th><th>${excluded ? "Причина исключения" : "Основание отбора"}</th></tr></thead><tbody>${rows.map(w=>`<tr><th scope="row">${esc(date(w.date))}</th><td>${esc(w.sport)}<br>${Number.isFinite(w.duration)&&w.duration>0 ? number(w.duration)+" мин" : "Время неизвестно"} · ${Number.isFinite(w.hr)&&w.hr>0 ? number(w.hr)+" уд/мин" : "ЧСС неизвестна"}${!excluded ? " · "+pace(w.pace)+" мин/км" : ""}</td><td>${esc(excluded ? reasons[w.reason] : "Тип и показатели в диапазоне; "+environments[w.surface])}</td></tr>`).join("")}</tbody></table>`;
   }
-  function chart() {
-    const r=result,container=el("fitnessChart");
-    if (!r.matched.length) { container.innerHTML='<p class="fitness-empty">Для графика нет сопоставимых тренировок.</p>'; el("fitnessPoint").textContent=""; return; }
-    const values=r.matched.map(w=>w[r.mode]);
+  function chart(r,detailed) {
+    const container=el(detailed ? "fitnessDetailChart" : "fitnessChart");
+    const pointEl=el(detailed ? "fitnessDetailPoint" : "fitnessPoint");
+    const selection=detailed ? selected : selectedWeek;
+    pointEl.hidden=true;
+    if (!r.matched.length) { container.innerHTML='<p class="fitness-empty">Для графика нет сопоставимых тренировок.</p>'; pointEl.textContent=""; return; }
+    const values=detailed ? r.matched.map(w=>w[r.mode]) : r.weekly.filter(w=>w.value!=null).map(w=>w.value);
     const min=Math.min(...values),max=Math.max(...values),padding=Math.max((max-min)*.15,r.mode==="pace"?5/60:2);
     const low=min-padding,high=max+padding;
     const format=value=>r.mode==="pace" ? pace(value) : number(value);
@@ -110,10 +123,10 @@
       const right=Math.min(end,new Date(w.weekEnd+"T23:59:59").getTime());
       return {left:x(left),right:x(right),center:x((left+right)/2)};
     };
-    const bands=r.weekly.filter(w=>w.q1!=null).map(w=>{
+    const bands=detailed ? r.weekly.filter(w=>w.q1!=null).map(w=>{
       const p=weekPosition(w);
       return `<rect class="fitness-band" x="${p.left}" width="${p.right-p.left}" y="${y(w.q1)}" height="${Math.max(.5,y(w.q3)-y(w.q1))}"/>`;
-    }).join("");
+    }).join("") : "";
     const lines=r.weekly.map((w,i)=>{
       const prev=r.weekly[i-1];
       if (!prev || prev.days<2 || w.days<2) return "";
@@ -122,22 +135,23 @@
     container.innerHTML=`<div class="fitness-axis"><span>${esc(format(low))}</span><span>${esc(format((low+high)/2))}</span><span>${esc(format(high))}</span></div>
       <div class="fitness-plot" role="group" aria-label="${r.mode==="pace" ? "Темп: быстрее выше" : "ЧСС: ниже пульс выше"}">
       <svg class="fitness-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${bands}${lines}</svg>
-      ${r.matched.map((w,i)=>`<button type="button" class="fitness-dot" style="left:${x(w.stamp)}%;top:${y(w[r.mode])}%" data-fitness-point="${i}" aria-label="${esc(pointLabel(w))}" title="${esc(pointLabel(w))}" aria-pressed="${selected===w.key}"></button>`).join("")}
-      ${r.weekly.map((w,i)=>w.value==null ? "" : `<button type="button" class="fitness-week ${w.days===1 ? "single" : ""}" style="left:${weekPosition(w).center}%;top:${y(w.value)}%" data-fitness-week="${i}" aria-label="${esc(weekLabel(w))}" title="${esc(weekLabel(w))}" aria-pressed="${selected==="week:"+w.weekStart}"></button>`).join("")}</div>
+      ${detailed ? r.matched.map((w,i)=>`<button type="button" class="fitness-dot" style="left:${x(w.stamp)}%;top:${y(w[r.mode])}%" data-fitness-point="${i}" aria-label="${esc(pointLabel(w))}" title="${esc(pointLabel(w))}" aria-pressed="${selection===w.key}"></button>`).join("") : ""}
+      ${r.weekly.map((w,i)=>w.value==null ? "" : `<button type="button" class="fitness-week ${w.days===1 ? "single" : ""}" style="left:${weekPosition(w).center}%;top:${y(w.value)}%" data-fitness-week="${i}" aria-label="${esc(weekLabel(w,r,detailed))}" title="${esc(weekLabel(w,r,detailed))}" aria-pressed="${selection==="week:"+w.weekStart}"></button>`).join("")}</div>
       <div class="fitness-dates"><span>${esc(date(r.start))}</span><span>${esc(date(r.split))}</span><span>${esc(date(r.end))}</span></div>`;
-    const point=r.matched.find(w=>w.key===selected), week=r.weekly.find(w=>"week:"+w.weekStart===selected);
-    el("fitnessPoint").textContent=point ? pointLabel(point)+" · включена: соответствует фиксированным критериям." : week ? weekLabel(week) : r.mode==="pace" ? "Темп, мин/км · быстрее выше" : "ЧСС, уд/мин · ниже пульс выше";
+    const point=detailed && r.matched.find(w=>w.key===selection), week=r.weekly.find(w=>"week:"+w.weekStart===selection);
+    pointEl.textContent=point ? pointLabel(point)+" · включена: соответствует фиксированным критериям." : week ? weekLabel(week,r,detailed) : "";
+    pointEl.hidden=!point && !week;
   }
   function pointLabel(w) { return `${date(w.date)} · ${number(w.duration)} мин · ${pace(w.pace)} мин/км · ${number(w.hr)} уд/мин`; }
-  function weekLabel(w) {
-    const format=v=>result.mode==="pace" ? pace(v)+" мин/км" : number(v)+" уд/мин";
-    return `${date(w.weekStart)} – ${date(w.weekEnd)}${w.partial ? " (неполная неделя)" : ""} · медиана ${format(w.value)} · ${w.days} дн. / ${w.sessions} тренировок${w.days===1 ? " · единственное наблюдение" : ""}${w.q1==null ? " · разброс не оценивается" : ` · 25–75%: ${format(w.q1)} – ${format(w.q3)}`}`;
+  function weekLabel(w,r,detailed) {
+    const format=v=>r.mode==="pace" ? pace(v)+" мин/км" : number(v)+" уд/мин";
+    return `${date(w.weekStart)} – ${date(w.weekEnd)}${w.partial ? " (неполная неделя)" : ""} · медиана ${format(w.value)} · ${w.days} дн. / ${w.sessions} тренировок${w.days===1 ? " · единственное наблюдение" : ""}${!detailed ? "" : w.q1==null ? " · разброс не оценивается" : ` · 25–75%: ${format(w.q1)} – ${format(w.q3)}`}`;
   }
   globalThis.FitnessTrendView={render};
   document.addEventListener("DOMContentLoaded",()=>{
     for (const id of ["fitnessPeriod","fitnessMode","fitnessType"]) el(id).addEventListener("change",()=>{
       prefs.weeks=Number(el("fitnessPeriod").value); prefs.mode=el("fitnessMode").value; prefs.type=el("fitnessType").value;
-      selected="";save();render();
+      selected="";selectedWeek="";save();render();
     });
     el("fitnessSettings").addEventListener("submit",event=>{
       event.preventDefault();
@@ -148,20 +162,24 @@
       }
       prefs.criteria[prefs.type]=FitnessTrend.normalizeCriteria({duration:el("fitnessDuration").value,hr:el("fitnessHr").value,
         pace:paceValue,surface:el("fitnessSurface").value});
-      selected="";save();render();
+      selected="";selectedWeek="";save();render();
     });
     el("fitnessSurface").addEventListener("change",()=>{el("fitnessSuggest").disabled=!suggestibleSurfaces.has(el("fitnessSurface").value);});
     el("fitnessPace").addEventListener("input",()=>el("fitnessPace").setCustomValidity(""));
     el("fitnessSuggest").addEventListener("click",()=>{
       const suggestion=FitnessTrend.suggestCriteria(normalizedWorkouts(),{type:prefs.type,weeks:12,surface:el("fitnessSurface").value});
-      if (suggestion) { prefs.criteria[prefs.type]=suggestion; selected="";save();render(); }
+      if (suggestion) { prefs.criteria[prefs.type]=suggestion; selected="";selectedWeek="";save();render(); }
     });
-    el("fitnessChart").addEventListener("click",event=>{
+    for (const id of ["fitnessChart","fitnessDetailChart"]) el(id).addEventListener("click",event=>{
+      const detailed=id==="fitnessDetailChart", r=detailed ? result : mainResult;
       const dot=event.target.closest("[data-fitness-point]"),week=event.target.closest("[data-fitness-week]");
-      if ((!dot && !week) || !result) return;
-      selected=dot ? result.matched[Number(dot.dataset.fitnessPoint)]?.key : "week:"+result.weekly[Number(week.dataset.fitnessWeek)]?.weekStart;
-      for (const button of el("fitnessChart").querySelectorAll("button")) button.setAttribute("aria-pressed",String(button===(dot || week)));
-      el("fitnessPoint").textContent=dot ? pointLabel(result.matched[Number(dot.dataset.fitnessPoint)])+" · включена: соответствует фиксированным критериям." : weekLabel(result.weekly[Number(week.dataset.fitnessWeek)]);
+      if ((!dot && !week) || !r) return;
+      const selection=dot ? r.matched[Number(dot.dataset.fitnessPoint)]?.key : "week:"+r.weekly[Number(week.dataset.fitnessWeek)]?.weekStart;
+      if (detailed) selected=selection; else selectedWeek=selection;
+      for (const button of el(id).querySelectorAll("button")) button.setAttribute("aria-pressed",String(button===(dot || week)));
+      const pointEl=el(detailed ? "fitnessDetailPoint" : "fitnessPoint");
+      pointEl.textContent=dot ? pointLabel(r.matched[Number(dot.dataset.fitnessPoint)])+" · включена: соответствует фиксированным критериям." : weekLabel(r.weekly[Number(week.dataset.fitnessWeek)],r,detailed);
+      pointEl.hidden=false;
     });
   });
 })();

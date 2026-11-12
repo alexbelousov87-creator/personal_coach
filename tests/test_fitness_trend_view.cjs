@@ -24,7 +24,7 @@ function harness({storage=new Map(),blocked=false,initial=workouts()}={}) {
   isRunningWorkout:w=>w.running,getWorkoutClassification:w=>w.classification,activeAthlete:()=>({name:state.activeAthleteId}),
   localStorage:{getItem(key){if(blocked)throw Error("Blocked");return storage.get(key)||null;},setItem(key,value){if(blocked)throw Error("Blocked");storage.set(key,value);}}});
  vm.runInContext(source,c);listeners.DOMContentLoaded();c.FitnessTrendView.render();
- const event=(id,type)=>el(id).events[type]({preventDefault(){}});
+ const event=(id,type,extra={})=>el(id).events[type]({preventDefault(){},...extra});
  return {el,state,storage,render:()=>c.FitnessTrendView.render(),event};
 }
 test("initial suggested criteria freeze across imports, repeated renders and periods",()=>{
@@ -79,4 +79,61 @@ test("bad persisted criteria are normalized and cannot create a NaN plot",()=>{
  const storage=new Map([["runflow:aerobic:v2:"+JSON.stringify(["coach","one"]),JSON.stringify({mode:"hr",criteria:{easy:{hr:-1,pace:"bad",duration:0,surface:"bad"}}})]]);
  const h=harness({storage});assert.equal(h.el("fitnessHr").value,140);
  assert.ok(!h.el("fitnessChart").innerHTML.includes("NaN"));
+});
+
+test("overview contains weekly pace only; observations and spread remain in detailed analysis",()=>{
+ const initial=workouts();
+ for(const offset of [1,2,3,4,5,6,7]) initial.push({...initial[3],id:"extra"+offset,date:new Date(Date.now()-offset*86400000).toISOString()});
+ const h=harness({initial});
+ assert.equal(h.el("fitnessDetails").open,false);
+ assert.match(h.el("fitnessChart").innerHTML,/data-fitness-week/);
+ assert.doesNotMatch(h.el("fitnessChart").innerHTML,/data-fitness-point|fitness-band/);
+ assert.match(h.el("fitnessDetailChart").innerHTML,/data-fitness-point/);
+ assert.match(h.el("fitnessDetailChart").innerHTML,/fitness-band/);
+ assert.match(h.el("fitnessCount").textContent,/Подходящих тренировок: 13/);
+ assert.equal(h.el("fitnessPoint").hidden,true);
+});
+
+test("switching or restoring the detailed HR mode never changes the main pace chart or verdict",()=>{
+ const h=harness(),chart=h.el("fitnessChart").innerHTML,status=h.el("fitnessStatus").textContent;
+ h.el("fitnessMode").value="hr";h.event("fitnessMode","change");
+ assert.equal(h.el("fitnessChart").innerHTML,chart);
+ assert.equal(h.el("fitnessStatus").textContent,status);
+ assert.match(h.el("fitnessDetailAxisTitle").textContent,/ЧСС/);
+ assert.match(h.el("fitnessAxisTitle").textContent,/Недельный темп/);
+ assert.equal(h.el("fitnessHrLabel").hidden,false);
+ const restored=harness({storage:h.storage});
+ assert.equal(restored.el("fitnessMode").value,"hr");
+ assert.equal(restored.el("fitnessDetails").open,false);
+ assert.equal(restored.el("fitnessChart").innerHTML,chart);
+});
+
+test("week selection uses each chart's own metric and remains independent",()=>{
+ const h=harness();h.el("fitnessMode").value="hr";h.event("fitnessMode","change");
+ const select=(id)=>{
+  const index=h.el(id).innerHTML.match(/data-fitness-week="(\d+)"/)[1];
+  h.event(id,"click",{target:{closest:selector=>selector==="[data-fitness-week]" ? {dataset:{fitnessWeek:index}} : null}});
+ };
+ select("fitnessChart");
+ assert.equal(h.el("fitnessPoint").hidden,false);
+ assert.match(h.el("fitnessPoint").textContent,/5:00 мин\/км/);
+ assert.doesNotMatch(h.el("fitnessPoint").textContent,/25–75%|разброс/);
+ assert.equal(h.el("fitnessDetailPoint").hidden,true);
+ select("fitnessDetailChart");
+ assert.match(h.el("fitnessDetailPoint").textContent,/140 уд\/мин/);
+ assert.match(h.el("fitnessPoint").textContent,/5:00 мин\/км/);
+ h.state.activeAthleteId="two";h.el("fitnessDetails").open=true;h.render();
+ assert.equal(h.el("fitnessDetails").open,false);
+ assert.equal(h.el("fitnessPoint").hidden,true);
+ assert.equal(h.el("fitnessDetailPoint").hidden,true);
+});
+
+test("empty and stale samples cannot produce a positive headline",()=>{
+ const empty=harness({initial:[]});
+ assert.match(empty.el("fitnessStatus").textContent,/Нет тренировок/);
+ assert.match(empty.el("fitnessCount").textContent,/Подходящих тренировок: 0/);
+ assert.doesNotMatch(empty.el("fitnessChart").innerHTML,/data-fitness-week|NaN/);
+ const stale=harness({initial:workouts().filter(w=>new Date(w.date)<new Date(Date.now()-16*86400000))});
+ assert.match(stale.el("fitnessStatus").textContent,/Нет свежих/);
+ assert.doesNotMatch(stale.el("fitnessStatus").textContent,/Темп быстрее/);
 });

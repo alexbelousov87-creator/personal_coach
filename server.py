@@ -18,6 +18,7 @@ import socket
 from contextlib import closing, contextmanager
 import plan_history
 import sync_monitor
+import workout_corrections
 import sqlite3
 import threading
 import time
@@ -453,6 +454,19 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": f"unexpected server error: {exc}"}, status=500)
             return
 
+        if clean_path == "/api/workouts/edit":
+            session = self.require_session(roles={"student"})
+            if session is None:
+                return
+            try:
+                self.send_json(edit_workout_for_session(session, self.read_json()))
+            except AppError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
+            except Exception:
+                logging.exception("Workout correction save failed")
+                self.send_json({"error": "Не удалось сохранить исправление тренировки."}, status=500)
+            return
+
         if clean_path == "/api/plan/apply":
             session = self.require_session(roles={"coach"})
             if session is None:
@@ -604,6 +618,8 @@ class TrainingCoachHandler(BaseHTTPRequestHandler):
             "app.js",
             "coach-overview.js",
             "workout-comparison.js",
+            "workout-corrections.js",
+            "workout-editor.js",
             "plan-structure.js",
             "plan-history.js",
             "fitness-trend.js",
@@ -1599,7 +1615,7 @@ def apply_plan_change_for_session(session, payload):
 
 
 def save_state_for_session(payload, session):
-    with plan_write_context(session):
+    with DB_LOCK, plan_write_context(session):
         return _save_state_for_session(payload, session)
 
 
@@ -1634,12 +1650,59 @@ def _save_state_for_session(payload, session):
         athlete["profile"] = profile
         athlete["name"] = profile.get("name") or athlete.get("name") or "Спортсмен"
     if isinstance(workouts, list):
+        workouts = preserve_saved_workout_corrections(athlete.get("workouts") or [], workouts)
         athlete["workouts"] = filter_student_workouts_for_storage(athlete_id, workouts, athletes)
     if isinstance(selected_week, str):
         athlete["selectedWeekStart"] = selected_week
     athlete["updatedAt"] = datetime.now().isoformat(timespec="seconds")
     athletes[index] = athlete
     save_telegram_athletes(athletes, coach_id=coach_id)
+
+
+def preserve_saved_workout_corrections(existing, submitted):
+    result = []
+    for workout in submitted:
+        if not isinstance(workout, dict):
+            continue
+        index = find_mergeable_backend_workout_index(workout, existing)
+        saved = existing[index] if index >= 0 else {}
+        result.append(workout_corrections.preserve(workout, saved))
+    # A stale browser must not discard a corrected record it hasn't seen yet.
+    for workout in existing:
+        if workout.get("manualCorrection") and find_mergeable_backend_workout_index(workout, result) < 0:
+            result.append(workout)
+    return result
+
+
+def edit_workout_for_session(session, payload):
+    coach_id = session.get("coach_id") or DEFAULT_COACH_ID
+    role = session.get("role") if auth_enabled() else load_state_value("currentRole", "coach", coach_id=coach_id)
+    athlete_id = session.get("athlete_id")
+    if role != "student" or not athlete_id:
+        raise AppError("Исправлять тренировки может только ученик.", 403)
+    if not isinstance(payload, dict) or not isinstance(payload.get("workout"), dict):
+        raise AppError("Не указана тренировка.", 400)
+    identity = payload["workout"]
+    with DB_LOCK:
+        athletes = telegram_athletes(coach_id)
+        athlete = next((a for a in athletes if str(a.get("id") or "") == str(athlete_id)), None)
+        if athlete is None:
+            raise AppError("Спортсмен не найден.", 404)
+        matches = [w for w in athlete.get("workouts", []) if isinstance(w, dict)
+                   and all(str(w.get(key) or "") == str(identity.get(key) or "") for key in ("id", "date", "source"))]
+        if len(matches) != 1:
+            raise AppError("Тренировка не найдена или изменилась. Обновите страницу.", 404)
+        workout = matches[0]
+        if payload.get("expected") != workout_corrections.revision(workout):
+            raise AppError("Тренировка уже изменилась. Обновите страницу и повторите исправление.", 409)
+        try:
+            updated = workout_corrections.correct(workout, payload, datetime.now(timezone.utc).isoformat())
+        except ValueError as exc:
+            raise AppError(str(exc), 400) from None
+        athlete["workouts"] = [updated if w is workout else w for w in athlete["workouts"]]
+        save_telegram_athletes(athletes, coach_id=coach_id)
+        logging.info("Workout totals corrected by student: coach=%s athlete=%s", coach_id, athlete_id)
+        return {"ok": True, "workout": updated}
 
 
 def notification_status(session=None):
@@ -3179,6 +3242,11 @@ def runalyze_pace_min_per_km(value):
     return round(pace_min, 2)
 
 def merge_synced_workouts_into_athlete(workouts, coach_id, athlete_id):
+    with DB_LOCK:
+        return _merge_synced_workouts_into_athlete(workouts, coach_id, athlete_id)
+
+
+def _merge_synced_workouts_into_athlete(workouts, coach_id, athlete_id):
     if not isinstance(workouts, list):
         return {"added": 0, "duplicates": 0, "stored": 0}
     valid = [dict(workout) for workout in workouts if isinstance(workout, dict) and workout.get("date") and number_or_none(workout.get("durationMin"))]
@@ -3282,8 +3350,8 @@ def are_similar_imported_backend_workouts(a, b):
     if not duration_a or not duration_b or abs(duration_a - duration_b) > duration_tolerance:
         return False
 
-    distance_a = number_or_none(a.get("distanceKm")) or 0
-    distance_b = number_or_none(b.get("distanceKm")) or 0
+    distance_a = number_or_none((a.get("manualCorrection") or {}).get("original", {}).get("distanceKm", a.get("distanceKm"))) or 0
+    distance_b = number_or_none((b.get("manualCorrection") or {}).get("original", {}).get("distanceKm", b.get("distanceKm"))) or 0
     if distance_a and distance_b:
         distance_tolerance = max(0.25, min(distance_a, distance_b) * 0.03)
         return abs(distance_a - distance_b) <= distance_tolerance
@@ -3353,7 +3421,8 @@ def workout_dedup_key(workout):
     date_key = workout_date_key(workout.get("date") if isinstance(workout, dict) else "")
     sport_key = normalized_sport_key(workout.get("sport") if isinstance(workout, dict) else "")
     duration_key = round(number_or_none(workout.get("durationMin") if isinstance(workout, dict) else 0) or 0)
-    distance_key = f"{round(number_or_none(workout.get('distanceKm') if isinstance(workout, dict) else 0) or 0, 2):.2f}"
+    distance = (workout.get("manualCorrection") or {}).get("original", {}).get("distanceKm", workout.get("distanceKm")) if isinstance(workout, dict) else 0
+    distance_key = f"{round(number_or_none(distance) or 0, 2):.2f}"
     return f"{date_key}-{sport_key}-{duration_key}-{distance_key}"
 
 
@@ -3471,7 +3540,7 @@ def merge_duplicate_backend_workouts(a, b):
     if base.get("paceSource") == "distance-duration" and tcx_file_name_from_backend_workout(base):
         base["paceSource"] = "tcx"
         base["pace"] = base.get("pace") or base.get("paceMinPerKm")
-    return base
+    return workout_corrections.preserve(base, a, b)
 
 
 def workout_richness_score(workout):
@@ -3634,7 +3703,7 @@ def merge_polar_workout_enrichment(workout, enrichment):
         updated["workoutType"] = "tempo"
     if enrichment.get("avgHr") and not updated.get("avgHr"):
         updated["avgHr"] = enrichment["avgHr"]
-    return updated
+    return workout_corrections.apply(updated)
 
 
 def tcx_lap_rows_backend(laps):

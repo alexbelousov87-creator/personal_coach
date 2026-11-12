@@ -1338,8 +1338,8 @@ function areSimilarImportedWorkouts(a, b) {
   const closeDuration = durationA > 0 && durationB > 0 && Math.abs(durationA - durationB) <= durationTolerance;
   if (!closeDuration) return false;
 
-  const distanceA = Number(a.distanceKm) || 0;
-  const distanceB = Number(b.distanceKm) || 0;
+  const distanceA = Number(a.manualCorrection?.original?.distanceKm ?? a.distanceKm) || 0;
+  const distanceB = Number(b.manualCorrection?.original?.distanceKm ?? b.distanceKm) || 0;
   if (distanceA > 0 && distanceB > 0) {
     const distanceTolerance = Math.max(0.25, Math.min(distanceA, distanceB) * 0.03);
     return Math.abs(distanceA - distanceB) <= distanceTolerance;
@@ -1385,7 +1385,7 @@ function workoutDedupKey(workout) {
   const dateKey = date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 16) : "";
   const sportKey = normalizedSportKey(workout?.sport);
   const durationKey = Math.round(Number(workout?.durationMin) || 0);
-  const distanceKey = round(Number(workout?.distanceKm) || 0, 2).toFixed(2);
+  const distanceKey = round(Number(workout?.manualCorrection?.original?.distanceKm ?? workout?.distanceKm) || 0, 2).toFixed(2);
   return `${dateKey}-${sportKey}-${durationKey}-${distanceKey}`;
 }
 
@@ -1490,7 +1490,7 @@ function mergeDuplicateWorkouts(a, b) {
   const providerIds = { ...workoutProviderIds(base), ...workoutProviderIds(other) };
   if (Object.keys(providerIds).length) base.providerIds = providerIds;
   base.workoutType = classifyWorkout(base);
-  return base;
+  return globalThis.WorkoutCorrections?.preserve(base, a, b) || base;
 }
 
 function workoutRichnessScore(workout) {
@@ -1539,8 +1539,8 @@ function normalizeWorkout(input) {
         : "";
   const isoDate = date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
   const sport = String(input.sport || "Другое").trim();
-  return {
-    id: `${isoDate.slice(0, 16)}-${normalizedSportKey(sport)}-${durationMin}-${distanceKm}`,
+  const workout = {
+    id: input.manualCorrection && input.id ? input.id : `${isoDate.slice(0, 16)}-${normalizedSportKey(sport)}-${durationMin}-${distanceKm}`,
     source: input.source || "manual",
     providerIds: workoutProviderIds(input),
     tcxFile: input.tcxFile || (/\.tcx$/i.test(fileNameFromSource(input.source)) ? fileNameFromSource(input.source) : ""),
@@ -1567,6 +1567,7 @@ function normalizeWorkout(input) {
     loadSource,
     notes: String(input.notes || "").trim(),
     feedback: normalizeWorkoutFeedback(input.feedback),
+    manualCorrection: input.manualCorrection || null,
     workoutTypeOverride: validWorkoutType(input.workoutTypeOverride) ? input.workoutTypeOverride : "",
     workoutType: classifyWorkout({
       sport,
@@ -1585,6 +1586,7 @@ function normalizeWorkout(input) {
       notes: input.notes,
     }),
   };
+  return globalThis.WorkoutCorrections?.apply(workout) || workout;
 }
 
 function normalizeWorkoutFeedback(feedback) {
@@ -2310,6 +2312,7 @@ function hrZoneSettingsFromForm(data) {
 }
 
 function renderWorkouts() {
+  globalThis.WorkoutEditor?.checkContext();
   const list = workoutList;
   if (!state.workouts.length) {
     list.innerHTML = `<div class="empty">История пуста</div>`;
@@ -2327,6 +2330,7 @@ function renderWorkouts() {
             ${renderWorkoutClassification(workout)}
             ${renderWorkoutTypeControl(workout)}
             ${renderWorkoutFeedbackBlock(workout)}
+            ${globalThis.WorkoutEditor?.renderControl(workout) || ""}
           </div>
           <small>${workout.load} TRIMP</small>
         </article>
@@ -2336,7 +2340,9 @@ function renderWorkouts() {
 }
 
 function canEditWorkoutDetails() {
-  return !isCoachRole();
+  return state.auth.enabled
+    ? state.auth.authenticated && state.auth.role === "student"
+    : state.currentRole === "student";
 }
 
 function canEditSubjectiveState() {
@@ -7607,6 +7613,7 @@ function mergeWorkoutEnrichment(workout, parsed) {
     changed = true;
   }
 
+  Object.assign(enriched, globalThis.WorkoutCorrections?.apply(enriched) || enriched);
   const workoutType = classifyWorkout(enriched);
   if (enriched.workoutType !== workoutType) {
     enriched.workoutType = workoutType;

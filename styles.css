@@ -3120,6 +3120,24 @@ textarea {
   color: var(--ink, #18232b); background: #fff; overflow: auto;
 }
 .plan-revision-dialog::backdrop { background: rgb(12 22 29 / 55%); }
+.workout-edit-dialog {
+  width:min(560px,calc(100% - 24px)); max-height:calc(100dvh - 24px);
+  margin:auto; padding:0; border:1px solid var(--line); border-radius:8px;
+  color:var(--ink); background:#fff; overflow:auto;
+}
+.workout-edit-dialog::backdrop { background:rgb(12 22 29 / 55%); }
+.workout-edit-fields { padding:8px 22px 18px; }
+.workout-edit-fields label { display:flex; flex-direction:column; gap:6px; margin-top:14px; font-size:13px; }
+.workout-edit-fields input { width:100%; min-width:0; }
+.workout-edit-close { flex:0 0 36px; height:36px; padding:0; font-size:24px; }
+.workout-edit-dialog .button-row { flex-wrap:wrap; }
+.workout-edit-dialog .button-row button { white-space:normal; }
+.workout-edit-meta { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:12px; }
+.workout-edit-meta button { font-size:12px; white-space:normal; }
+@media (max-width:600px) {
+  .workout-edit-dialog .button-row { display:grid; grid-template-columns:1fr; }
+  .workout-edit-fields { padding-inline:14px; }
+}
 .revision-header, .revision-footer { padding: 18px 22px; background: #f5f8fa; }
 .revision-header { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; border-bottom: 1px solid #d9e2e7; }
 .revision-header h2 { margin: 0; font-size: 20px; }
@@ -3153,10 +3171,11 @@ textarea {
   .revision-footer .button-row { display: grid; grid-template-columns: 1fr; }
 }
 .fitness-panel { margin-top:24px; padding:22px 0; border-block:1px solid var(--line); }
-.fitness-filters { display:grid; grid-template-columns:120px 190px minmax(200px,320px); gap:14px; }
-.fitness-filters label, .fitness-settings-form label { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); min-width:0; }
+.fitness-filters { display:grid; grid-template-columns:120px minmax(150px,190px); gap:14px; }
+.fitness-filters label, .fitness-settings-form label, .fitness-detail-controls label { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); min-width:0; }
 .fitness-panel [hidden] { display:none !important; }
-.fitness-filters select, .fitness-settings-form select, .fitness-settings-form input { width:100%; min-width:0; font-size:13px; }
+.fitness-filters select, .fitness-settings-form select, .fitness-settings-form input, .fitness-detail-controls select { width:100%; min-width:0; font-size:13px; }
+.fitness-detail-controls { max-width:320px; margin-top:18px; }
 .fitness-status { font-weight:600; margin:20px 0 12px; }
 .fitness-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; padding:14px 0; border-block:1px solid var(--line); }
 .fitness-summary > div { min-width:0; display:flex; flex-direction:column; gap:6px; }
@@ -3183,8 +3202,9 @@ textarea {
 .fitness-dates { grid-column:2; display:flex; justify-content:space-between; gap:6px; padding-top:10px; font-size:12px; color:var(--muted); }
 .fitness-point { min-height:44px; margin:12px 0 4px; }
 .fitness-empty { grid-column:1/-1; padding:32px 12px; text-align:center; color:var(--muted); font-size:14px; }
-.fitness-evidence, .fitness-method, .fitness-settings { padding:12px 0; border-top:1px solid var(--line); font-size:13px; }
-.fitness-evidence summary, .fitness-method summary, .fitness-settings summary { cursor:pointer; font-weight:600; }
+.fitness-evidence, .fitness-method, .fitness-settings, .fitness-details { padding:12px 0; border-top:1px solid var(--line); font-size:13px; }
+.fitness-details { margin-top:20px; }
+.fitness-evidence summary, .fitness-method summary, .fitness-settings summary, .fitness-details > summary { cursor:pointer; font-weight:600; }
 .fitness-evidence h3 { font-size:14px; margin:18px 0 8px; }
 .fitness-evidence ul { padding-left:18px; color:var(--muted); line-height:1.8; }
 .fitness-method p { line-height:1.65; color:var(--muted); max-width:900px; }
@@ -3200,7 +3220,6 @@ textarea {
 .fitness-legend .spread::before { background:rgb(216 164 56 / 25%); border-radius:0; width:18px; height:10px; }
 @media (max-width:800px) {
   .fitness-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .fitness-filters label:last-child { grid-column:1/-1; }
 }
 @media (max-width:600px) {
   .fitness-panel { padding:18px 0; }
