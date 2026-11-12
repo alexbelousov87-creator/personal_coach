@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const el=id=>document.getElementById(id);
-  let opened=null,busy=false,paceTouched=false;
+  let opened=null,busy=false;
   const context=()=>JSON.stringify([state.auth?.coachId || state.coachProfile?.id,state.activeAthleteId,state.auth?.role,state.currentRole]);
   const revision=w=>({distanceKm:w.distanceKm ?? null,paceMinPerKm:w.paceMinPerKm ?? null,
     paceSource:w.paceSource || "",updatedAt:w.manualCorrection?.updatedAt || ""});
@@ -20,8 +20,7 @@
   function open(workout) {
     if (!canEditWorkoutDetails() || busy) return;
     const original=workout.manualCorrection?.original || workout;
-    opened={context:context(),identity:{id:workout.id || "",date:workout.date,source:workout.source || ""},expected:revision(workout)};
-    paceTouched=false;
+    opened={context:context(),identity:{id:workout.id || "",date:workout.date,source:workout.source || ""},expected:revision(workout),durationMin:Number(workout.durationMin)};
     el("workoutEditScope").textContent=`${formatDate(workout.date)} · ${workout.sport} · ${workout.durationMin} мин`;
     el("workoutEditOriginal").textContent=`Исходные данные: ${formatDistance(original.distanceKm)} · ${formatTrustedPace(original)}`;
     el("workoutEditDistance").value=workout.distanceKm || 0;
@@ -77,7 +76,14 @@
     el("workoutEditDialog").addEventListener("close",()=>{opened=null;});
     el("workoutEditForm").addEventListener("submit",event=>{event.preventDefault();save();});
     el("workoutEditRestore").addEventListener("click",()=>save(true));
-    el("workoutEditPace").addEventListener("input",()=>{paceTouched=true;el("workoutEditPace").setCustomValidity("");});
-    el("workoutEditDistance").addEventListener("input",()=>{if(!paceTouched)el("workoutEditPace").value="";el("workoutEditPace").setCustomValidity("");});
+    el("workoutEditPace").addEventListener("input",()=>el("workoutEditPace").setCustomValidity(""));
+    el("workoutEditDistance").addEventListener("input",()=>{
+      checkContext();
+      if (!opened || busy) return;
+      const distance=Number(el("workoutEditDistance").value),duration=opened.durationMin;
+      el("workoutEditPace").value=Number.isFinite(distance) && distance>0 && distance<=1000 && Number.isFinite(duration) && duration>0
+        ? paceValue(duration/distance) : "";
+      el("workoutEditPace").setCustomValidity("");
+    });
   });
 })();

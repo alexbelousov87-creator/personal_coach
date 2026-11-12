@@ -1075,7 +1075,7 @@
           <p id="workoutEditOriginal" class="fitness-note"></p>
           <label>Дистанция, км<input id="workoutEditDistance" type="number" min="0" max="1000" step="0.001" inputmode="decimal" required></label>
           <label>Средний темп, мин/км<input id="workoutEditPace" type="text" inputmode="text" placeholder="Не указан" maxlength="5"></label>
-          <p class="fitness-note">Пульс, длительность, TRIMP и данные кругов остаются исходными. Темп без ручного значения не подтвержден.</p>
+          <p class="fitness-note">Средний темп = длительность / дистанция. Пульс, длительность, TRIMP и данные кругов остаются исходными.</p>
           <p id="workoutEditError" class="form-error" role="alert" hidden></p>
         </div>
         <footer class="revision-footer">
@@ -1088,7 +1088,7 @@
       </form>
     </dialog>
     <script src="workout-corrections.js?v=20261112-edit"></script>
-    <script src="workout-editor.js?v=20261112-edit"></script>
+    <script src="workout-editor.js?v=20261112-pace"></script>
     <script src="coach-overview.js?v=20260922-roster"></script>
     <script src="plan-structure.js?v=20261109-rpe"></script>
     <script src="workout-comparison.js?v=20261109-plan-fact"></script>
