@@ -916,6 +916,16 @@ p {
   color: var(--muted);
 }
 
+.load-panel, .load-charts, .load-chart { min-width:0; }
+.load-panel { align-self:start; }
+.load-period-switch { display:inline-flex; gap:2px; max-width:100%; margin:0; padding:3px; border:1px solid var(--line); border-radius:6px; }
+.load-period-switch label { position:relative; cursor:pointer; }
+.load-period-switch span { display:block; min-width:70px; padding:9px 12px; border-radius:3px; text-align:center; font-size:13px; }
+.load-period-switch input:checked + span { background:#e5f1f3; color:#145e6a; font-weight:700; }
+.load-period-switch input:focus-visible + span { outline:2px solid var(--accent-2); outline-offset:1px; }
+.load-range { margin:10px 0 16px; color:var(--muted); font-size:12px; line-height:1.5; }
+.load-panel .panel-head { flex-wrap:wrap; }
+.load-panel #loadLabel { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
 .load-charts {
   display: grid;
   gap: 18px;
@@ -945,7 +955,7 @@ p {
 .chart-bars {
   display: grid;
   align-items: end;
-  grid-template-columns: repeat(14, minmax(12px, 1fr));
+  grid-template-columns: repeat(var(--bar-count, 14), minmax(34px, 1fr));
   gap: 8px;
   min-height: 170px;
   padding-top: 4px;
@@ -953,12 +963,14 @@ p {
   background-image: linear-gradient(to top, rgba(99, 114, 123, 0.14) 1px, transparent 1px);
   background-size: 100% 40px;
   background-position: 0 25px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .bar-wrap {
   display: grid;
   align-items: end;
-  grid-template-rows: 18px minmax(4px, auto) 18px;
+  grid-template-rows: 18px minmax(4px, auto) 32px;
   gap: 5px;
   min-width: 0;
 }
@@ -976,6 +988,8 @@ p {
 .bar.hours {
   background: var(--warn);
 }
+.bar.zero { background:var(--line); }
+.bar-wrap.current .bar-date { color:var(--ink); font-weight:700; }
 
 .bar-value {
   color: var(--ink);
@@ -991,6 +1005,7 @@ p {
   line-height: 1;
   text-align: center;
 }
+.bar-date small { display:block; margin-top:4px; font-size:10px; font-weight:400; }
 
 .dropzone {
   display: grid;
@@ -2665,7 +2680,7 @@ textarea {
   }
 
   .chart-bars {
-    grid-template-columns: repeat(14, minmax(22px, 1fr));
+    grid-template-columns: repeat(var(--bar-count, 14), minmax(34px, 1fr));
     gap: 5px;
     overflow-x: auto;
     min-height: 150px;

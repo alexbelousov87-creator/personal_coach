@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Training Coach</title>
     <link rel="icon" href="AvaBotTrainingPlan.png?v=20261012-runflow" type="image/png">
-    <link rel="stylesheet" href="styles.css?v=20261112-fitness">
+    <link rel="stylesheet" href="styles.css?v=20261113-load">
   </head>
   <body class="auth-pending">
     <section class="auth-gate" id="authGate" hidden>
@@ -168,11 +168,18 @@
               <div class="workout-list" id="workoutList"></div>
             </section>
 
-            <section class="panel">
+            <section class="panel load-panel" id="loadPanel">
               <div class="panel-head">
                 <h2>Нагрузка</h2>
                 <span id="loadLabel">нет данных</span>
               </div>
+              <fieldset id="loadPeriodControls" class="load-period-switch">
+                <legend class="visually-hidden">Группировка нагрузки</legend>
+                <label><input class="visually-hidden" type="radio" name="loadChartPeriod" value="day" checked><span>День</span></label>
+                <label><input class="visually-hidden" type="radio" name="loadChartPeriod" value="week"><span>Неделя</span></label>
+                <label><input class="visually-hidden" type="radio" name="loadChartPeriod" value="month"><span>Месяц</span></label>
+              </fieldset>
+              <p id="loadRange" class="load-range"></p>
               <div class="load-charts" id="loadBars"></div>
             </section>
           </div>
@@ -1096,6 +1103,6 @@
     <script src="fitness-trend.js?v=20261014-aerobic"></script>
     <script src="fitness-trend-view.js?v=20261112-fitness"></script>
     <script src="diagnostics.js?v=20261006-status"></script>
-    <script src="app.js?v=20261112-edit"></script>
+    <script src="app.js?v=20261113-load"></script>
   </body>
 </html>

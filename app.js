@@ -6,6 +6,7 @@ const ACTIVE_PLAN_SOURCE_KEY = "training-coach-active-plan-source";
 const SELECTED_WEEK_KEY = "training-coach-selected-week";
 const CURRENT_PLAN_KEY = "training-coach-current-plan";
 const PLAN_VIEW_MODE_KEY = "training-coach-plan-view-mode";
+const LOAD_CHART_PERIOD_KEY = "training-coach-load-chart-period";
 const COACH_PROFILE_KEY = "training-coach-coach-profile";
 const ATHLETES_KEY = "training-coach-athletes";
 const ACTIVE_ATHLETE_KEY = "training-coach-active-athlete";
@@ -42,6 +43,7 @@ const state = {
   activePlanSource: loadJson(ACTIVE_PLAN_SOURCE_KEY, "json"),
   selectedWeekStart: loadJson(SELECTED_WEEK_KEY, currentWeekKey()),
   planViewMode: loadJson(PLAN_VIEW_MODE_KEY, "detailed"),
+  loadChartPeriod: loadJson(LOAD_CHART_PERIOD_KEY, "day"),
   coachProfile: loadJson(COACH_PROFILE_KEY, {
     id: DEFAULT_COACH_ID,
     name: "Белоусов Алексей",
@@ -569,6 +571,7 @@ function wireNavigation() {
 
   workoutList?.addEventListener("change", handleWorkoutTypeChange);
   workoutList?.addEventListener("click", handleWorkoutFeedbackClick);
+  document.querySelector("#loadPeriodControls")?.addEventListener("change", handleLoadChartPeriodChange);
   document.querySelector("#openImport").addEventListener("click", () => showView("import"));
   document.querySelector("#generatePlan").addEventListener("click", selectLocalPlan);
   document.querySelector("#adjustPlan").addEventListener("click", adjustDisplayedPlan);
@@ -1029,6 +1032,7 @@ function showView(viewId) {
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.view === viewId));
   if (leavingRoster && viewId === "plan") restoreCurrentPlanOrGenerate();
   if (viewId === "students") globalThis.CoachOverview?.refresh();
+  if (viewId === "dashboard") renderBars();
   if (viewId === "diagnostics") Diagnostics.refresh(); else Diagnostics.clear();
   if (viewId === "import") {
     refreshImportViewStatus();
@@ -2605,30 +2609,67 @@ function handleWorkoutFeedbackClick(event) {
   showToast("Ощущения по тренировке сохранены");
 }
 
-function renderBars() {
-  const bars = document.querySelector("#loadBars");
-  const days = lastDays(14);
-  const daily = days.map((day) => {
-    const workouts = state.workouts.filter((workout) => sameDay(new Date(workout.date), day));
+function handleLoadChartPeriodChange(event) {
+  const input = event.target.closest("input[name='loadChartPeriod']");
+  if (!input || !["day", "week", "month"].includes(input.value)) return;
+  state.loadChartPeriod = input.value;
+  saveJson(LOAD_CHART_PERIOD_KEY, input.value);
+  renderBars();
+}
+
+function buildLoadChartData(workouts, period = "day", now = new Date()) {
+  const mode = ["day", "week", "month"].includes(period) ? period : "day";
+  const current = new Date(now);
+  const anchor = startOfDay(mode === "week" ? startOfTrainingWeek(current) : current);
+  if (mode === "month") anchor.setDate(1);
+  const count = mode === "day" ? 14 : 12;
+  const records = (Array.isArray(workouts) ? workouts : []).filter(w => w && typeof w === "object")
+    .map(workout => ({workout, timestamp: new Date(workout.date).getTime()}))
+    .filter(row => Number.isFinite(row.timestamp) && row.timestamp <= current.getTime());
+  const shortDate = date => date.toLocaleDateString("ru-RU", {day: "2-digit", month: "2-digit"});
+  const fullDate = date => date.toLocaleDateString("ru-RU", {day: "numeric", month: "short", year: "numeric"});
+  const value = raw => Number.isFinite(Number(raw)) && Number(raw) > 0 ? Number(raw) : 0;
+  return Array.from({length: count}, (_, index) => {
+    const start = new Date(anchor), offset = index - count + 1;
+    if (mode === "month") start.setMonth(anchor.getMonth() + offset);
+    else start.setDate(anchor.getDate() + offset * (mode === "week" ? 7 : 1));
+    const end = new Date(start);
+    if (mode === "month") end.setMonth(end.getMonth() + 1);
+    else end.setDate(end.getDate() + (mode === "week" ? 7 : 1));
+    const last = new Date(end); last.setDate(last.getDate() - 1);
+    const selected = records.filter(row => row.timestamp >= start.getTime() && row.timestamp < end.getTime());
     return {
-      label: day.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
-      load: workouts.reduce((sum, workout) => sum + (Number(workout.load) || 0), 0),
-      distanceKm: workouts.reduce((sum, workout) => sum + (Number(workout.distanceKm) || 0), 0),
-      minutes: workouts.reduce((sum, workout) => sum + (Number(workout.durationMin) || 0), 0),
+      start, end, current: index === count - 1, count: selected.length,
+      label: mode === "month" ? start.toLocaleDateString("ru-RU", {month: "short"}) : shortDate(start),
+      secondaryLabel: mode === "month" ? String(start.getFullYear()) : mode === "week" ? `– ${shortDate(last)}` : "",
+      rangeLabel: mode === "day" ? fullDate(start) : `${fullDate(start)} – ${fullDate(last)}`,
+      load: selected.reduce((sum, row) => sum + value(row.workout.load), 0),
+      distanceKm: selected.reduce((sum, row) => sum + value(row.workout.distanceKm), 0),
+      minutes: selected.reduce((sum, row) => sum + value(row.workout.durationMin), 0),
     };
   });
-  const maxLoad = Math.max(...daily.map((item) => item.load), 0);
-  const maxDistance = Math.max(...daily.map((item) => item.distanceKm), 0);
-  const maxMinutes = Math.max(...daily.map((item) => item.minutes), 0);
+}
 
-  document.querySelector("#loadLabel").textContent = state.workouts.length
+function renderBars() {
+  const bars = document.querySelector("#loadBars");
+  const period = ["day", "week", "month"].includes(state.loadChartPeriod) ? state.loadChartPeriod : "day";
+  for (const input of document.querySelectorAll("input[name='loadChartPeriod']")) input.checked = input.value === period;
+  const items = buildLoadChartData(state.workouts, period);
+  const range = {day: "14 дней, включая сегодня", week: "12 недель · текущая неделя не завершена", month: "12 месяцев · текущий месяц не завершён"};
+  document.querySelector("#loadRange").textContent = range[period];
+  const maxLoad = Math.max(...items.map((item) => item.load), 0);
+  const maxDistance = Math.max(...items.map((item) => item.distanceKm), 0);
+  const maxMinutes = Math.max(...items.map((item) => item.minutes), 0);
+
+  document.querySelector("#loadLabel").textContent = items.some(item => item.count)
     ? `пики: ${maxLoad} TRIMP · ${round(maxDistance, 1)} км · ${Math.round(maxMinutes)} мин`
-    : "нет данных";
+    : "нет данных за выбранный период";
   bars.innerHTML = [
-    renderMetricChart("Нагрузка", "TRIMP", daily, "load", maxLoad, (value) => Math.round(value), "load"),
-    renderMetricChart("Километраж", "км", daily, "distanceKm", maxDistance, (value) => round(value, 1), "distance"),
-    renderMetricChart("Время", "мин", daily, "minutes", maxMinutes, (value) => Math.round(value), "hours"),
+    renderMetricChart("Нагрузка", "TRIMP", items, "load", maxLoad, (value) => Math.round(value), "load"),
+    renderMetricChart("Километраж", "км", items, "distanceKm", maxDistance, (value) => round(value, 1), "distance"),
+    renderMetricChart("Время", "мин", items, "minutes", maxMinutes, (value) => Math.round(value), "hours"),
   ].join("");
+  for (const chart of bars.querySelectorAll(".chart-bars")) chart.scrollLeft = chart.scrollWidth;
 }
 
 function renderMetricChart(title, unit, items, key, maxValue, formatValue, className) {
@@ -2639,17 +2680,17 @@ function renderMetricChart(title, unit, items, key, maxValue, formatValue, class
         <strong>${title}</strong>
         <span>${formatValue(maxValue)} ${unit}</span>
       </div>
-      <div class="chart-bars">
+      <div class="chart-bars" style="--bar-count:${items.length}" tabindex="0" role="region" aria-label="${title}, ${unit}">
         ${items
           .map((item) => {
             const value = Number(item[key]) || 0;
             const formatted = formatValue(value);
             const height = value ? Math.max(4, (value / scaleMax) * 120) : 4;
             return `
-              <div class="bar-wrap" title="${formatted} ${unit}">
+              <div class="bar-wrap${item.current ? " current" : ""}" title="${escapeHtml(item.rangeLabel)} · ${formatted} ${unit}" aria-label="${escapeHtml(item.rangeLabel)}: ${formatted} ${unit}">
                 <span class="bar-value">${value ? formatted : ""}</span>
-                <div class="bar ${className}" style="height:${height}px"></div>
-                <span class="bar-date">${item.label}</span>
+                <div class="bar ${className}${value ? "" : " zero"}" style="height:${height}px"></div>
+                <span class="bar-date">${escapeHtml(item.label)}<small>${escapeHtml(item.secondaryLabel)}</small></span>
               </div>
             `;
           })
